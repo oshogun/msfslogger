@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flight Detail — msfslogger</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+</head>
+<body>
+
+<header class="header">
+  <h1>msfs<span>logger</span></h1>
+  <div class="header-right">
+    <div class="status-badge" id="status-badge">
+      <div class="dot disconnected" id="status-dot"></div>
+      <span id="status-label">Checking...</span>
+    </div>
+  </div>
+</header>
+
+<main class="container" id="flight-detail">
+
+  <a href="index.html" class="back-link">&#8592; All Flights</a>
+
+  <h2 class="flight-title" id="flight-title">Loading...</h2>
+  <p class="flight-subtitle" id="flight-subtitle"></p>
+
+  <div class="stats-grid" id="stats-grid"></div>
+
+  <div class="edit-section" id="edit-section" style="display:none">
+    <div class="section-title">Edit Flight</div>
+    <form id="edit-form" class="edit-form">
+      <div class="edit-field">
+        <label for="edit-aircraft">Aircraft</label>
+        <input type="text" id="edit-aircraft" name="aircraft" placeholder="Aircraft name" maxlength="200">
+      </div>
+      <div class="edit-field">
+        <label for="edit-notes">Notes</label>
+        <textarea id="edit-notes" name="notes" rows="4" placeholder="Free-form notes about this flight..."></textarea>
+      </div>
+      <div class="edit-actions">
+        <button type="submit" class="btn btn-primary" id="btn-save">Save</button>
+        <button type="button" class="btn btn-ghost" id="btn-cancel-edit">Cancel</button>
+        <span class="edit-error" id="edit-error" style="display:none"></span>
+      </div>
+    </form>
+  </div>
+
+  <div class="map-section">
+    <div class="section-title">GPS Track</div>
+    <div id="map"></div>
+  </div>
+
+  <div class="chart-section">
+    <div class="section-title">Altitude Profile</div>
+    <svg id="altitude-chart" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="flight-actions">
+    <a href="index.html" class="btn btn-ghost">&#8592; Back</a>
+    <button id="btn-edit" class="btn btn-ghost">Edit</button>
+    <button id="btn-delete" class="btn btn-danger">Delete Flight</button>
+  </div>
+
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

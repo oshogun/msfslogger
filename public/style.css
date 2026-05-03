@@ -1,0 +1,325 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0f1117;
+  color: #e2e8f0;
+  min-height: 100vh;
+}
+
+a { color: #60a5fa; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: #1a1d27;
+  border-bottom: 1px solid #2d3148;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+.header h1 span { color: #60a5fa; }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+
+/* ── Status badge ── */
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: #2d3148;
+  border: 1px solid #3d4163;
+  white-space: nowrap;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #4b5563;
+}
+.dot.disconnected { background: #4b5563; }
+.dot.connected    { background: #34d399; }
+.dot.flying       { background: #60a5fa; animation: pulse 1.5s infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Live panel ── */
+.live-panel {
+  background: #111827;
+  border-bottom: 1px solid #1e3a5f;
+}
+.live-panel-inner {
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+}
+.live-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #60a5fa;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.75rem;
+}
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.5rem;
+}
+.live-item {
+  background: #1a2744;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+}
+.live-label {
+  font-size: 0.68rem;
+  color: #4b7ab5;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+}
+.live-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #e2e8f0;
+  line-height: 1.1;
+}
+.live-unit {
+  font-size: 0.72rem;
+  color: #4b7ab5;
+  margin-left: 0.2rem;
+  font-weight: 400;
+}
+
+#live-map {
+  height: 340px;
+  margin-top: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #1e3a5f;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .live-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 500px) {
+  .live-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Main layout ── */
+.container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+
+/* ── Checkbox column ── */
+.th-check, .td-check { width: 36px; text-align: center; padding: 0.5rem 0.3rem; }
+.th-check input, .td-check input { cursor: pointer; accent-color: #3b82f6; width: 15px; height: 15px; }
+.td-check input:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Combine toolbar ── */
+.combine-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  background: #1a2744;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+#combine-info { font-size: 0.85rem; color: #94a3b8; flex: 1; }
+
+/* ── Edit section ── */
+.edit-section {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.edit-form { display: flex; flex-direction: column; gap: 1rem; }
+.edit-field { display: flex; flex-direction: column; gap: 0.35rem; }
+.edit-field label { font-size: 0.78rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.edit-field input,
+.edit-field textarea {
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  padding: 0.45rem 0.65rem;
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color 0.15s;
+}
+.edit-field input:focus,
+.edit-field textarea:focus { outline: none; border-color: #3b82f6; }
+.edit-actions { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.edit-error { font-size: 0.82rem; color: #f87171; }
+
+/* ── Notes section ── */
+.notes-section { margin-bottom: 1.5rem; }
+.notes-text {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Flights table ── */
+.flights-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.flights-header h2 { font-size: 1rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+.empty-state { text-align: center; padding: 4rem 0; color: #4b5563; }
+.empty-state p { margin-top: 0.5rem; font-size: 0.9rem; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+thead th {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid #2d3148;
+}
+tbody tr { border-bottom: 1px solid #1e2130; transition: background 0.1s; }
+tbody tr:hover { background: #1a1d27; }
+tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
+.td-aircraft { font-weight: 500; color: #e2e8f0; max-width: 200px; overflow: hidden; }
+.td-route { font-size: 0.75rem; color: #60a5fa; font-weight: 600; letter-spacing: 0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.td-date { color: #94a3b8; white-space: nowrap; }
+.td-stat { color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.td-actions { text-align: right; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-primary   { background: #2563eb; color: #fff; border-color: #3b82f6; }
+.btn-primary:hover { background: #1d4ed8; }
+.btn-danger    { background: transparent; color: #f87171; border-color: #3d1f1f; }
+.btn-danger:hover { background: #3d1f1f; }
+.btn-ghost     { background: transparent; color: #94a3b8; border-color: #2d3148; }
+.btn-ghost:hover { background: #1a1d27; color: #e2e8f0; }
+
+/* ── Flight detail ── */
+.back-link { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: #60a5fa; margin-bottom: 1.25rem; }
+.flight-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 0.25rem; }
+.flight-subtitle { font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.stat-card {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+.stat-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
+.stat-value { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #e2e8f0; }
+.stat-unit  { font-size: 0.75rem; color: #64748b; margin-left: 0.2rem; }
+.stat-sub   { font-size: 0.72rem; color: #4b5563; margin-top: 0.2rem; }
+
+/* ── Map ── */
+.map-section { margin-bottom: 1.5rem; }
+.section-title { font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }
+#map {
+  height: 420px;
+  border-radius: 12px;
+  border: 1px solid #2d3148;
+  overflow: hidden;
+}
+
+/* ── Altitude chart ── */
+.chart-section { margin-bottom: 1.5rem; }
+#altitude-chart {
+  width: 100%;
+  height: 140px;
+  display: block;
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 10px;
+  overflow: visible;
+}
+
+/* ── Footer actions ── */
+.flight-actions { display: flex; gap: 0.75rem; align-items: center; }
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  table thead { display: none; }
+  tbody tr { display: block; padding: 0.5rem; margin-bottom: 0.5rem; background: #1a1d27; border-radius: 8px; }
+  tbody td { display: flex; justify-content: space-between; padding: 0.3rem 0.4rem; border: none; }
+  tbody td::before { content: attr(data-label); color: #64748b; font-size: 0.78rem; }
+  .td-actions { justify-content: flex-end; }
+  .tr-trip-header, .tr-ungrouped-header { display: table-row; }
+  .tr-trip-header td, .tr-ungrouped-header td { display: table-cell; }
+}
+
+/* ── Trip rows ── */
+.tr-trip-header { cursor: pointer; }
+.tr-trip-header:hover td { background: #1e2f55; }
+.tr-trip-header td {
+  background: #1a2744;
+  border-top: 2px solid #1e3a5f;
+  border-bottom: 1px solid #1e3a5f;
+  padding: 0.5rem 0.8rem;
+}
+.trip-row-name { font-weight: 600; color: #60a5fa; font-size: 0.9rem; }
+.trip-row-stats { font-size: 0.78rem; color: #64748b; margin-top: 0.15rem; }
+.tr-ungrouped-header td {
+  background: transparent;
+  border-top: 1px solid #2d3148;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.72rem;
+  color: #4b5563;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Trip detail ── */
+.legs-section { margin-bottom: 1.5rem; }
+.leg-color-swatch {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}

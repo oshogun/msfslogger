@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.flightsimulator.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:evenar.github.io)",
+      "Bash(npm install *)",
+      "Bash(npm show *)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(npx tsc *)",
+      "Bash(timeout 5 bash -c 'echo >/dev/tcp/192.168.0.24/5111')"
+    ],
+    "additionalDirectories": [
+      "/home/guilherme/msfslogger"
+    ]
+  }
+}
