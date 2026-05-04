@@ -1,0 +1,14 @@
+services:
+  msfslogger:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./flights.db:/app/flights.db
+    environment:
+      # SimConnect connects over TCP to the Windows host running MSFS.
+      # On Docker Desktop for Windows, host.docker.internal resolves to the host.
+      # Override with SIMCONNECT_HOST=<ip> if needed.
+      - SIMCONNECT_HOST=${SIMCONNECT_HOST:-host.docker.internal}
+      - SIMCONNECT_PORT=${SIMCONNECT_PORT:-500}
+    restart: unless-stopped

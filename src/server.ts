@@ -8,7 +8,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
 
   app.use(express.json());
-  app.use(express.static(path.join(process.cwd(), 'public')));
+  app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
   app.get('/api/status', (_req, res) => {
     const { flightState, currentFlightId, connected, lastFrame } = flightManager.appState;
@@ -210,6 +210,11 @@ export function createServer(flightManager: FlightManager): express.Express {
     const deleted = deleteFlight(id);
     if (!deleted) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ deleted: true });
+  });
+
+  // Catch-all: let React Router handle client-side routes
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(process.cwd(), 'client', 'dist', 'index.html'));
   });
 
   return app;
