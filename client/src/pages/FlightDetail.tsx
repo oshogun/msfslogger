@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { FlightMap } from '../components/FlightMap';
 import { AltitudeChart } from '../components/AltitudeChart';
@@ -17,6 +17,9 @@ export function FlightDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!id) { navigate('/'); return; }
@@ -56,6 +59,44 @@ export function FlightDetail() {
       navigate('/');
     } catch (err) {
       alert('Delete failed: ' + (err as Error).message);
+    }
+  }
+
+  async function handleUploadFlightPlan(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+      setUploadError('File must be a PDF');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setUploading(true);
+    setUploadError('');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const updated = await apiFetch<Flight>(`/api/flights/${id}/flight-plan`, {
+        method: 'POST',
+        body: formData,
+      });
+      setFlight(updated);
+    } catch (err) {
+      setUploadError('Upload failed: ' + (err as Error).message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleRemoveFlightPlan() {
+    if (!confirm('Remove the attached flight plan?')) return;
+    try {
+      const updated = await apiFetch<Flight>(`/api/flights/${id}/flight-plan`, { method: 'DELETE' });
+      setFlight(updated);
+    } catch (err) {
+      alert('Remove failed: ' + (err as Error).message);
     }
   }
 
@@ -101,6 +142,35 @@ export function FlightDetail() {
           <p className="notes-text">{flight.notes}</p>
         </div>
       )}
+
+      <div className="flight-plan-section">
+        <div className="section-title">Flight Plan</div>
+        {flight.flight_plan_name ? (
+          <div className="flight-plan-attached">
+            <a
+              href={`/api/flights/${flight.id}/flight-plan`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flight-plan-link"
+            >
+              {flight.flight_plan_name}
+            </a>
+            <button className="btn btn-ghost" onClick={handleRemoveFlightPlan}>Remove</button>
+          </div>
+        ) : (
+          <div className="flight-plan-upload">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf"
+              onChange={handleUploadFlightPlan}
+              disabled={uploading}
+            />
+            {uploading && <span className="flight-plan-status">Uploading...</span>}
+            {uploadError && <span className="edit-error">{uploadError}</span>}
+          </div>
+        )}
+      </div>
 
       {editOpen && (
         <div className="edit-section">

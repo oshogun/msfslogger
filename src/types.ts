@@ -40,6 +40,7 @@ export interface Flight {
   departure_name: string | null;
   arrival_icao: string | null;
   arrival_name: string | null;
+  flight_plan_name: string | null;
 }
 
 export interface Trip {

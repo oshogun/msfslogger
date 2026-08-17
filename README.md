@@ -4,7 +4,7 @@ Automatic flight logger for Microsoft Flight Simulator 2020/2024 (and probably o
 
 ## How it works
 
-The server records one data point per second while airborne, and saves completed flights to `flights.db`. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, and edit or delete records.
+The server records one data point per second while airborne, and saves completed flights to `flights.db`. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, and attach a PDF flight plan to each flight (stored in `flight_plans/`).
 
 There are two ways to get flight data from MSFS to the server when they're on different machines:
 
@@ -113,14 +113,15 @@ Open **http://localhost:3000**.
 
 ### 3. Persistent data
 
-`flights.db` is mounted as a bind mount from the project root, so your flight data survives container rebuilds:
+`flights.db` and `flight_plans/` (attached PDF flight plans) are mounted as bind mounts from the project root, so your data survives container rebuilds:
 
 ```yaml
 volumes:
   - ./flights.db:/app/flights.db
+  - ./flight_plans:/app/flight_plans
 ```
 
-To back up your data, just copy `flights.db`.
+To back up your data, copy `flights.db` and the `flight_plans/` folder.
 
 ### Rebuilding after code changes
 
@@ -200,6 +201,7 @@ msfslogger/
 │   ├── ingest.ts         # Receives data pushed by the Windows agent
 │   ├── db.ts             # SQLite queries
 │   ├── flightManager.ts  # Flight state machine
+│   ├── flightPlans.ts    # PDF flight plan file storage
 │   ├── simconnect.ts     # Direct remote SimConnect connection (alternative to the agent)
 │   └── airports.ts       # ICAO airport lookup
 ├── agent/                # Runs on the Windows machine with MSFS (recommended setup)
@@ -213,6 +215,7 @@ msfslogger/
 │       └── utils/        # API fetch, formatters
 ├── airports.json         # Airport database for ICAO lookup
 ├── flights.db            # SQLite database (created on first run)
+├── flight_plans/         # Attached PDF flight plans, one per flight (created on first run)
 ├── Dockerfile
 └── docker-compose.yml
 ```

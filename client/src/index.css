@@ -183,6 +183,32 @@ a:hover { text-decoration: underline; }
   margin: 0;
 }
 
+/* ── Flight plan section ── */
+.flight-plan-section { margin-bottom: 1.5rem; }
+.flight-plan-attached {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+}
+.flight-plan-link {
+  flex: 1;
+  color: #60a5fa;
+  font-size: 0.88rem;
+  font-weight: 500;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flight-plan-link:hover { text-decoration: underline; }
+.flight-plan-upload { display: flex; align-items: center; gap: 0.75rem; }
+.flight-plan-upload input[type="file"] { font-size: 0.85rem; color: #94a3b8; }
+.flight-plan-status { font-size: 0.82rem; color: #64748b; }
+
 /* ── Flights table ── */
 .flights-header {
   display: flex;

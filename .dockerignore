@@ -5,4 +5,5 @@ client/dist
 flights.db
 flights.db-shm
 flights.db-wal
+flight_plans
 .git

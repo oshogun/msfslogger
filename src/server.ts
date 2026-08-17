@@ -1,9 +1,14 @@
 import express from 'express';
+import multer, { MulterError } from 'multer';
 import path from 'path';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName } from './db';
+import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import type { FlightManager } from './flightManager';
 import type { FlightEditPayload, TripEditPayload } from './types';
 import { createIngestRouter } from './ingest';
+
+const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FLIGHT_PLAN_BYTES } });
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
@@ -215,9 +220,63 @@ export function createServer(flightManager: FlightManager): express.Express {
     res.json({ deleted: true });
   });
 
+  // ── Flight plan attachment ────────────────────────────────────────────────
+
+  app.post('/api/flights/:id/flight-plan', upload.single('file'), (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    if (!getFlightById(id)) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: 'No file uploaded' }); return; }
+    if (file.mimetype !== 'application/pdf' || !isPdfBuffer(file.buffer)) {
+      res.status(400).json({ error: 'File must be a PDF' });
+      return;
+    }
+
+    saveFlightPlanFile(id, file.buffer);
+    setFlightPlanName(id, file.originalname.slice(0, 255));
+    res.json(getFlightById(id));
+  });
+
+  app.get('/api/flights/:id/flight-plan', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    const flight = getFlightById(id);
+    if (!flight || !flight.flight_plan_name) { res.status(404).json({ error: 'No flight plan attached' }); return; }
+
+    const safeName = flight.flight_plan_name.replace(/["\\\r\n]/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+    res.sendFile(flightPlanPath(id), (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'Flight plan file missing' });
+    });
+  });
+
+  app.delete('/api/flights/:id/flight-plan', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    if (!getFlightById(id)) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    deleteFlightPlanFile(id);
+    clearFlightPlanName(id);
+    res.json(getFlightById(id));
+  });
+
   // Catch-all: let React Router handle client-side routes
   app.get('*', (_req, res) => {
     res.sendFile(path.join(process.cwd(), 'client', 'dist', 'index.html'));
+  });
+
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof MulterError) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? `File too large (max ${MAX_FLIGHT_PLAN_BYTES / (1024 * 1024)}MB)`
+        : err.message;
+      res.status(400).json({ error: message });
+      return;
+    }
+    next(err);
   });
 
   return app;

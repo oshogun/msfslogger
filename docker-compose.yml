@@ -5,6 +5,7 @@ services:
       - "3000:3000"
     volumes:
       - ./flights.db:/app/flights.db
+      - ./flight_plans:/app/flight_plans
     environment:
       # SimConnect connects over TCP to the Windows host running MSFS.
       # On Docker Desktop for Windows, host.docker.internal resolves to the host.

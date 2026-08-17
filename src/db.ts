@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import type { Flight, FlightPoint, FlightWithPoints, FlightEditPayload, Trip, TripWithFlights, TripEditPayload } from './types';
+import { copyFlightPlanFile, deleteFlightPlanFile } from './flightPlans';
 
 const DB_PATH = path.join(process.cwd(), 'flights.db');
 
@@ -102,6 +103,9 @@ export function initDb(): Database.Database {
   if (!cols.includes('arrival_name')) {
     db.exec('ALTER TABLE flights ADD COLUMN arrival_name TEXT');
   }
+  if (!cols.includes('flight_plan_name')) {
+    db.exec('ALTER TABLE flights ADD COLUMN flight_plan_name TEXT');
+  }
 
   return db;
 }
@@ -162,6 +166,14 @@ export function updateFlight(id: number, payload: FlightEditPayload): boolean {
   return result.changes > 0;
 }
 
+export function setFlightPlanName(id: number, name: string): void {
+  db.prepare('UPDATE flights SET flight_plan_name = ? WHERE id = ?').run(name, id);
+}
+
+export function clearFlightPlanName(id: number): void {
+  db.prepare('UPDATE flights SET flight_plan_name = NULL WHERE id = ?').run(id);
+}
+
 export function insertPoint(
   flightId: number,
   ts: string,
@@ -199,6 +211,7 @@ export function getFlightPointCount(id: number): number {
 
 export function deleteFlight(id: number): boolean {
   const result = db.prepare('DELETE FROM flights WHERE id = ?').run(id);
+  if (result.changes > 0) deleteFlightPlanFile(id);
   return result.changes > 0;
 }
 
@@ -385,6 +398,15 @@ export function combineFlights(idA: number, idB: number): number | null {
       insertPt.run(newId, p.ts, p.lat, p.lon, p.altitude_ft,
         p.airspeed_kts, p.ground_speed_kts, p.heading_deg, p.vertical_speed_fpm, p.on_ground);
     }
+
+    // Carry over whichever flight had an attached flight plan (preferring the earlier one)
+    const flightPlanSource = first.flight_plan_name ? first : (second.flight_plan_name ? second : null);
+    if (flightPlanSource) {
+      copyFlightPlanFile(flightPlanSource.id, newId);
+      setFlightPlanName(newId, flightPlanSource.flight_plan_name as string);
+    }
+    deleteFlightPlanFile(first.id);
+    deleteFlightPlanFile(second.id);
 
     db.prepare('DELETE FROM flights WHERE id = ?').run(first.id);
     db.prepare('DELETE FROM flights WHERE id = ?').run(second.id);

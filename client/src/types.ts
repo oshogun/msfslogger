@@ -26,6 +26,7 @@ export interface Flight {
   arrival_name: string | null;
   notes: string | null;
   trip_id: number | null;
+  flight_plan_name: string | null;
 }
 
 export interface Trip {

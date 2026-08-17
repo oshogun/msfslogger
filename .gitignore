@@ -5,3 +5,4 @@ client/dist/
 flights.db
 *.db-shm
 *.db-wal
+flight_plans/
