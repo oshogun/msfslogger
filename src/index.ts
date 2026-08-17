@@ -13,7 +13,15 @@ console.log('[DB] Database ready');
 initAirports().catch(err => console.warn('[Airports] Init error:', err));
 
 const flightManager = new FlightManager();
-startSimConnect(flightManager);
+
+// Legacy/optional: connect directly to a remote SimConnect TCP listener.
+// Only used when SIMCONNECT_HOST is explicitly set — the default (and recommended)
+// setup instead has the Windows-side agent (see /agent) push data to /api/ingest.
+if (process.env.SIMCONNECT_HOST) {
+  startSimConnect(flightManager);
+} else {
+  console.log('[SimConnect] SIMCONNECT_HOST not set — waiting for agent data on /api/ingest');
+}
 
 const app = createServer(flightManager);
 app.listen(PORT, () => {

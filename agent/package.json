@@ -1,0 +1,13 @@
+{
+  "name": "msfslogger-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runs on the Windows machine alongside MSFS. Connects to SimConnect locally and forwards flight data to a remote msfslogger server over HTTP.",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js"
+  },
+  "dependencies": {
+    "node-simconnect": "^4.1.1"
+  }
+}

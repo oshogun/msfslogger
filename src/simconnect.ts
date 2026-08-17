@@ -30,8 +30,8 @@ export function startSimConnect(flightManager: FlightManager): void {
   const tryConnect = async () => {
     try {
       console.log('[SimConnect] Connecting...');
-      // Protocol.SunRise targets MSFS 2024
-      const { recvOpen, handle } = await open('msfslogger', Protocol.SunRise, options);
+      // Protocol.KittyHawk targets MSFS 2020
+      const { recvOpen, handle } = await open('msfslogger', Protocol.KittyHawk, options);
       console.log(`[SimConnect] Connected — ${recvOpen.applicationName} ${recvOpen.applicationVersionMajor}.${recvOpen.applicationVersionMinor}`);
 
       flightManager.appState.connected = true;

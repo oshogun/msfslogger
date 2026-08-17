@@ -3,12 +3,15 @@ import path from 'path';
 import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip } from './db';
 import type { FlightManager } from './flightManager';
 import type { FlightEditPayload, TripEditPayload } from './types';
+import { createIngestRouter } from './ingest';
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
 
   app.use(express.json());
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
+
+  app.use('/api/ingest', createIngestRouter(flightManager));
 
   app.get('/api/status', (_req, res) => {
     const { flightState, currentFlightId, connected, lastFrame } = flightManager.appState;
