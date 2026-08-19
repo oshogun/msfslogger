@@ -1,0 +1,159 @@
+/*
+ * Light, print-optimised theme for the PDF export routes (/print/...).
+ *
+ * index.css is imported globally in main.tsx, so everything here is scoped
+ * under .print-root to win on specificity regardless of CSS bundle order.
+ * Map polylines, leg colours and markers deliberately keep their on-screen
+ * colours — they read well on white and preserve the app's visual identity.
+ */
+
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+.print-root {
+  --print-bg: #ffffff;
+  --print-surface: #f8fafc;
+  --print-border: #d8dee9;
+  --print-text: #0f172a;
+  --print-muted: #64748b;
+  --print-accent: #2563eb;
+
+  background: var(--print-bg);
+  color: var(--print-text);
+
+  /*
+   * Fixed width, NOT a percentage. 210mm paper - 24mm margins = 186mm ≈ 703px
+   * at 96dpi, and the export viewport is set to the full 794px A4 width.
+   * Because this block never reflows between the two, Leaflet is not triggered
+   * into re-fetching tiles when page.pdf() re-lays out at paper width — which
+   * would otherwise land tiles after the ready flag and blank out the maps.
+   * Keep this in sync with the viewport in src/pdfExport.ts.
+   */
+  width: 703px;
+  margin: 0 auto;
+  padding: 0;
+
+  /* Deterministic fonts: a headless/container environment may not have the
+     app's system-UI stack installed. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'DejaVu Sans', 'Liberation Sans', sans-serif;
+}
+
+/* The dark app background would otherwise frame every page */
+html:has(.print-root),
+body:has(.print-root) {
+  background: #ffffff;
+}
+
+/* Colours must survive Chromium's print pipeline, and animations would make
+   the captured output non-deterministic. */
+.print-root,
+.print-root *,
+.print-root *::before,
+.print-root *::after {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  animation: none !important;
+  transition: none !important;
+}
+
+/* ── Page structure ── */
+.print-page {
+  break-after: page;
+  page-break-after: always;
+}
+.print-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+
+.print-header {
+  border-bottom: 2px solid var(--print-border);
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.1rem;
+}
+.print-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--print-text);
+  margin-bottom: 0.2rem;
+}
+.print-subtitle {
+  font-size: 0.85rem;
+  color: var(--print-muted);
+}
+.print-footer {
+  margin-top: 1.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--print-border);
+  font-size: 0.7rem;
+  color: var(--print-muted);
+}
+
+/* ── Re-theme the shared components ── */
+.print-root .section-title { color: var(--print-muted); }
+
+.print-root .stat-card {
+  background: var(--print-surface);
+  border-color: var(--print-border);
+}
+.print-root .stat-value { color: var(--print-text); }
+.print-root .stat-label,
+.print-root .stat-unit,
+.print-root .stat-sub { color: var(--print-muted); }
+
+.print-root .notes-text {
+  background: var(--print-surface);
+  border-color: var(--print-border);
+  color: var(--print-text);
+}
+
+.print-root .altitude-chart {
+  background: var(--print-surface);
+  border-color: var(--print-border);
+}
+
+.print-root #map,
+.print-root .print-map {
+  border: 1px solid var(--print-border);
+  /* Slightly shorter than on screen so a map + chart + stats fit one A4 page */
+  height: 360px;
+}
+
+/*
+ * The trip overview carries more below it (legs table + notes) than a leg page
+ * does, so its map is shorter to keep the whole overview on a single sheet.
+ * Tuned against a 5-leg trip; a trip with many more legs will simply spill the
+ * table onto a second sheet, which is harmless — the per-leg page breaks hold.
+ */
+.print-root .print-map-overview { height: 220px; }
+
+/* Tighter vertical rhythm than the screen layout — paper is a fixed budget */
+.print-root .map-section,
+.print-root .chart-section,
+.print-root .notes-section,
+.print-root .stats-grid { margin-bottom: 1rem; }
+.print-root .legs-section { margin-bottom: 0.5rem; }
+
+/* Leaflet paints its own container background; force it light so partially
+   covered areas don't show the dark theme through. */
+.print-root .leaflet-container { background: #f1f5f9; }
+
+/* ── Legs table (trip overview) ── */
+.print-root table { font-size: 0.8rem; }
+.print-root thead th {
+  color: var(--print-muted);
+  border-bottom: 1px solid var(--print-border);
+}
+.print-root tbody tr { border-bottom: 1px solid var(--print-border); }
+.print-root tbody tr:hover { background: transparent; }
+.print-root .td-aircraft,
+.print-root .td-stat { color: var(--print-text); }
+.print-root .td-date { color: var(--print-muted); }
+.print-root .td-route { color: var(--print-accent); }
+
+/* Keep a table from splitting awkwardly across pages */
+.print-root tr { break-inside: avoid; page-break-inside: avoid; }
+.print-root .map-section,
+.print-root .chart-section { break-inside: avoid; page-break-inside: avoid; }

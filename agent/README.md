@@ -2,7 +2,7 @@
 
 A small standalone script that runs **on the Windows machine with MSFS**. It connects to SimConnect locally — the same way any other local MSFS addon does, no TCP/firewall configuration required — and forwards flight data to a `msfslogger` server running elsewhere on the network over plain HTTP.
 
-This replaces the direct remote-SimConnect-over-TCP approach (`SIMCONNECT_HOST`/`SIMCONNECT_PORT` on the server). That approach requires editing `SimConnect.xml` and opening a Windows Firewall port, both of which are easy to get subtly wrong (wrong file path for Store/Xbox installs, Notepad silently adding a `.txt` extension, UWP apps not fully restarting, etc). The agent avoids all of that: it talks to MSFS exactly as if it were a local addon, and only needs outbound HTTP to reach the server.
+This is the supported way to connect a remote server to MSFS. The alternative — having the server dial SimConnect's TCP port directly — required editing `SimConnect.xml` and opening a Windows Firewall port, both easy to get subtly wrong (wrong file path for Store/Xbox installs, Notepad silently appending `.txt`, UWP apps not fully restarting), and it never worked reliably. The agent sidesteps all of it: it talks to MSFS exactly as a local addon does, and only needs outbound HTTP to reach the server.
 
 **Status:** confirmed working — verified end-to-end with a Microsoft Store/Xbox install of MSFS 2020, logging a real flight (SSCN → SBFL, 172.4 nm) to a `msfslogger` server on a separate Linux machine over the LAN.
 

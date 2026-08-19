@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { formatAlt } from '../utils/format';
 import type { FlightPoint } from '../types';
 
@@ -10,6 +11,9 @@ interface Props {
 }
 
 export function AltitudeChart({ points }: Props) {
+  // useId() emits colons (":r0:"), which are not safe inside a CSS url(#...) reference
+  const gradId = `alt-grad-${useId().replace(/:/g, '')}`;
+
   if (points.length < 2) return null;
 
   const alts = points.map(p => p.altitude_ft);
@@ -25,17 +29,17 @@ export function AltitudeChart({ points }: Props) {
 
   return (
     <svg
-      id="altitude-chart"
+      className="altitude-chart"
       viewBox={`0 0 ${W} ${H}`}
       preserveAspectRatio="none"
     >
       <defs>
-        <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#60a5fa" stopOpacity="0.35" />
           <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.02" />
         </linearGradient>
       </defs>
-      <path d={areaD} fill="url(#grad)" />
+      <path d={areaD} fill={`url(#${gradId})`} />
       <path d={pathD} fill="none" stroke="#60a5fa" strokeWidth="1.8" />
       <text x={PAD.left - 6} y={yScale(maxAlt).toFixed(1)} fill="#64748b" fontSize="10" textAnchor="end" dominantBaseline="middle">{formatAlt(maxAlt)}</text>
       <text x={PAD.left - 6} y={yScale(minAlt).toFixed(1)} fill="#64748b" fontSize="10" textAnchor="end" dominantBaseline="middle">{formatAlt(minAlt)}</text>

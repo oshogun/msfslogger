@@ -12,6 +12,30 @@ export function formatDate(iso: string | null | undefined): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+/**
+ * Like formatDate, but with an explicit locale/timezone.
+ *
+ * The PDF export renders in a headless browser on the server, whose timezone
+ * is not the user's — without this, a Brazilian flight would be stamped in UTC.
+ * The export routes forward the browser's values as query params.
+ */
+export function formatDateIn(
+  iso: string | null | undefined,
+  locale?: string,
+  timeZone?: string
+): string {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString(locale || undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      ...(timeZone ? { timeZone } : {}),
+    });
+  } catch {
+    return formatDate(iso);
+  }
+}
+
 export function formatDistance(nm: number | null | undefined): string {
   if (nm == null) return '—';
   return nm.toFixed(1);

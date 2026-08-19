@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { TripMap } from '../components/TripMap';
 import { StatsGrid } from '../components/StatsGrid';
-import { apiFetch } from '../utils/api';
+import { apiFetch, downloadPdf } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
 import type { Trip } from '../types';
 
@@ -18,6 +18,9 @@ export function TripDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [includePlans, setIncludePlans] = useState(true);
 
   useEffect(() => {
     if (!id) { navigate('/'); return; }
@@ -61,6 +64,18 @@ export function TripDetail() {
     }
   }
 
+  async function handleExportPdf() {
+    setExporting(true);
+    setExportError('');
+    try {
+      await downloadPdf(`/api/trips/${id}/export.pdf`, `trip-${id}.pdf`, { includePlans });
+    } catch (err) {
+      setExportError('Export failed: ' + (err as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function handleRemoveLeg(flightId: number) {
     if (!confirm('Remove this leg from the trip?')) return;
     try {
@@ -79,6 +94,8 @@ export function TripDetail() {
   if (!trip) {
     return <main className="container"><p style={{ color: '#4b5563' }}>Loading...</p></main>;
   }
+
+  const planCount = trip.flights.filter(f => f.flight_plan_name).length;
 
   const stats = [
     { label: 'Total Duration', value: formatDuration(trip.total_duration_sec) },
@@ -204,7 +221,23 @@ export function TripDetail() {
       <div className="flight-actions">
         <Link to="/" className="btn btn-ghost">← Back</Link>
         <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
+        <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
+          {exporting ? 'Generating PDF…' : 'Export PDF'}
+        </button>
+        {/* Only meaningful when at least one leg has a plan attached */}
+        {planCount > 0 && (
+          <label className="export-option">
+            <input
+              type="checkbox"
+              checked={includePlans}
+              disabled={exporting}
+              onChange={e => setIncludePlans(e.target.checked)}
+            />
+            Include flight plans ({planCount})
+          </label>
+        )}
         <button className="btn btn-danger" onClick={handleDelete}>Delete Trip</button>
+        {exportError && <span className="edit-error">{exportError}</span>}
       </div>
     </main>
   );

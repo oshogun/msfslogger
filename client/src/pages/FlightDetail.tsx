@@ -3,7 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { FlightMap } from '../components/FlightMap';
 import { AltitudeChart } from '../components/AltitudeChart';
 import { StatsGrid } from '../components/StatsGrid';
-import { apiFetch } from '../utils/api';
+import { apiFetch, downloadPdf } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
 import type { Flight } from '../types';
 
@@ -19,6 +19,9 @@ export function FlightDetail() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [includePlan, setIncludePlan] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -87,6 +90,18 @@ export function FlightDetail() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleExportPdf() {
+    setExporting(true);
+    setExportError('');
+    try {
+      await downloadPdf(`/api/flights/${id}/export.pdf`, `flight-${id}.pdf`, { includePlans: includePlan });
+    } catch (err) {
+      setExportError('Export failed: ' + (err as Error).message);
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -226,7 +241,23 @@ export function FlightDetail() {
       <div className="flight-actions">
         <Link to="/" className="btn btn-ghost">← Back</Link>
         <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
+        <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
+          {exporting ? 'Generating PDF…' : 'Export PDF'}
+        </button>
+        {/* Only meaningful when there is actually a plan to include */}
+        {flight.flight_plan_name && (
+          <label className="export-option">
+            <input
+              type="checkbox"
+              checked={includePlan}
+              disabled={exporting}
+              onChange={e => setIncludePlan(e.target.checked)}
+            />
+            Include flight plan
+          </label>
+        )}
         <button className="btn btn-danger" onClick={handleDelete}>Delete Flight</button>
+        {exportError && <span className="edit-error">{exportError}</span>}
       </div>
     </main>
   );

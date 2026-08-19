@@ -3,12 +3,75 @@ import multer, { MulterError } from 'multer';
 import path from 'path';
 import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
+import { renderPdf, appendPdfs } from './pdfExport';
 import type { FlightManager } from './flightManager';
-import type { FlightEditPayload, TripEditPayload } from './types';
+import type { Flight, FlightEditPayload, TripEditPayload } from './types';
 import { createIngestRouter } from './ingest';
 
 const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FLIGHT_PLAN_BYTES } });
+
+/** ASCII-safe slug, so Content-Disposition needs no RFC 5987 encoding. */
+function slugify(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // strip diacritics: "Circumnavegação" -> "circumnavegacao"
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+function dateStamp(iso: string | null): string {
+  if (!iso) return 'unknown';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? 'unknown' : d.toISOString().slice(0, 10);
+}
+
+function flightExportFilename(flight: Flight): string {
+  // Flights produced by combineFlights() have no ICAO codes, so fall back to the id alone
+  const route = (flight.departure_icao || flight.arrival_icao)
+    ? `-${slugify(`${flight.departure_icao ?? 'unknown'}-${flight.arrival_icao ?? 'unknown'}`)}`
+    : '';
+  return `flight-${flight.id}${route}-${dateStamp(flight.start_time)}.pdf`;
+}
+
+function sendPdf(res: express.Response, pdf: Buffer, filename: string): void {
+  const safeName = filename.replace(/["\\\r\n/]/g, '_');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Length', String(pdf.length));
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  res.end(pdf);
+}
+
+/**
+ * Locale/timezone are forwarded to the print page because the export renders on
+ * the server, whose timezone (Etc/UTC here) is not the user's. Both values get
+ * interpolated into a URL, so they are validated before being trusted.
+ */
+/**
+ * Whether to append attached flight plans to an export. Defaults to true;
+ * `?plans=0` skips them, which matters for trips with many legs where the
+ * attachments dwarf the generated pages.
+ */
+function includePlans(req: express.Request): boolean {
+  const v = req.query.plans;
+  return !(v === '0' || v === 'false');
+}
+
+function localeParams(req: express.Request): string {
+  const tz = typeof req.query.tz === 'string' ? req.query.tz : '';
+  const locale = typeof req.query.locale === 'string' ? req.query.locale : '';
+  const params = new URLSearchParams();
+  try {
+    if (tz) { new Intl.DateTimeFormat(undefined, { timeZone: tz }); params.set('tz', tz); }
+  } catch { /* invalid timezone — fall back to the server default */ }
+  try {
+    if (locale) { new Intl.DateTimeFormat(locale); params.set('locale', locale); }
+  } catch { /* invalid locale — fall back to the server default */ }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
@@ -261,6 +324,50 @@ export function createServer(flightManager: FlightManager): express.Express {
     deleteFlightPlanFile(id);
     clearFlightPlanName(id);
     res.json(getFlightById(id));
+  });
+
+  // ── PDF export ────────────────────────────────────────────────────────────
+  // Registered before the SPA catch-all so they aren't swallowed by it.
+
+  app.get('/api/flights/:id/export.pdf', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    const flight = getFlightById(id);
+    if (!flight) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    try {
+      let pdf = await renderPdf(`/print/flight/${id}${localeParams(req)}`);
+      if (flight.flight_plan_name && includePlans(req)) {
+        pdf = await appendPdfs(pdf, [flightPlanPath(id)]);
+      }
+      sendPdf(res, pdf, flightExportFilename(flight));
+    } catch (err) {
+      console.error('[PDF] Flight export failed:', err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.get('/api/trips/:id/export.pdf', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    const trip = getTripById(id);
+    if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
+
+    try {
+      let pdf = await renderPdf(`/print/trip/${id}${localeParams(req)}`);
+      const attachments = includePlans(req)
+        ? trip.flights.filter(f => f.flight_plan_name).map(f => flightPlanPath(f.id))
+        : [];
+      if (attachments.length > 0) {
+        pdf = await appendPdfs(pdf, attachments);
+      }
+      sendPdf(res, pdf, `trip-${slugify(trip.name) || trip.id}-${dateStamp(trip.created_at)}.pdf`);
+    } catch (err) {
+      console.error('[PDF] Trip export failed:', err);
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   // Catch-all: let React Router handle client-side routes

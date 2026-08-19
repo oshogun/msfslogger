@@ -24,8 +24,8 @@ function isValidFrame(body: unknown): body is SimFrame {
 
 /**
  * Receives flight data pushed over HTTP by the Windows-side agent (see /agent),
- * which talks to SimConnect locally on the MSFS machine. This is the inverse of
- * src/simconnect.ts, which instead connects out to a remote SimConnect TCP port.
+ * which talks to SimConnect locally on the MSFS machine. This is the only
+ * supported way to get data in from a remote sim.
  */
 export function createIngestRouter(flightManager: FlightManager): Router {
   const router = express.Router();

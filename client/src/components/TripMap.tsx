@@ -1,6 +1,7 @@
 import { useEffect, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { MapReadySignal } from './MapReadySignal';
 import type { Flight } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
@@ -24,9 +25,18 @@ function BoundsController({ flights }: { flights: Flight[] }) {
 
 interface Props {
   flights: Flight[];
+  /** Called once tiles have finished loading. Used by the PDF export. */
+  onReady?: () => void;
+  /**
+   * Canvas polylines are rasterised at 1x when printed to PDF, which looks
+   * soft. The print pages pass false so the tracks become true vector paths.
+   */
+  preferCanvas?: boolean;
+  /** Print pages hide the zoom buttons — they are meaningless on paper. */
+  zoomControl?: boolean;
 }
 
-export function TripMap({ flights }: Props) {
+export function TripMap({ flights, onReady, preferCanvas = true, zoomControl = true }: Props) {
   const hasPoints = flights.some(f => f.points && f.points.length > 0);
   if (!hasPoints) {
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No GPS points recorded for this trip.</p>;
@@ -36,10 +46,11 @@ export function TripMap({ flights }: Props) {
 
   return (
     <MapContainer
-      style={{ height: '420px' }}
+      style={{ height: '100%' }}
       zoom={10}
       center={firstPoint ? [firstPoint.lat, firstPoint.lon] : [0, 0]}
-      preferCanvas
+      preferCanvas={preferCanvas}
+      zoomControl={zoomControl}
     >
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -66,6 +77,7 @@ export function TripMap({ flights }: Props) {
         );
       })}
       <BoundsController flights={flights} />
+      <MapReadySignal onReady={onReady} />
     </MapContainer>
   );
 }
