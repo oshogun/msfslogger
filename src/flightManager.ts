@@ -32,16 +32,50 @@ export class FlightManager {
   private lastPointLat = 0;
   private lastPointLon = 0;
   private flightStartMs = 0;
+  // Paused wall-clock time, excluded from the logged duration
+  private pausedAccumMs = 0;
+  private pauseStartedMs = 0;
 
   readonly appState: AppState = {
     flightState: 'IDLE',
     currentFlightId: null,
     connected: false,
     lastFrame: null,
+    paused: false,
+    pauseFlags: 0,
   };
 
-  setPaused(paused: boolean): void {
+  /**
+   * `flags` is the MSFS `Pause_EX1` bitmask (see PAUSE_FLAG_* in agent/agent.js).
+   * It is kept only so the UI can say *which* kind of pause is active; any
+   * non-zero value stops the flight clock, including Active Pause.
+   */
+  setPaused(paused: boolean, flags = paused ? 1 : 0): void {
+    this.appState.paused = paused;
+    this.appState.pauseFlags = paused ? flags : 0;
+
+    // Only act on transitions — Pause_EX1 can repeat the same state
+    if (paused === this.isPaused) return;
     this.isPaused = paused;
+
+    if (paused) {
+      this.pauseStartedMs = Date.now();
+    } else if (this.pauseStartedMs > 0) {
+      this.pausedAccumMs += Date.now() - this.pauseStartedMs;
+      this.pauseStartedMs = 0;
+    }
+  }
+
+  /** Total paused time this flight, including a pause still in progress. */
+  private pausedMs(): number {
+    return this.isPaused && this.pauseStartedMs > 0
+      ? this.pausedAccumMs + (Date.now() - this.pauseStartedMs)
+      : this.pausedAccumMs;
+  }
+
+  /** Wall-clock time since takeoff, minus any time spent paused. */
+  private flightTimeMs(): number {
+    return Math.max(0, Date.now() - this.flightStartMs - this.pausedMs());
   }
 
   onFrame(frame: SimFrame): void {
@@ -113,6 +147,10 @@ export class FlightManager {
     this.lastPointLon = frame.lon;
     this.lastPointTime = Date.now();
     this.flightStartMs = Date.now();
+    this.pausedAccumMs = 0;
+    // A pause already in progress starts counting from takeoff, not from when
+    // it began — the time before takeoff was never part of this flight.
+    this.pauseStartedMs = this.isPaused ? Date.now() : 0;
 
     this.appState.flightState = 'FLYING';
     this.appState.currentFlightId = id;
@@ -127,7 +165,9 @@ export class FlightManager {
     if (this.currentFlightId === null) return;
 
     const endTime = new Date().toISOString();
-    const durationSec = Math.round((Date.now() - this.flightStartMs) / 1000);
+    const durationSec = Math.round(this.flightTimeMs() / 1000);
+    // Uses pausedMs() so a flight ending while still paused reports correctly
+    const pausedSec = Math.round(this.pausedMs() / 1000);
 
     const arr = findNearestAirport(frame.lat, frame.lon);
     if (arr) console.log(`[FlightManager] Arrival airport: ${arr.icao} (${arr.name})`);
@@ -147,7 +187,8 @@ export class FlightManager {
 
     console.log(
       `[FlightManager] Flight #${this.currentFlightId} ended — ` +
-      `${this.pointCount} points, ${this.distanceNm.toFixed(1)} nm, ${durationSec}s`
+      `${this.pointCount} points, ${this.distanceNm.toFixed(1)} nm, ${durationSec}s` +
+      (pausedSec > 0 ? ` (${pausedSec}s paused, excluded)` : '')
     );
 
     this.currentFlightId = null;

@@ -77,9 +77,20 @@ export function createIngestRouter(flightManager: FlightManager): Router {
 
   router.post('/event', (req, res) => {
     if (!checkAuth(req, res)) return;
-    const { type } = req.body as { type?: unknown };
+    const { type, flags } = req.body as { type?: unknown; flags?: unknown };
 
     switch (type) {
+      // Pause_EX1 bitmask from MSFS. Preferred over the legacy paused/unpaused
+      // events below because those do NOT fire for Active Pause.
+      case 'pause':
+        if (typeof flags !== 'number' || !Number.isFinite(flags)) {
+          res.status(400).json({ error: 'pause event requires a numeric flags field' });
+          return;
+        }
+        markConnected();
+        flightManager.setPaused(flags !== 0, flags);
+        break;
+
       case 'connected':
         markConnected();
         break;

@@ -4,7 +4,7 @@ Automatic flight logger for Microsoft Flight Simulator 2020/2024 (and probably o
 
 ## How it works
 
-The server records one data point per second while airborne, and saves completed flights to `flights.db`. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, attach a PDF flight plan to each flight (stored in `flight_plans/`), and [export a flight or a whole trip as a PDF](#pdf-export).
+The server records one data point per second while airborne, and saves completed flights to `flights.db`. Time spent with the simulation interrupted — **Active Pause**, a regular pause, or sitting in a menu — is not counted toward flight time, and no track points are recorded while paused. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, attach a PDF flight plan to each flight (stored in `flight_plans/`), and [export a flight or a whole trip as a PDF](#pdf-export).
 
 When MSFS and the server are on different machines, flight data gets across via the **agent**: a small script ([`agent/`](agent/)) that runs on the Windows machine, connects to SimConnect **locally** — exactly like any other local addon, with no TCP or firewall configuration — and pushes data to the server over plain HTTP. See [`agent/README.md`](agent/README.md) to set it up.
 

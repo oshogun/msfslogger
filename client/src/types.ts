@@ -57,4 +57,8 @@ export interface Status {
   currentFlightId: number | null;
   aircraft: string | null;
   frame: StatusFrame | null;
+  /** True for any sim pause, including MSFS Active Pause. Flight time is not counted while true. */
+  paused: boolean;
+  /** Raw MSFS Pause_EX1 bitmask: 1 full, 2 with-sound, 4 active, 8 sim. */
+  pauseFlags: number;
 }

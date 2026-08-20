@@ -82,11 +82,13 @@ export function createServer(flightManager: FlightManager): express.Express {
   app.use('/api/ingest', createIngestRouter(flightManager));
 
   app.get('/api/status', (_req, res) => {
-    const { flightState, currentFlightId, connected, lastFrame } = flightManager.appState;
+    const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
     res.json({
       connected,
       flightState,
       currentFlightId,
+      paused,
+      pauseFlags,
       simRunning: lastFrame?.simRunning ?? 0,
       onGround: lastFrame?.onGround ?? true,
       aircraft: lastFrame?.aircraft ?? null,

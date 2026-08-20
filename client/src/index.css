@@ -46,6 +46,7 @@ a:hover { text-decoration: underline; }
 .dot.disconnected { background: #4b5563; }
 .dot.connected    { background: #34d399; }
 .dot.flying       { background: #60a5fa; animation: pulse 1.5s infinite; }
+.dot.paused       { background: #f59e0b; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

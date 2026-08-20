@@ -28,6 +28,12 @@ This is the supported way to connect a remote server to MSFS. The alternative â€
 
 Leave this running in the background whenever you want flights logged. It reconnects automatically if MSFS restarts, and retries the server if it's briefly unreachable.
 
+## Pause handling
+
+The agent subscribes to SimConnect's `Pause_EX1` event, which reports a bitmask distinguishing a full pause (1), **Active Pause** (4), and a sim pause such as a menu (8). This matters because the older `Paused`/`Unpaused` events **do not fire for Active Pause at all** â€” they are kept only as a fallback and are ignored once `Pause_EX1` is seen working.
+
+Any non-zero flag stops the flight clock on the server and suspends track recording, so no form of interruption inflates a flight's logged duration.
+
 ## Environment variables
 
 | Variable | Required | Description |

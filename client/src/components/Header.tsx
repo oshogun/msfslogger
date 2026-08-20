@@ -16,8 +16,14 @@ export function Header({ status, serverError }: Props) {
     if (!status.connected) {
       label = 'Sim not connected';
     } else if (status.flightState === 'FLYING') {
-      dotClass = 'dot flying';
-      label = `Recording · ${status.aircraft || 'Unknown'}`;
+      if (status.paused) {
+        // Make it obvious the flight clock has stopped, not just the aircraft
+        dotClass = 'dot paused';
+        label = `Paused · ${status.aircraft || 'Unknown'}`;
+      } else {
+        dotClass = 'dot flying';
+        label = `Recording · ${status.aircraft || 'Unknown'}`;
+      }
     } else {
       dotClass = 'dot connected';
       label = 'Connected · Idle';

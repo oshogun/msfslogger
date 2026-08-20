@@ -18,6 +18,10 @@ export interface AppState {
   currentFlightId: number | null;
   connected: boolean;
   lastFrame: SimFrame | null;
+  /** True while the sim is paused in any form, including Active Pause. */
+  paused: boolean;
+  /** Raw MSFS Pause_EX1 bitmask, so the UI can name the kind of pause. */
+  pauseFlags: number;
 }
 
 export interface Flight {

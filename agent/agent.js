@@ -24,8 +24,30 @@ const EVT_PAUSED = 1;
 const EVT_UNPAUSED = 2;
 const EVT_CRASHED = 3;
 const EVT_FLIGHT_LOADED = 4;
+const EVT_PAUSE_EX1 = 5;
 
 const OBJECT_USER = 0;
+
+/**
+ * MSFS `Pause_EX1` bitmask (from the SimConnect SDK). The legacy Paused /
+ * Unpaused events do NOT fire for Active Pause, which is why this event exists
+ * and why the server prefers it.
+ */
+const PAUSE_FLAG_OFF        = 0;
+const PAUSE_FLAG_FULL       = 1;   // regular full pause
+const PAUSE_FLAG_WITH_SOUND = 2;   // legacy, rarely seen
+const PAUSE_FLAG_ACTIVE     = 4;   // Active Pause — aircraft frozen, sim running
+const PAUSE_FLAG_SIM        = 8;   // sim frozen (e.g. in a menu)
+
+function describePause(flags) {
+  if (flags === PAUSE_FLAG_OFF) return 'off';
+  const parts = [];
+  if (flags & PAUSE_FLAG_FULL)       parts.push('full');
+  if (flags & PAUSE_FLAG_WITH_SOUND) parts.push('with-sound');
+  if (flags & PAUSE_FLAG_ACTIVE)     parts.push('active');
+  if (flags & PAUSE_FLAG_SIM)        parts.push('sim');
+  return parts.join('+') || `unknown(${flags})`;
+}
 
 async function postJson(path, body) {
   const headers = { 'Content-Type': 'application/json' };
@@ -84,6 +106,12 @@ async function tryConnect() {
     handle.subscribeToSystemEvent(EVT_UNPAUSED,      'Unpaused');
     handle.subscribeToSystemEvent(EVT_CRASHED,       'Crashed');
     handle.subscribeToSystemEvent(EVT_FLIGHT_LOADED, 'FlightLoaded');
+    // Pause_EX1 reports Active Pause, which Paused/Unpaused do not
+    handle.subscribeToSystemEvent(EVT_PAUSE_EX1,     'Pause_EX1');
+
+    // Once Pause_EX1 is seen to work, the legacy events are redundant and would
+    // fight it (they report a bare on/off that misses Active Pause).
+    let usingPauseEx1 = false;
 
     handle.on('simObjectData', ({ requestID, data }) => {
       if (requestID !== REQ_FLIGHT_DATA) return;
@@ -115,13 +143,21 @@ async function tryConnect() {
       postJson('/api/ingest/frame', frame);
     });
 
-    handle.on('event', ({ clientEventId }) => {
+    handle.on('event', ({ clientEventId, data }) => {
       switch (clientEventId) {
+        case EVT_PAUSE_EX1: {
+          usingPauseEx1 = true;
+          const flags = data | 0;
+          console.log(`[Agent] Pause state: ${describePause(flags)}`);
+          postJson('/api/ingest/event', { type: 'pause', flags });
+          break;
+        }
         case EVT_PAUSED:
-          sendEvent('paused');
+          // Fallback only — Pause_EX1 is authoritative when available
+          if (!usingPauseEx1) sendEvent('paused');
           break;
         case EVT_UNPAUSED:
-          sendEvent('unpaused');
+          if (!usingPauseEx1) sendEvent('unpaused');
           break;
         case EVT_CRASHED:
           console.log('[Agent] Crash detected');
