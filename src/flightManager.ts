@@ -6,7 +6,7 @@ const RECORD_INTERVAL_MS = 5000;
 // A gap between points larger than this means recording had stopped, so the
 // time is treated as an interruption rather than flight time. Generously above
 // RECORD_INTERVAL_MS so ordinary jitter is never mistaken for an interruption.
-const MAX_COUNTED_GAP_MS = 60_000;
+export const MAX_COUNTED_GAP_MS = 60_000;
 const AIRBORNE_DEBOUNCE_FRAMES = 3;
 const LANDED_DEBOUNCE_FRAMES = 10;
 

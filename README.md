@@ -215,4 +215,10 @@ msfslogger/
 ```bash
 # Backfill ICAO departure/arrival codes for existing flights
 npm run backfill-icao
+
+# Recompute stored durations from recorded tracks. Flights logged before
+# duration was track-derived counted interruptions the sim never reported
+# (a frozen sim, most of all) as flight time. Dry run by default:
+npm run backfill-durations
+npm run backfill-durations -- --apply
 ```
