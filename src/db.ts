@@ -302,6 +302,18 @@ type InsertablePoint = Omit<FlightPoint, 'id' | 'flight_id'>;
 
 const FILLER_COUNT = 8;
 
+/**
+ * A single flight's own logged duration, never spanning into another flight.
+ * Falls back to its own start→end wall clock for rows predating duration_sec.
+ */
+function ownDurationSec(flight: Flight): number {
+  if (flight.duration_sec != null) return flight.duration_sec;
+  if (!flight.end_time) return 0;
+  return Math.max(0, Math.round(
+    (new Date(flight.end_time).getTime() - new Date(flight.start_time).getTime()) / 1000
+  ));
+}
+
 export function combineFlights(idA: number, idB: number): number | null {
   return db.transaction((): number | null => {
     const flightA = db.prepare('SELECT * FROM flights WHERE id = ?').get(idA) as Flight | undefined;
@@ -361,9 +373,10 @@ export function combineFlights(idA: number, idB: number): number | null {
       second.end_time ??
       (secondPts.length > 0 ? secondPts[secondPts.length - 1].ts : first.end_time ?? new Date().toISOString());
 
-    const durationSec = Math.round(
-      (new Date(effectiveEndTime).getTime() - new Date(first.start_time).getTime()) / 1000
-    );
+    // Sum the legs' own durations rather than measuring first.start → second.end.
+    // A long pause can cause one flight to be logged as two, and the wall-clock
+    // gap between the halves is exactly that pause — it must not be counted.
+    const durationSec = ownDurationSec(first) + ownDurationSec(second);
     const aircraft = first.aircraft ?? second.aircraft ?? null;
     const noteParts = [first.notes, second.notes].filter(Boolean);
     const notes = noteParts.length > 0 ? noteParts.join('\n---\n') : null;
