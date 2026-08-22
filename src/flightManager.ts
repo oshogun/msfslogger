@@ -3,6 +3,10 @@ import { insertFlight, insertPoint, closeFlight } from './db';
 import { findNearestAirport } from './airports';
 
 const RECORD_INTERVAL_MS = 5000;
+// A gap between points larger than this means recording had stopped, so the
+// time is treated as an interruption rather than flight time. Generously above
+// RECORD_INTERVAL_MS so ordinary jitter is never mistaken for an interruption.
+const MAX_COUNTED_GAP_MS = 60_000;
 const AIRBORNE_DEBOUNCE_FRAMES = 3;
 const LANDED_DEBOUNCE_FRAMES = 10;
 
@@ -23,6 +27,9 @@ export class FlightManager {
   private landedStreak = 0;
   private isPaused = false;
   private lastPointTime = 0;
+  // Set whenever recording is skipped, so the following gap is known to be an
+  // interruption regardless of how short it was.
+  private interrupted = false;
 
   // Accumulated stats for the current flight
   private distanceNm = 0;
@@ -32,9 +39,9 @@ export class FlightManager {
   private lastPointLat = 0;
   private lastPointLon = 0;
   private flightStartMs = 0;
-  // Paused wall-clock time, excluded from the logged duration
-  private pausedAccumMs = 0;
-  private pauseStartedMs = 0;
+  // Flight time accumulated from the gaps between recorded points, so that any
+  // interruption which stops recording is excluded automatically.
+  private activeMs = 0;
 
   readonly appState: AppState = {
     flightState: 'IDLE',
@@ -47,35 +54,16 @@ export class FlightManager {
 
   /**
    * `flags` is the MSFS `Pause_EX1` bitmask (see PAUSE_FLAG_* in agent/agent.js).
-   * It is kept only so the UI can say *which* kind of pause is active; any
-   * non-zero value stops the flight clock, including Active Pause.
+   * Pausing suppresses point recording, which is what keeps paused time out of
+   * the duration; the flags are kept so the UI can name the kind of pause.
    */
   setPaused(paused: boolean, flags = paused ? 1 : 0): void {
+    // Mark here as well as in onFrame: a paused sim may stop sending frames
+    // altogether, in which case onFrame never runs to flag the interruption.
+    if (paused) this.interrupted = true;
+    this.isPaused = paused;
     this.appState.paused = paused;
     this.appState.pauseFlags = paused ? flags : 0;
-
-    // Only act on transitions — Pause_EX1 can repeat the same state
-    if (paused === this.isPaused) return;
-    this.isPaused = paused;
-
-    if (paused) {
-      this.pauseStartedMs = Date.now();
-    } else if (this.pauseStartedMs > 0) {
-      this.pausedAccumMs += Date.now() - this.pauseStartedMs;
-      this.pauseStartedMs = 0;
-    }
-  }
-
-  /** Total paused time this flight, including a pause still in progress. */
-  private pausedMs(): number {
-    return this.isPaused && this.pauseStartedMs > 0
-      ? this.pausedAccumMs + (Date.now() - this.pauseStartedMs)
-      : this.pausedAccumMs;
-  }
-
-  /** Wall-clock time since takeoff, minus any time spent paused. */
-  private flightTimeMs(): number {
-    return Math.max(0, Date.now() - this.flightStartMs - this.pausedMs());
   }
 
   onFrame(frame: SimFrame): void {
@@ -101,7 +89,10 @@ export class FlightManager {
         break;
 
       case 'FLYING':
-        if (inSlew || this.isPaused) break;
+        if (inSlew || this.isPaused) {
+          this.interrupted = true;
+          break;
+        }
 
         this.recordPoint(frame);
 
@@ -147,10 +138,8 @@ export class FlightManager {
     this.lastPointLon = frame.lon;
     this.lastPointTime = Date.now();
     this.flightStartMs = Date.now();
-    this.pausedAccumMs = 0;
-    // A pause already in progress starts counting from takeoff, not from when
-    // it began — the time before takeoff was never part of this flight.
-    this.pauseStartedMs = this.isPaused ? Date.now() : 0;
+    this.activeMs = 0;
+    this.interrupted = false;
 
     this.appState.flightState = 'FLYING';
     this.appState.currentFlightId = id;
@@ -165,9 +154,13 @@ export class FlightManager {
     if (this.currentFlightId === null) return;
 
     const endTime = new Date().toISOString();
-    const durationSec = Math.round(this.flightTimeMs() / 1000);
-    // Uses pausedMs() so a flight ending while still paused reports correctly
-    const pausedSec = Math.round(this.pausedMs() / 1000);
+    // Include the final partial interval between the last point and touchdown
+    const tailMs = Date.now() - this.lastPointTime;
+    if (!this.interrupted && tailMs <= MAX_COUNTED_GAP_MS) this.activeMs += tailMs;
+
+    const durationSec = Math.round(this.activeMs / 1000);
+    const excludedSec = Math.max(0,
+      Math.round((Date.now() - this.flightStartMs) / 1000) - durationSec);
 
     const arr = findNearestAirport(frame.lat, frame.lon);
     if (arr) console.log(`[FlightManager] Arrival airport: ${arr.icao} (${arr.name})`);
@@ -188,7 +181,7 @@ export class FlightManager {
     console.log(
       `[FlightManager] Flight #${this.currentFlightId} ended — ` +
       `${this.pointCount} points, ${this.distanceNm.toFixed(1)} nm, ${durationSec}s` +
-      (pausedSec > 0 ? ` (${pausedSec}s paused, excluded)` : '')
+      (excludedSec > 0 ? ` (${excludedSec}s interrupted, excluded)` : '')
     );
 
     this.currentFlightId = null;
@@ -207,10 +200,18 @@ export class FlightManager {
   private writePoint(frame: SimFrame): void {
     if (this.currentFlightId === null) return;
 
-    const ts = new Date().toISOString();
+    const now = Date.now();
+    const ts = new Date(now).toISOString();
 
     if (this.pointCount > 0) {
       this.distanceNm += haversineNm(this.lastPointLat, this.lastPointLon, frame.lat, frame.lon);
+
+      // Flight time is built from the gaps between points rather than the wall
+      // clock. A gap far longer than the recording interval means recording had
+      // stopped — a pause, slew, a frozen sim, a crashed agent — and that time
+      // was not flown, so it is not counted.
+      const gap = now - this.lastPointTime;
+      if (!this.interrupted && gap <= MAX_COUNTED_GAP_MS) this.activeMs += gap;
     }
 
     if (frame.altitudeFt > this.maxAltitudeFt) this.maxAltitudeFt = frame.altitudeFt;
@@ -231,7 +232,8 @@ export class FlightManager {
 
     this.lastPointLat = frame.lat;
     this.lastPointLon = frame.lon;
-    this.lastPointTime = Date.now();
+    this.lastPointTime = now;
     this.pointCount++;
+    this.interrupted = false;
   }
 }
