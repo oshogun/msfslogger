@@ -10,7 +10,13 @@
       "Bash(npm show *)",
       "WebFetch(domain:api.github.com)",
       "Bash(npx tsc *)",
-      "Bash(timeout 5 bash -c 'echo >/dev/tcp/192.168.0.24/5111')"
+      "Bash(npm --version)",
+      "Bash(ip addr *)",
+      "Bash(timedatectl show *)",
+      "Bash(curl -s http://localhost:3000/api/trips)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s http://localhost:3000/api/flights)",
+      "Bash(curl -s http://localhost:3000/api/status)"
     ],
     "additionalDirectories": [
       "/home/guilherme/msfslogger"
