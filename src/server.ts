@@ -1,7 +1,7 @@
 import express from 'express';
 import multer, { MulterError } from 'multer';
 import path from 'path';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, getFlightsWithPoints } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
 import { buildJourney } from './journey';
@@ -329,11 +329,17 @@ export function createServer(flightManager: FlightManager): express.Express {
     res.json(getFlightById(id));
   });
 
-  // ── Journey / atlas ───────────────────────────────────────────────────────
+  // ── Trip atlas ────────────────────────────────────────────────────────────
 
-  app.get('/api/journey', (_req, res) => {
+  app.get('/api/trips/:id/journey', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    const trip = getTripById(id);
+    if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
+
     try {
-      res.json(buildJourney(getFlightsWithPoints()));
+      res.json(buildJourney(trip.flights));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

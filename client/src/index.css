@@ -436,6 +436,27 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .atlas-plane-stats { font-size: 0.72rem; color: #64748b; margin: 0.25rem 0 0.45rem; }
 .atlas-plane-bar { height: 4px; background: #0f1117; border-radius: 999px; overflow: hidden; }
 .atlas-plane-bar-fill { height: 100%; background: #60a5fa; border-radius: 999px; }
-.header-nav { display: flex; gap: 1rem; margin-left: 0.5rem; }
-.header-nav a { font-size: 0.85rem; color: #94a3b8; }
-.header-nav a:hover { color: #e2e8f0; text-decoration: none; }
+/* ── View toggle (trip overview vs atlas) ── */
+.view-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  margin-bottom: 1.25rem;
+}
+.view-tab {
+  padding: 0.35rem 0.9rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.view-tab:hover { color: #e2e8f0; }
+.view-tab.is-active { background: #2563eb; color: #fff; }

@@ -204,24 +204,6 @@ export function getFlightById(id: number): FlightWithPoints | null {
   return { ...flight, points };
 }
 
-/**
- * Every flight with its full track. Used by the journey/atlas view; fetches all
- * points in a single query rather than one per flight.
- */
-export function getFlightsWithPoints(): FlightWithPoints[] {
-  const flights = db.prepare('SELECT * FROM flights ORDER BY start_time ASC').all() as Flight[];
-  const points = db.prepare('SELECT * FROM flight_points ORDER BY flight_id, ts ASC').all() as FlightPoint[];
-
-  const byFlight = new Map<number, FlightPoint[]>();
-  for (const pt of points) {
-    const list = byFlight.get(pt.flight_id);
-    if (list) list.push(pt);
-    else byFlight.set(pt.flight_id, [pt]);
-  }
-
-  return flights.map(f => ({ ...f, points: byFlight.get(f.id) ?? [] }));
-}
-
 export function getFlightPointCount(id: number): number {
   const row = db.prepare('SELECT COUNT(*) as cnt FROM flight_points WHERE flight_id = ?').get(id) as { cnt: number };
   return row.cnt;

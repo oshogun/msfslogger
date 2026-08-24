@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { TripMap } from '../components/TripMap';
+import { TripAtlas } from '../components/TripAtlas';
 import { StatsGrid } from '../components/StatsGrid';
 import { apiFetch, downloadPdf } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
-import type { Trip } from '../types';
+import type { Trip, Journey } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 
@@ -18,6 +19,11 @@ export function TripDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get('view') === 'atlas' ? 'atlas' : 'overview';
+  const [journey, setJourney] = useState<Journey | null>(null);
+  const [journeyError, setJourneyError] = useState<string | null>(null);
+
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
   const [includePlans, setIncludePlans] = useState(true);
@@ -33,6 +39,21 @@ export function TripDetail() {
       })
       .catch(err => setLoadError((err as Error).message));
   }, [id, navigate]);
+
+  useEffect(() => {
+    // Lazy: only pay for the tracks once the atlas is actually opened
+    if (view !== 'atlas' || journey || journeyError || !id) return;
+    apiFetch<Journey>(`/api/trips/${id}/journey`)
+      .then(setJourney)
+      .catch(err => setJourneyError((err as Error).message));
+  }, [view, journey, journeyError, id]);
+
+  function setView(next: 'overview' | 'atlas') {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'atlas') params.set('view', 'atlas');
+    else params.delete('view');
+    setSearchParams(params, { replace: true });
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -114,6 +135,29 @@ export function TripDetail() {
         {trip.total_distance_nm != null ? ` · ${formatDistance(trip.total_distance_nm)} nm total` : ''}
       </p>
 
+      <div className="view-toggle" role="tablist">
+        <button
+          role="tab"
+          aria-selected={view === 'overview'}
+          className={`view-tab${view === 'overview' ? ' is-active' : ''}`}
+          onClick={() => setView('overview')}
+        >Overview</button>
+        <button
+          role="tab"
+          aria-selected={view === 'atlas'}
+          className={`view-tab${view === 'atlas' ? ' is-active' : ''}`}
+          onClick={() => setView('atlas')}
+        >Atlas</button>
+      </div>
+
+      {view === 'atlas' ? (
+        journeyError
+          ? <p style={{ color: '#f87171' }}>Failed to load atlas: {journeyError}</p>
+          : journey
+            ? <TripAtlas journey={journey} />
+            : <p style={{ color: '#4b5563' }}>Loading atlas...</p>
+      ) : (
+      <>
       <StatsGrid stats={stats} />
 
       {trip.notes && (
@@ -217,6 +261,9 @@ export function TripDetail() {
           </tbody>
         </table>
       </div>
+
+      </>
+      )}
 
       <div className="flight-actions">
         <Link to="/" className="btn btn-ghost">← Back</Link>
