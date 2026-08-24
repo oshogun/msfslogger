@@ -441,3 +441,111 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 }
 .view-tab:hover { color: #e2e8f0; }
 .view-tab.is-active { background: #2563eb; color: #fff; }
+
+/* ── The Device ── */
+.device-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  background:
+    radial-gradient(ellipse at 50% 40%, #12151d 0%, #08090d 70%);
+}
+.device-frame {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(180deg, #171a23 0%, #101219 100%);
+  border: 1px solid #2a2f3d;
+  border-radius: 14px;
+  padding: 1.5rem 1.5rem 1.25rem;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.04) inset,
+    0 24px 60px rgba(0,0,0,0.55);
+  transition: border-color 0.4s, box-shadow 0.4s;
+}
+.device-frame.is-engaged {
+  border-color: #4a3a1f;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.05) inset,
+    0 0 44px rgba(245,158,11,0.10),
+    0 24px 60px rgba(0,0,0,0.55);
+}
+
+.device-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.device-title {
+  font-size: 0.95rem; font-weight: 700; letter-spacing: 0.22em;
+  color: #cbd5e1;
+}
+.device-sub {
+  margin-top: 0.25rem;
+  white-space: nowrap;
+  font-size: 0.62rem; letter-spacing: 0.1em; color: #4b5563;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.device-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem; letter-spacing: 0.14em;
+  color: #64748b; border: 1px solid #2a2f3d; border-radius: 999px;
+  padding: 0.22rem 0.55rem; white-space: nowrap;
+  transition: color 0.3s, border-color 0.3s;
+}
+.device-state.is-engaged { color: #f59e0b; border-color: #4a3a1f; }
+
+.device-lamps { display: flex; gap: 0.4rem; margin: 1.4rem 0 1.6rem; }
+.device-lamp {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #1e2230; border: 1px solid #2a2f3d;
+  transition: background 0.18s, box-shadow 0.18s;
+}
+.device-lamp.is-lit {
+  background: #f59e0b; border-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245,158,11,0.6);
+}
+
+/* The switch itself */
+.device-switch {
+  display: block; margin: 0 auto 1.6rem;
+  background: none; border: none; padding: 0.5rem; cursor: pointer;
+}
+.device-switch:focus-visible { outline: 2px solid #f59e0b; outline-offset: 4px; border-radius: 999px; }
+.device-switch-track {
+  display: block; position: relative;
+  width: 116px; height: 56px; border-radius: 999px;
+  background: #0b0d12;
+  border: 1px solid #2a2f3d;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.6) inset;
+  transition: background 0.35s, border-color 0.35s;
+}
+.device-switch.is-engaged .device-switch-track { background: #2a1e0c; border-color: #6b4d1c; }
+.device-switch-knob {
+  position: absolute; top: 5px; left: 5px;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: linear-gradient(180deg, #3a4152 0%, #232936 100%);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  transition: transform 0.35s cubic-bezier(0.4, 1.6, 0.5, 1), background 0.35s, box-shadow 0.35s;
+}
+.device-switch.is-engaged .device-switch-knob {
+  transform: translateX(60px);
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+  box-shadow: 0 0 16px rgba(245,158,11,0.55), 0 2px 6px rgba(0,0,0,0.6);
+}
+
+.device-readout {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 1rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-top: 1px solid #21252f; padding-top: 1rem;
+}
+.device-readout > div { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.device-readout dt { font-size: 0.6rem; letter-spacing: 0.12em; color: #4b5563; }
+.device-readout dd { font-size: 0.78rem; color: #94a3b8; font-variant-numeric: tabular-nums; }
+.device-frame.is-engaged .device-readout dd { color: #e2e8f0; }
+
+.device-footer {
+  margin-top: 1.15rem; padding-top: 0.85rem; border-top: 1px solid #21252f;
+  font-size: 0.66rem; letter-spacing: 0.06em; color: #4b5563; text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-switch-knob, .device-frame, .device-lamp, .device-state { transition: none; }
+}
