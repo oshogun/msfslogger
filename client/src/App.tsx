@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Home } from './pages/Home';
 import { FlightDetail } from './pages/FlightDetail';
 import { TripDetail } from './pages/TripDetail';
+import { Atlas } from './pages/Atlas';
 import { PrintFlight } from './pages/PrintFlight';
 import { PrintTrip } from './pages/PrintTrip';
 import { useStatus } from './hooks/useStatus';
@@ -17,6 +18,7 @@ function AppShell() {
         <Route path="/" element={<Home status={status} />} />
         <Route path="/flight/:id" element={<FlightDetail />} />
         <Route path="/trip/:id" element={<TripDetail />} />
+        <Route path="/atlas" element={<Atlas />} />
       </Routes>
     </>
   );

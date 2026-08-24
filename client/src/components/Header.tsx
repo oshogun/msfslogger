@@ -33,6 +33,9 @@ export function Header({ status, serverError }: Props) {
   return (
     <header className="header">
       <h1><Link to="/" style={{ color: 'inherit', textDecoration: 'none' }}>msfs<span>logger</span></Link></h1>
+      <nav className="header-nav">
+        <Link to="/atlas">Atlas</Link>
+      </nav>
       <div className="header-right">
         <div className="status-badge">
           <div className={dotClass}></div>

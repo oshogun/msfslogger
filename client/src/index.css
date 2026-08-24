@@ -367,3 +367,75 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   margin-right: 0.35rem;
   vertical-align: middle;
 }
+
+/* ── Atlas ── */
+#atlas-map {
+  height: 520px;
+  border-radius: 12px;
+  border: 1px solid #2d3148;
+  overflow: hidden;
+}
+.atlas-section { margin-bottom: 1.5rem; }
+
+/* Distance measured against a lap of the equator */
+.atlas-globe {
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 10px;
+  padding: 1rem 1.15rem;
+  margin-bottom: 1.5rem;
+}
+.atlas-globe-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.6rem; }
+.atlas-globe-pct { font-size: 1.35rem; font-weight: 700; color: #e2e8f0; font-variant-numeric: tabular-nums; }
+.atlas-bar { height: 10px; background: #0f1117; border-radius: 999px; overflow: hidden; border: 1px solid #2d3148; }
+.atlas-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  /* Mirrors the map's leg gradient */
+  background: linear-gradient(90deg, hsl(210 85% 60%), hsl(150 85% 55%), hsl(20 85% 60%));
+}
+.atlas-globe-foot { margin-top: 0.5rem; font-size: 0.78rem; color: #64748b; }
+
+.atlas-countries { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.atlas-country {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: #1a1d27; border: 1px solid #2d3148; border-radius: 999px;
+  padding: 0.35rem 0.8rem; font-size: 0.85rem; color: #cbd5e1;
+}
+.atlas-flag { font-size: 1.05rem; line-height: 1; }
+.atlas-country-count {
+  font-size: 0.7rem; color: #64748b; background: #0f1117;
+  border-radius: 999px; padding: 0.1rem 0.4rem; font-variant-numeric: tabular-nums;
+}
+
+.atlas-chain {
+  background: #1a2744; border: 1px solid #1e3a5f; border-radius: 10px;
+  padding: 0.8rem 1rem; margin-bottom: 1.5rem;
+  font-size: 0.88rem; color: #cbd5e1;
+}
+.atlas-chain strong { color: #60a5fa; }
+
+.atlas-route { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.atlas-hop {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: #1a1d27; border: 1px solid #2d3148; border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem; color: #cbd5e1; font-variant-numeric: tabular-nums;
+  transition: border-color 0.12s, background 0.12s;
+}
+.atlas-hop:hover, .atlas-hop.is-active { background: #232838; border-color: #3b82f6; text-decoration: none; }
+.atlas-hop-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.atlas-hop-arrow { color: #4b5563; }
+
+.atlas-fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; }
+.atlas-plane { background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; padding: 0.75rem 0.9rem; }
+.atlas-plane-name {
+  font-size: 0.85rem; color: #e2e8f0; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.atlas-plane-stats { font-size: 0.72rem; color: #64748b; margin: 0.25rem 0 0.45rem; }
+.atlas-plane-bar { height: 4px; background: #0f1117; border-radius: 999px; overflow: hidden; }
+.atlas-plane-bar-fill { height: 100%; background: #60a5fa; border-radius: 999px; }
+.header-nav { display: flex; gap: 1rem; margin-left: 0.5rem; }
+.header-nav a { font-size: 0.85rem; color: #94a3b8; }
+.header-nav a:hover { color: #e2e8f0; text-decoration: none; }

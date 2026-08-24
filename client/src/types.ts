@@ -62,3 +62,42 @@ export interface Status {
   /** Raw MSFS Pause_EX1 bitmask: 1 full, 2 with-sound, 4 active, 8 sim. */
   pauseFlags: number;
 }
+
+export interface JourneyLeg {
+  id: number;
+  seq: number;
+  aircraft: string | null;
+  departureIcao: string | null;
+  arrivalIcao: string | null;
+  distanceNm: number | null;
+  durationSec: number | null;
+  startTime: string;
+  track: [number, number][];
+}
+
+export interface JourneyAirport {
+  icao: string;
+  name: string | null;
+  lat: number;
+  lon: number;
+  visits: number;
+}
+
+export interface Journey {
+  legCount: number;
+  totalDistanceNm: number;
+  totalDurationSec: number;
+  aircraftCount: number;
+  aircraft: { name: string; legs: number; distanceNm: number }[];
+  maxAltitudeFt: number;
+  maxAirspeedKts: number;
+  longestLeg: { id: number; route: string; distanceNm: number } | null;
+  countries: { name: string; flag: string; airports: number }[];
+  airports: JourneyAirport[];
+  aroundTheWorldPct: number;
+  longestChain: { length: number; from: string; to: string } | null;
+  chainBreaks: number;
+  legs: JourneyLeg[];
+  firstFlight: string | null;
+  lastFlight: string | null;
+}

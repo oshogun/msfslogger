@@ -6,6 +6,8 @@ Automatic flight logger for Microsoft Flight Simulator 2020/2024 (and probably o
 
 The server records one data point per second while airborne, and saves completed flights to `flights.db`. Flight time is measured from the recorded track rather than the wall clock, so any interruption — **Active Pause**, a regular pause, a menu, slew mode, a frozen sim, even the agent dropping out — is excluded automatically. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, attach a PDF flight plan to each flight (stored in `flight_plans/`), and [export a flight or a whole trip as a PDF](#pdf-export).
 
+The **Atlas** (`/atlas`) draws every flight you have ever logged on one map, tinted from your first leg to your most recent, alongside career totals: distance, air time, airports, aircraft, ceiling, countries visited (derived from ICAO prefixes), and how far around the equator you have flown. It also finds your longest unbroken chain of legs — consecutive flights where each departure is the previous arrival.
+
 When MSFS and the server are on different machines, flight data gets across via the **agent**: a small script ([`agent/`](agent/)) that runs on the Windows machine, connects to SimConnect **locally** — exactly like any other local addon, with no TCP or firewall configuration — and pushes data to the server over plain HTTP. See [`agent/README.md`](agent/README.md) to set it up.
 
 This is the only supported connection method. Remote SimConnect over TCP (pointing the server at `SimConnect.xml` + an open firewall port) is not supported: it is fragile in practice and, on a Microsoft Store install, never produced a working connection at all despite a correct, verified XML file.

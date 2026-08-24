@@ -1,9 +1,10 @@
 import express from 'express';
 import multer, { MulterError } from 'multer';
 import path from 'path';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, getFlightsWithPoints } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
+import { buildJourney } from './journey';
 import type { FlightManager } from './flightManager';
 import type { Flight, FlightEditPayload, TripEditPayload } from './types';
 import { createIngestRouter } from './ingest';
@@ -45,11 +46,6 @@ function sendPdf(res: express.Response, pdf: Buffer, filename: string): void {
 }
 
 /**
- * Locale/timezone are forwarded to the print page because the export renders on
- * the server, whose timezone (Etc/UTC here) is not the user's. Both values get
- * interpolated into a URL, so they are validated before being trusted.
- */
-/**
  * Whether to append attached flight plans to an export. Defaults to true;
  * `?plans=0` skips them, which matters for trips with many legs where the
  * attachments dwarf the generated pages.
@@ -59,6 +55,11 @@ function includePlans(req: express.Request): boolean {
   return !(v === '0' || v === 'false');
 }
 
+/**
+ * Locale/timezone are forwarded to the print page because the export renders on
+ * the server, whose timezone (Etc/UTC here) is not the user's. Both values get
+ * interpolated into a URL, so they are validated before being trusted.
+ */
 function localeParams(req: express.Request): string {
   const tz = typeof req.query.tz === 'string' ? req.query.tz : '';
   const locale = typeof req.query.locale === 'string' ? req.query.locale : '';
@@ -326,6 +327,16 @@ export function createServer(flightManager: FlightManager): express.Express {
     deleteFlightPlanFile(id);
     clearFlightPlanName(id);
     res.json(getFlightById(id));
+  });
+
+  // ── Journey / atlas ───────────────────────────────────────────────────────
+
+  app.get('/api/journey', (_req, res) => {
+    try {
+      res.json(buildJourney(getFlightsWithPoints()));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   // ── PDF export ────────────────────────────────────────────────────────────
