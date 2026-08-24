@@ -110,6 +110,22 @@ export function initDb(): Database.Database {
   return db;
 }
 
+/**
+ * Closes the database, checkpointing the WAL back into flights.db.
+ *
+ * Without this, killing the process can leave recently committed data only in
+ * flights.db-wal, where a naive file copy of flights.db would miss it.
+ */
+export function closeDb(): void {
+  if (!db || !db.open) return;
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // Checkpoint is best-effort; closing still flushes.
+  }
+  db.close();
+}
+
 export function getDb(): Database.Database {
   return db;
 }

@@ -106,7 +106,9 @@ volumes:
   - ./flight_plans:/app/flight_plans
 ```
 
-To back up your data, copy `flights.db` and the `flight_plans/` folder.
+See [Backups](#backups) below — copying `flights.db` by hand is not reliable while the server is running.
+
+**WAL note for Docker:** SQLite runs in WAL mode, so it also writes `flights.db-wal` and `flights.db-shm` next to the database. Those are *not* bind-mounted by the compose file above, so they live only inside the container. The server checkpoints the WAL back into `flights.db` when it shuts down cleanly, which `docker compose stop`/`down` does — but a `docker kill`, an OOM, or a crashed container can strand recently recorded flights. Prefer stopping the container gracefully, and take real backups with `npm run backup`.
 
 ### Rebuilding after code changes
 
@@ -182,6 +184,22 @@ The agent targets **MSFS 2020** (`Protocol.KittyHawk`) by default. For MSFS 2024
 
 ---
 
+## Backups
+
+```bash
+npm run backup
+```
+
+Writes `backups/<timestamp>/` containing `flights.db` plus a copy of `flight_plans/`, then reopens the result to verify it and print what it holds. It is safe to run while the server is live, and takes an optional destination argument.
+
+**Do not just `cp flights.db`.** The database runs in WAL mode, so recent commits can still live in `flights.db-wal` — a plain copy of the main file alone can silently omit them, or come out unreadable if a checkpoint has not happened yet. `npm run backup` uses SQLite's online backup API, which reads through the WAL and writes one self-consistent file.
+
+A copy taken *after* a clean shutdown is fine, because the server checkpoints the WAL into `flights.db` when it receives SIGINT or SIGTERM. The risk is copying a database that is currently open.
+
+To restore, stop the server and copy `flights.db` and `flight_plans/` from a backup directory back into the project root.
+
+---
+
 ## Project structure
 
 ```
@@ -208,6 +226,7 @@ msfslogger/
 ├── airports.json         # Airport database for ICAO lookup
 ├── flights.db            # SQLite database (created on first run)
 ├── flight_plans/         # Attached PDF flight plans, one per flight (created on first run)
+├── backups/              # npm run backup output (gitignored)
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -215,6 +234,10 @@ msfslogger/
 ## Utility scripts
 
 ```bash
+# Back up the database and attached flight plans (safe while the server runs)
+npm run backup
+npm run backup /path/to/somewhere   # optional explicit destination
+
 # Backfill ICAO departure/arrival codes for existing flights
 npm run backfill-icao
 

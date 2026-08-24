@@ -8,3 +8,4 @@ flights.db
 flight_plans/
 start.sh
 server.log
+backups/

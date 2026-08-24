@@ -12,7 +12,8 @@
     "build": "npm run build:client && npm run build:server",
     "start": "node dist/index.js",
     "backfill-icao": "ts-node src/backfill-icao.ts",
-    "backfill-durations": "ts-node src/backfill-durations.ts"
+    "backfill-durations": "ts-node src/backfill-durations.ts",
+    "backup": "ts-node src/backup.ts"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
