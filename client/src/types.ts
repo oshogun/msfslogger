@@ -94,7 +94,6 @@ export interface Journey {
   longestLeg: { id: number; route: string; distanceNm: number } | null;
   countries: { name: string; flag: string; airports: number }[];
   airports: JourneyAirport[];
-  aroundTheWorldPct: number;
   longestChain: { length: number; from: string; to: string } | null;
   chainBreaks: number;
   legs: JourneyLeg[];

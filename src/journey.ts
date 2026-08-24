@@ -1,8 +1,5 @@
 import type { Flight, FlightPoint } from './types';
 
-/** Earth's equatorial circumference in nautical miles. */
-export const EARTH_CIRCUMFERENCE_NM = 21639;
-
 /**
  * ICAO prefix -> country. ICAO codes are allocated by region, so the first one
  * or two letters identify the country. Two-letter prefixes are checked first
@@ -119,6 +116,14 @@ export interface JourneyAirport {
   visits: number;
 }
 
+/*
+ * Note: an "around the world" progress bar used to live here, comparing total
+ * distance flown against the 21,639 nm equator. It was removed because distance
+ * flown is not progress around a globe — a trip running north covers thousands
+ * of miles while gaining almost no longitude. If this returns alongside planned
+ * trips, measure progress along the planned route (or longitude swept), not
+ * raw distance.
+ */
 export interface Journey {
   legCount: number;
   totalDistanceNm: number;
@@ -130,7 +135,6 @@ export interface Journey {
   longestLeg: { id: number; route: string; distanceNm: number } | null;
   countries: { name: string; flag: string; airports: number }[];
   airports: JourneyAirport[];
-  aroundTheWorldPct: number;
   /** Consecutive legs where each departure matches the previous arrival. */
   longestChain: { length: number; from: string; to: string } | null;
   chainBreaks: number;
@@ -231,7 +235,6 @@ export function buildJourney(flights: (Flight & { points: FlightPoint[] })[]): J
     longestLeg: longest,
     countries: [...byCountry.values()].sort((a, b) => b.airports - a.airports),
     airports: [...airports.values()],
-    aroundTheWorldPct: Math.round((totalDistanceNm / EARTH_CIRCUMFERENCE_NM) * 1000) / 10,
     longestChain: bestLen > 0 && legs.length > 0
       ? {
           length: bestLen,

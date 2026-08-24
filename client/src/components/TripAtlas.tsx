@@ -5,10 +5,6 @@ import { StatsGrid } from './StatsGrid';
 import { formatDuration, formatDistance, formatAlt, formatSpeed } from '../utils/format';
 import type { Journey } from '../types';
 
-const EARTH_CIRCUMFERENCE_NM = 21639;
-/** Below this the equator comparison is noise, so it is hidden entirely. */
-const MIN_GLOBE_PCT = 1;
-
 interface Props {
   journey: Journey;
 }
@@ -36,27 +32,9 @@ export function TripAtlas({ journey }: Props) {
     },
   ];
 
-  const pct = journey.aroundTheWorldPct;
-
   return (
     <>
       <StatsGrid stats={stats} />
-
-      {pct >= MIN_GLOBE_PCT && (
-        <div className="atlas-globe">
-          <div className="atlas-globe-head">
-            <span className="section-title" style={{ margin: 0 }}>Around the World</span>
-            <span className="atlas-globe-pct">{pct}%</span>
-          </div>
-          <div className="atlas-bar">
-            <div className="atlas-bar-fill" style={{ width: `${Math.min(pct, 100)}%` }} />
-          </div>
-          <div className="atlas-globe-foot">
-            {formatDistance(journey.totalDistanceNm)} nm of the {EARTH_CIRCUMFERENCE_NM.toLocaleString()} nm equator
-            {pct < 100 && ` · ${formatDistance(EARTH_CIRCUMFERENCE_NM - journey.totalDistanceNm)} nm to go`}
-          </div>
-        </div>
-      )}
 
       {journey.countries.length > 0 && (
         <div className="atlas-section">

@@ -377,25 +377,6 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 }
 .atlas-section { margin-bottom: 1.5rem; }
 
-/* Distance measured against a lap of the equator */
-.atlas-globe {
-  background: #1a1d27;
-  border: 1px solid #2d3148;
-  border-radius: 10px;
-  padding: 1rem 1.15rem;
-  margin-bottom: 1.5rem;
-}
-.atlas-globe-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.6rem; }
-.atlas-globe-pct { font-size: 1.35rem; font-weight: 700; color: #e2e8f0; font-variant-numeric: tabular-nums; }
-.atlas-bar { height: 10px; background: #0f1117; border-radius: 999px; overflow: hidden; border: 1px solid #2d3148; }
-.atlas-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  /* Mirrors the map's leg gradient */
-  background: linear-gradient(90deg, hsl(210 85% 60%), hsl(150 85% 55%), hsl(20 85% 60%));
-}
-.atlas-globe-foot { margin-top: 0.5rem; font-size: 0.78rem; color: #64748b; }
-
 .atlas-countries { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .atlas-country {
   display: inline-flex; align-items: center; gap: 0.45rem;
