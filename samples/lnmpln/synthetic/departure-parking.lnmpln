@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>4500</CruisingAlt>
+      <CruisingAltF>4500.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <AircraftPerformance>
+      <FilePath>C:/Users/pilot/Documents/Little Navmap/BE51.lnmperf</FilePath>
+      <Type>BE51</Type>
+      <Name>Beech Baron</Name>
+    </AircraftPerformance>
+    <Departure>
+      <Pos Lon="-119.840000" Lat="34.425000" Alt="14.00"/>
+      <Start>PARKING 1</Start>
+      <Type>Parking</Type>
+      <Heading>73.50</Heading>
+    </Departure>
+    <Waypoints>
+      <Waypoint>
+        <Ident>KSBA</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-119.841507" Lat="34.426201" Alt="14.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952" Alt="257.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>

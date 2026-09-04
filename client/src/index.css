@@ -368,6 +368,47 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   vertical-align: middle;
 }
 
+/* ── Planned legs (ghost rows) ── */
+.planned-legs-import-section { margin-bottom: 1.5rem; }
+.import-notice {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  color: #93c5fd;
+  background: #111d33;
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 0.6rem 0.85rem;
+}
+.import-results { list-style: none; margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.import-result-error { font-size: 0.8rem; color: #f87171; }
+.import-result-warning { font-size: 0.8rem; color: #f59e0b; }
+
+.tr-ghost { opacity: 0.65; }
+.tr-ghost td { font-style: italic; }
+.leg-color-swatch--ghost {
+  background: transparent;
+  border: 1px dashed #64748b;
+  box-sizing: border-box;
+}
+.badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+}
+.badge-planned { color: #94a3b8; background: #1e2130; border: 1px solid #2d3148; }
+.badge-snippet { color: #f59e0b; background: #2d2410; border: 1px solid #4a3a12; }
+.td-route-snippet { color: #94a3b8 !important; }
+.td-planned-meta { font-size: 0.72rem; color: #64748b; margin-top: 0.15rem; }
+.btn-icon { padding: 0.25rem 0.45rem; font-size: 0.75rem; line-height: 1; margin-right: 0.3rem; }
+.btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+
 /* ── Atlas ── */
 #atlas-map {
   height: 520px;

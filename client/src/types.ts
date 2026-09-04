@@ -27,6 +27,11 @@ export interface Flight {
   notes: string | null;
   trip_id: number | null;
   flight_plan_name: string | null;
+  /** The planned leg this flight is attached to, or null. design.md §12. */
+  planned_leg_id: number | null;
+  planned_leg_link_source: 'auto' | 'manual' | null;
+  /** The trip_id held immediately before an auto/manual link; restored on unlink. */
+  planned_leg_prev_trip_id: number | null;
 }
 
 export interface Trip {
@@ -38,6 +43,197 @@ export interface Trip {
   total_distance_nm: number | null;
   max_altitude_ft: number | null;
   flights: Flight[];
+  /** 0 | 1. SQLite has no boolean. At most one trip has this set to 1. */
+  is_active: number;
+  planned_leg_count: number;
+  /** Populated by GET /api/trips/:id; always [] from GET /api/trips. */
+  planned_legs: PlannedLegWithChildren[];
+}
+
+// ── Planned legs ──────────────────────────────────────────────────────────────
+//
+// Mirrors src/types.ts and src/lnmpln.ts field-for-field, including
+// nullability. This file is hand-maintained and nothing checks it against the
+// server automatically beyond tools/check-type-mirror.js — keep it in sync by
+// hand. design.md §17.
+
+/**
+ * 'linked' is deliberately absent: a leg is linked when a flight row points at
+ * it, so the two facts cannot drift apart. 'flown' and 'diverted' are set by
+ * the system only.
+ */
+export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
+
+export interface PlannedLeg {
+  id: number;
+  trip_id: number;
+  /** 1-based within the trip; gappy after a delete. Read with ORDER BY seq, id. */
+  seq: number;
+  status: PlannedLegStatus;
+
+  /** First waypoint of the plan. Not necessarily an airport (plan snippets exist). */
+  departure_ident: string;
+  departure_name: string | null;
+  departure_lat: number;
+  departure_lon: number;
+  /** 0 | 1. When 0, departure_ident is not an airport code. */
+  departure_is_airport: number;
+  /** <Departure> in the file: commonly absent (NULL) — see design.md §5.4b. */
+  departure_start: string | null;
+  departure_start_type: string | null;
+  departure_pos_lat: number | null;
+  departure_pos_lon: number | null;
+
+  /** Last waypoint of the plan, same airport caveat as the departure. */
+  destination_ident: string;
+  destination_name: string | null;
+  destination_lat: number;
+  destination_lon: number;
+  destination_is_airport: number;
+
+  /** 0 | 1 */
+  is_snippet: number;
+  cruise_alt_ft: number | null;
+  flightplan_type: string | null;
+  aircraft_type: string | null;
+
+  sid_name: string | null;
+  /** The only source of a departure runway; see design.md §5.4f. */
+  sid_runway: string | null;
+  sid_transition: string | null;
+  /** 'CUSTOMDEPART' for the manual's custom-departure form; NULL otherwise. */
+  sid_type: string | null;
+  sid_custom_distance_nm: number | null;
+
+  star_name: string | null;
+  star_runway: string | null;
+  star_transition: string | null;
+
+  /** Opaque label, not a fix reference when approach_type is 'CUSTOM'. */
+  approach_name: string | null;
+  approach_runway: string | null;
+  approach_transition: string | null;
+  approach_type: string | null;
+  approach_arinc: string | null;
+  approach_suffix: string | null;
+  approach_transition_type: string | null;
+  approach_custom_distance_nm: number | null;
+  approach_custom_altitude_ft: number | null;
+  approach_custom_offset_deg: number | null;
+
+  waypoint_count: number;
+  alternate_count: number;
+  /** Great-circle sum over the en-route waypoint chain. Always render with an
+   *  "approx." qualifier — procedure legs are never in the file. design.md §6. */
+  approx_distance_nm: number;
+  /** Written at landing on both the 'flown' and the 'diverted' path. */
+  arrival_deviation_nm: number | null;
+
+  remarks: string | null;
+  /** CreationDate normalised to a full ISO instant. */
+  plan_created_at: string | null;
+  source_filename: string;
+  source_sha256: string;
+  source_program: string | null;
+  imported_at: string;
+}
+
+export interface PlannedWaypoint {
+  id: number;
+  planned_leg_id: number;
+  /** 1-based document order across every <Waypoints> block. Never keyed by ident. */
+  seq: number;
+  ident: string;
+  name: string | null;
+  region: string | null;
+  airway: string | null;
+  track: string | null;
+  type: string;
+  comment: string | null;
+  lat: number;
+  lon: number;
+  /**
+   * Little Navmap's COMPUTED profile altitude, not a planned constraint. Never
+   * render it as a planned or crossing altitude — cruise_alt_ft is the leg's
+   * planned altitude. See design.md §6.1.
+   */
+  alt_ft: number | null;
+}
+
+export interface PlannedAlternate {
+  id: number;
+  planned_leg_id: number;
+  seq: number;
+  ident: string;
+  name: string | null;
+  type: string | null;
+  /** Nullable: Alternate/Pos is optional in the format. */
+  lat: number | null;
+  lon: number | null;
+  alt_ft: number | null;
+}
+
+/**
+ * What every planned-leg endpoint returns. linked_flight_id is derived by a
+ * subquery, not stored.
+ */
+export interface PlannedLegWithChildren extends PlannedLeg {
+  linked_flight_id: number | null;
+  waypoints: PlannedWaypoint[];
+  alternates: PlannedAlternate[];
+}
+
+/** src/lnmpln.ts LnmplnWarning, mirrored (camelCase: computed, not persisted). */
+export interface LnmplnWarning {
+  code: string;
+  /** One line, naming the element and the value. Surfaced per file on import. */
+  message: string;
+}
+
+/**
+ * Why a batch was or was not chain-sorted. src/lnmpln.ts BatchChainReason,
+ * mirrored. design.md §9.2.1.
+ */
+export type BatchChainReason =
+  | 'CHAINED'
+  | 'SINGLE_LEG'
+  | 'SNIPPET_IN_BATCH'
+  | 'NO_UNIQUE_HEAD'
+  | 'AMBIGUOUS_SUCCESSOR'
+  | 'BROKEN_CHAIN';
+
+/** Per-file outcome of a batch import. Partial success is the frozen policy. */
+export interface PlannedLegImportResult {
+  filename: string;
+  status: 'imported' | 'duplicate' | 'rejected';
+  /** Set for 'imported' (the new leg) and 'duplicate' (the existing leg). */
+  planned_leg_id?: number;
+  /** Set for 'rejected' and 'duplicate': a one-line reason, shown to the user. */
+  error?: string;
+  /** Set for 'imported' when the parser tolerated something worth reporting. */
+  warnings?: LnmplnWarning[];
+}
+
+/** 201 when at least one file imported; 400 when none did (body still carries results). */
+export interface PlannedLegImportResponse {
+  /** Final seq order — route order after chain-sorting, generally NOT upload order. */
+  imported: PlannedLegWithChildren[];
+  /** One entry per uploaded file, in UPLOAD order, so an error maps to the file picked. */
+  results: PlannedLegImportResult[];
+  /**
+   * Which ordering was used for `imported`, and why. design.md §9.2.
+   *
+   * Absent when nothing was imported: a chain verdict over zero legs says
+   * nothing, so the server omits it rather than reporting a spurious one
+   * (phase-1 review finding F-3). Branch on `batch?.ordering`, never assume it.
+   */
+  batch?: { ordering: 'chain' | 'upload'; reason: BatchChainReason };
+}
+
+/** GET and PUT /api/active-trip (future phase; declared here per design.md §17). */
+export interface ActiveTrip {
+  tripId: number | null;
+  name: string | null;
 }
 
 export interface StatusFrame {

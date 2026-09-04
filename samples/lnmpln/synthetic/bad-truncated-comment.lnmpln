@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>5500</CruisingAlt>
+      <CruisingAltF>5500.00000000</CruisingAltF>
+    </Header>
+    <!-- the export was interrupted here and this comment is never closed
+    <Waypoints>
+      <Waypoint>
+        <Ident>KSBA</Ident>

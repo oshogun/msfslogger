@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>5500</CruisingAlt>
+      <CruisingAltF>5500.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <Description>Coastal scenic run, the manual's spelling of the remark tag</Description>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <Waypoints>
+      <Waypoint>
+        <Name>Santa Barbara Muni</Name>
+        <Ident>KSBA</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-119.841507" Lat="34.426201" Alt="14.00"/>
+        <Description>Depart runway 07 - note this element follows Pos, deviating from XSD order</Description>
+      </Waypoint>
+      <Waypoint>
+        <Name>Monterey Rgnl</Name>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952" Alt="257.00"/>
+        <Description>Expect runway 10R</Description>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>

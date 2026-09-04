@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'path';
-import type { Flight, FlightPoint, FlightWithPoints, FlightEditPayload, Trip, TripWithFlights, TripEditPayload } from './types';
+import type {
+  Flight, FlightPoint, FlightWithPoints, FlightEditPayload, Trip, TripWithFlights, TripEditPayload,
+  PlannedLeg, PlannedWaypoint, PlannedAlternate, PlannedLegWithChildren,
+} from './types';
 import { copyFlightPlanFile, deleteFlightPlanFile } from './flightPlans';
 
 const DB_PATH = path.join(process.cwd(), 'flights.db');
@@ -80,6 +83,154 @@ export function initDb(): Database.Database {
       notes      TEXT,
       created_at TEXT NOT NULL
     );
+
+    -- Planned legs: a route imported from a Little Navmap .lnmpln file and
+    -- attached to a trip, before it is flown. Must be created before the
+    -- ALTER TABLE below, which adds flights.planned_leg_id REFERENCES here.
+    -- design.md §2, §3.
+    CREATE TABLE IF NOT EXISTS planned_legs (
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_id                INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+      -- 1-based within a trip, dense on import, gappy after a delete. Every read
+      -- orders by (seq, id) so the order stays total even if two rows shared a
+      -- seq. Assigned in CHAIN order (destination ident -> next departure ident)
+      -- by the import handler, not multipart upload order. design.md §9.2.
+      seq                    INTEGER NOT NULL,
+      -- 'linked' is deliberately absent: a leg is linked when a flight row
+      -- points at it, so the two facts cannot drift apart.
+      status                 TEXT    NOT NULL DEFAULT 'planned'
+                               CHECK (status IN ('planned', 'flown', 'diverted', 'skipped')),
+
+      -- First waypoint of the plan. Not necessarily an airport: Little Navmap
+      -- allows plan snippets, so departure_is_airport gates any ICAO claim.
+      departure_ident        TEXT    NOT NULL,
+      departure_name         TEXT,
+      departure_lat          REAL    NOT NULL,
+      departure_lon          REAL    NOT NULL,
+      departure_is_airport   INTEGER NOT NULL DEFAULT 0,
+      -- <Departure> in the file: the parking spot / runway the plan starts at.
+      -- More precise than departure_lat/lon but optional (commonly absent),
+      -- so the matcher uses the waypoint position above and these are
+      -- display-only.
+      departure_start        TEXT,
+      departure_start_type   TEXT,
+      departure_pos_lat      REAL,
+      departure_pos_lon      REAL,
+
+      -- Last waypoint of the plan, same caveat as the departure.
+      destination_ident      TEXT    NOT NULL,
+      destination_name       TEXT,
+      destination_lat        REAL    NOT NULL,
+      destination_lon        REAL    NOT NULL,
+      destination_is_airport INTEGER NOT NULL DEFAULT 0,
+
+      is_snippet             INTEGER NOT NULL DEFAULT 0,
+      -- CruisingAltF preferred over CruisingAlt; null when the file carries neither.
+      cruise_alt_ft          REAL,
+      flightplan_type        TEXT,
+      aircraft_type          TEXT,
+
+      -- Procedures are stored flat because the file never contains their
+      -- waypoints, so there would be nothing for a procedure-leg table to
+      -- hold. Eighteen columns: a real custom approach is characterised
+      -- entirely by Type plus the Custom* values. design.md §2.2.1.
+      --
+      -- sid_runway is the ONLY place a departure runway appears: no real file
+      -- has ever carried a <Departure> element. design.md §5.4b, §5.4f.
+      sid_name               TEXT,
+      sid_runway             TEXT,
+      sid_transition         TEXT,
+      -- 'CUSTOMDEPART' for the manual's custom-departure form, which the XSD
+      -- does not declare. NULL for an ordinary published SID.
+      sid_type               TEXT,
+      sid_custom_distance_nm REAL,
+
+      -- Three columns only: no observed file and no documentation gives a STAR
+      -- a type or a custom form. An unrecognised child of <STAR> surfaces as an
+      -- UNKNOWN_ELEMENT parser warning rather than vanishing. design.md §5.4e.
+      star_name              TEXT,
+      star_runway            TEXT,
+      star_transition        TEXT,
+
+      -- approach_name is an opaque label, never a fix reference: with
+      -- Type=CUSTOM Little Navmap synthesizes it as ICAO+runway ("KLAX24R").
+      -- design.md §5.4g.
+      approach_name          TEXT,
+      approach_runway        TEXT,
+      approach_transition    TEXT,
+      approach_type          TEXT,     -- e.g. 'CUSTOM'; says whether the name means anything
+      approach_arinc         TEXT,
+      approach_suffix        TEXT,
+      approach_transition_type TEXT,
+      -- The three Custom* values. CustomOffsetAngle is written by real Little
+      -- Navmap and appears NOWHERE in the official XSD. design.md §5.4e.
+      approach_custom_distance_nm REAL,
+      approach_custom_altitude_ft REAL,
+      approach_custom_offset_deg  REAL,
+
+      waypoint_count         INTEGER NOT NULL DEFAULT 0,
+      alternate_count        INTEGER NOT NULL DEFAULT 0,
+      -- Great-circle sum over the en-route waypoint chain only. Named "approx"
+      -- because SID/STAR/approach legs are absent from the file, so this is
+      -- always short of the real routing — never render without an "approx."
+      -- qualifier. design.md §6.
+      approx_distance_nm     REAL    NOT NULL DEFAULT 0,
+      -- Written at landing on both the 'flown' and the 'diverted' path.
+      arrival_deviation_nm   REAL,
+
+      remarks                TEXT,
+      -- CreationDate normalised to a full ISO instant (the file writes a
+      -- two-digit UTC offset, e.g. +02, which Date parses inconsistently).
+      plan_created_at        TEXT,
+
+      -- Provenance. The uploaded bytes are not kept; these three columns plus
+      -- the import log are what makes a mis-parse reproducible from the
+      -- user's own file.
+      source_filename        TEXT    NOT NULL,
+      source_sha256          TEXT    NOT NULL,
+      source_program         TEXT,
+      imported_at            TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS planned_waypoints (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      planned_leg_id    INTEGER NOT NULL REFERENCES planned_legs(id) ON DELETE CASCADE,
+      -- 1-based document order across every <Waypoints> block in the file
+      seq               INTEGER NOT NULL,
+      ident             TEXT    NOT NULL,
+      name              TEXT,
+      region            TEXT,
+      airway            TEXT,
+      track             TEXT,
+      -- AIRPORT | UNKNOWN | WAYPOINT | VOR | NDB | USER, or an unrecognised
+      -- value passed through verbatim. Only AIRPORT is behaviourally significant.
+      type              TEXT    NOT NULL,
+      comment           TEXT,
+      lat               REAL    NOT NULL,
+      lon               REAL    NOT NULL,
+      -- Pos/@Alt is optional in the format, and where present it is Little
+      -- Navmap's COMPUTED profile altitude, not a planned constraint. Store
+      -- it, never present it as planned. design.md §6.1.
+      alt_ft            REAL
+    );
+
+    CREATE TABLE IF NOT EXISTS planned_alternates (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      planned_leg_id    INTEGER NOT NULL REFERENCES planned_legs(id) ON DELETE CASCADE,
+      seq               INTEGER NOT NULL,
+      ident             TEXT    NOT NULL,
+      name              TEXT,
+      type              TEXT,
+      -- Nullable, unlike planned_waypoints: <Alternate><Pos> is optional in the XSD
+      lat               REAL,
+      lon               REAL,
+      alt_ft            REAL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_planned_legs_trip       ON planned_legs(trip_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_planned_legs_source     ON planned_legs(trip_id, source_sha256);
+    CREATE INDEX IF NOT EXISTS idx_planned_waypoints_leg   ON planned_waypoints(planned_leg_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_planned_alternates_leg  ON planned_alternates(planned_leg_id, seq);
   `);
 
   // Migrate existing DBs that predate the notes and trip_id columns
@@ -106,6 +257,33 @@ export function initDb(): Database.Database {
   if (!cols.includes('flight_plan_name')) {
     db.exec('ALTER TABLE flights ADD COLUMN flight_plan_name TEXT');
   }
+
+  // Planned-leg link columns on flights. ADD COLUMN ... REFERENCES requires a
+  // NULL default, which is why planned_leg_id has none — design.md §3.
+  if (!cols.includes('planned_leg_id')) {
+    db.exec('ALTER TABLE flights ADD COLUMN planned_leg_id INTEGER REFERENCES planned_legs(id) ON DELETE SET NULL');
+  }
+  if (!cols.includes('planned_leg_link_source')) {
+    db.exec("ALTER TABLE flights ADD COLUMN planned_leg_link_source TEXT"); // 'auto' | 'manual' | NULL
+  }
+  if (!cols.includes('planned_leg_prev_trip_id')) {
+    db.exec('ALTER TABLE flights ADD COLUMN planned_leg_prev_trip_id INTEGER'); // trip_id held immediately before the link
+  }
+
+  const tripCols = (db.prepare('PRAGMA table_info(trips)').all() as { name: string }[]).map(c => c.name);
+  if (!tripCols.includes('is_active')) {
+    db.exec('ALTER TABLE trips ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0');
+  }
+
+  // Unconditional and idempotent: an index can be missing even when its column
+  // exists. Both are partial UNIQUE indexes and are load-bearing — they turn a
+  // convention into a database guarantee. A SQLITE_CONSTRAINT from either means
+  // the caller's statement order is wrong; fix the order, never the index.
+  // design.md §2.5, §3, §20.7.
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flights_planned_leg ON flights(planned_leg_id) WHERE planned_leg_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_trips_active        ON trips(is_active)        WHERE is_active = 1;
+  `);
 
   return db;
 }
@@ -241,34 +419,39 @@ export function createTrip(name: string, notes: string | null): number {
 }
 
 export function getTrips(): TripWithFlights[] {
-  type AggRow = Trip & { flight_count: number; total_distance_nm: number | null; total_duration_sec: number | null; max_altitude_ft: number | null };
+  type AggRow = Trip & { flight_count: number; total_distance_nm: number | null; total_duration_sec: number | null; max_altitude_ft: number | null; planned_leg_count: number };
   const rows = db.prepare(`
     SELECT t.*,
       COUNT(f.id)            AS flight_count,
       SUM(f.distance_nm)     AS total_distance_nm,
       SUM(f.duration_sec)    AS total_duration_sec,
-      MAX(f.max_altitude_ft) AS max_altitude_ft
+      MAX(f.max_altitude_ft) AS max_altitude_ft,
+      (SELECT COUNT(*) FROM planned_legs pl WHERE pl.trip_id = t.id) AS planned_leg_count
     FROM trips t
     LEFT JOIN flights f ON f.trip_id = t.id
     GROUP BY t.id
     ORDER BY t.created_at DESC
   `).all() as AggRow[];
 
+  // planned_legs stays [] here, mirroring the existing flights[].points = []:
+  // this endpoint is deliberately light. GET /api/trips/:id populates it fully.
   const fetchFlights = db.prepare('SELECT * FROM flights WHERE trip_id = ? ORDER BY start_time ASC');
   return rows.map(row => ({
     ...row,
     flights: (fetchFlights.all(row.id) as Flight[]).map(f => ({ ...f, points: [] })),
+    planned_legs: [],
   }));
 }
 
 export function getTripById(id: number): TripWithFlights | null {
-  type AggRow = Trip & { flight_count: number; total_distance_nm: number | null; total_duration_sec: number | null; max_altitude_ft: number | null };
+  type AggRow = Trip & { flight_count: number; total_distance_nm: number | null; total_duration_sec: number | null; max_altitude_ft: number | null; planned_leg_count: number };
   const row = db.prepare(`
     SELECT t.*,
       COUNT(f.id)            AS flight_count,
       SUM(f.distance_nm)     AS total_distance_nm,
       SUM(f.duration_sec)    AS total_duration_sec,
-      MAX(f.max_altitude_ft) AS max_altitude_ft
+      MAX(f.max_altitude_ft) AS max_altitude_ft,
+      (SELECT COUNT(*) FROM planned_legs pl WHERE pl.trip_id = t.id) AS planned_leg_count
     FROM trips t
     LEFT JOIN flights f ON f.trip_id = t.id
     WHERE t.id = ?
@@ -283,7 +466,12 @@ export function getTripById(id: number): TripWithFlights | null {
     points: fetchPoints.all(f.id) as FlightPoint[],
   }));
 
-  return { ...row, flights };
+  // Fully populated, unlike getTrips(): the trip page and the trip map both
+  // need the whole chain on first paint, and embedding avoids a race with
+  // MapReadySignal on the print path. design.md §8.
+  const plannedLegs = getPlannedLegsForTrip(id);
+
+  return { ...row, flights, planned_legs: plannedLegs };
 }
 
 export function updateTrip(id: number, payload: TripEditPayload): boolean {
@@ -441,5 +629,273 @@ export function combineFlights(idA: number, idB: number): number | null {
     db.prepare('DELETE FROM flights WHERE id = ?').run(second.id);
 
     return newId;
+  })();
+}
+
+// ── Planned legs ──────────────────────────────────────────────────────────────
+//
+// CRUD for the planned-leg feature (design.md). Deliberately does not import
+// anything from src/lnmpln.ts — the parser's ParsedFlightPlan shape lives
+// there and is turned into CreatePlannedLegInput by src/server.ts, the only
+// module that sees both (design.md §4). The shapes below are structurally
+// compatible with ParsedFlightPlan so no conversion boilerplate is needed at
+// the call site, but db.ts never imports the parser's types.
+//
+// Functions here never read or write flights.flight_plan_name or the
+// flight_plans/ directory — that is the unrelated PDF attachment feature.
+
+interface CreatePlannedLegEndpoint {
+  ident: string;
+  name: string | null;
+  lat: number;
+  lon: number;
+  isAirport: boolean;
+}
+
+interface CreatePlannedLegDepartureStart {
+  pos: { lat: number; lon: number } | null;
+  start: string | null;
+  startType: string | null;
+}
+
+interface CreatePlannedLegProcedures {
+  sidName: string | null;
+  sidRunway: string | null;
+  sidTransition: string | null;
+  sidType: string | null;
+  sidCustomDistanceNm: number | null;
+  starName: string | null;
+  starRunway: string | null;
+  starTransition: string | null;
+  approachName: string | null;
+  approachRunway: string | null;
+  approachTransition: string | null;
+  approachType: string | null;
+  approachArinc: string | null;
+  approachSuffix: string | null;
+  approachTransitionType: string | null;
+  approachCustomDistanceNm: number | null;
+  approachCustomAltitudeFt: number | null;
+  approachCustomOffsetDeg: number | null;
+}
+
+interface CreatePlannedLegWaypoint {
+  seq: number;
+  ident: string;
+  name: string | null;
+  region: string | null;
+  airway: string | null;
+  track: string | null;
+  type: string;
+  comment: string | null;
+  lat: number;
+  lon: number;
+  altFt: number | null;
+}
+
+interface CreatePlannedLegAlternate {
+  seq: number;
+  ident: string;
+  name: string | null;
+  type: string | null;
+  lat: number | null;
+  lon: number | null;
+  altFt: number | null;
+}
+
+/** Structurally compatible with ParsedFlightPlan (src/lnmpln.ts), not imported. */
+export interface CreatePlannedLegPlan {
+  departure: CreatePlannedLegEndpoint;
+  destination: CreatePlannedLegEndpoint;
+  isSnippet: boolean;
+  cruiseAltFt: number | null;
+  flightplanType: string | null;
+  aircraftType: string | null;
+  remarks: string | null;
+  createdAt: string | null;
+  sourceProgram: string | null;
+  departureStart: CreatePlannedLegDepartureStart;
+  procedures: CreatePlannedLegProcedures;
+  waypoints: CreatePlannedLegWaypoint[];
+  alternates: CreatePlannedLegAlternate[];
+  /** Great-circle sum over the waypoint chain, computed by the parser. Stored as-is. */
+  approxDistanceNm: number;
+}
+
+/** Everything needed to insert one leg with its children, in one transaction. */
+export interface CreatePlannedLegInput {
+  tripId: number;
+  plan: CreatePlannedLegPlan;
+  sourceFilename: string;
+  sourceSha256: string;
+}
+
+function attachPlannedLegChildren(row: PlannedLeg & { linked_flight_id: number | null }): PlannedLegWithChildren {
+  const waypoints = db.prepare(
+    'SELECT * FROM planned_waypoints WHERE planned_leg_id = ? ORDER BY seq ASC'
+  ).all(row.id) as PlannedWaypoint[];
+  const alternates = db.prepare(
+    'SELECT * FROM planned_alternates WHERE planned_leg_id = ? ORDER BY seq ASC'
+  ).all(row.id) as PlannedAlternate[];
+  return { ...row, waypoints, alternates };
+}
+
+/**
+ * Inserts leg + waypoints + alternates atomically: a failure partway (e.g. a
+ * NOT NULL violation on a waypoint) rolls back the whole leg, so no orphan
+ * planned_waypoints/planned_alternates rows survive. seq = MAX(seq)+1 for the
+ * trip, computed inside the transaction, so the caller controls route order
+ * purely by the order it calls this (chainOrderForBatch's order, not upload
+ * order). design.md §9.2, §9.2.3.
+ */
+export function createPlannedLeg(input: CreatePlannedLegInput): number {
+  return db.transaction((): number => {
+    const { tripId, plan, sourceFilename, sourceSha256 } = input;
+
+    const { next_seq: seq } = db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM planned_legs WHERE trip_id = ?'
+    ).get(tripId) as { next_seq: number };
+
+    const legId = db.prepare(`
+      INSERT INTO planned_legs (
+        trip_id, seq, status,
+        departure_ident, departure_name, departure_lat, departure_lon, departure_is_airport,
+        departure_start, departure_start_type, departure_pos_lat, departure_pos_lon,
+        destination_ident, destination_name, destination_lat, destination_lon, destination_is_airport,
+        is_snippet, cruise_alt_ft, flightplan_type, aircraft_type,
+        sid_name, sid_runway, sid_transition, sid_type, sid_custom_distance_nm,
+        star_name, star_runway, star_transition,
+        approach_name, approach_runway, approach_transition, approach_type, approach_arinc, approach_suffix,
+        approach_transition_type, approach_custom_distance_nm, approach_custom_altitude_ft, approach_custom_offset_deg,
+        waypoint_count, alternate_count, approx_distance_nm,
+        remarks, plan_created_at,
+        source_filename, source_sha256, source_program, imported_at
+      ) VALUES (
+        ?, ?, 'planned',
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?,
+        ?, ?, ?, ?
+      )
+    `).run(
+      tripId, seq,
+      plan.departure.ident, plan.departure.name, plan.departure.lat, plan.departure.lon, plan.departure.isAirport ? 1 : 0,
+      plan.departureStart.start, plan.departureStart.startType,
+      plan.departureStart.pos?.lat ?? null, plan.departureStart.pos?.lon ?? null,
+      plan.destination.ident, plan.destination.name, plan.destination.lat, plan.destination.lon, plan.destination.isAirport ? 1 : 0,
+      plan.isSnippet ? 1 : 0, plan.cruiseAltFt, plan.flightplanType, plan.aircraftType,
+      plan.procedures.sidName, plan.procedures.sidRunway, plan.procedures.sidTransition,
+      plan.procedures.sidType, plan.procedures.sidCustomDistanceNm,
+      plan.procedures.starName, plan.procedures.starRunway, plan.procedures.starTransition,
+      plan.procedures.approachName, plan.procedures.approachRunway, plan.procedures.approachTransition,
+      plan.procedures.approachType, plan.procedures.approachArinc, plan.procedures.approachSuffix,
+      plan.procedures.approachTransitionType, plan.procedures.approachCustomDistanceNm,
+      plan.procedures.approachCustomAltitudeFt, plan.procedures.approachCustomOffsetDeg,
+      plan.waypoints.length, plan.alternates.length, plan.approxDistanceNm,
+      plan.remarks, plan.createdAt,
+      sourceFilename, sourceSha256, plan.sourceProgram, new Date().toISOString()
+    ).lastInsertRowid as number;
+
+    const insertWaypoint = db.prepare(`
+      INSERT INTO planned_waypoints (planned_leg_id, seq, ident, name, region, airway, track, type, comment, lat, lon, alt_ft)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const wp of plan.waypoints) {
+      insertWaypoint.run(legId, wp.seq, wp.ident, wp.name, wp.region, wp.airway, wp.track, wp.type, wp.comment, wp.lat, wp.lon, wp.altFt);
+    }
+
+    const insertAlternate = db.prepare(`
+      INSERT INTO planned_alternates (planned_leg_id, seq, ident, name, type, lat, lon, alt_ft)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const alt of plan.alternates) {
+      insertAlternate.run(legId, alt.seq, alt.ident, alt.name, alt.type, alt.lat, alt.lon, alt.altFt);
+    }
+
+    return legId;
+  })();
+}
+
+/** Legs of a trip, ORDER BY seq ASC, id ASC, children attached. */
+export function getPlannedLegsForTrip(tripId: number): PlannedLegWithChildren[] {
+  const rows = db.prepare(`
+    SELECT l.*,
+           (SELECT f.id FROM flights f WHERE f.planned_leg_id = l.id) AS linked_flight_id
+      FROM planned_legs l
+     WHERE l.trip_id = ?
+     ORDER BY l.seq ASC, l.id ASC
+  `).all(tripId) as (PlannedLeg & { linked_flight_id: number | null })[];
+  return rows.map(attachPlannedLegChildren);
+}
+
+export function getPlannedLegById(legId: number): PlannedLegWithChildren | null {
+  const row = db.prepare(`
+    SELECT l.*,
+           (SELECT f.id FROM flights f WHERE f.planned_leg_id = l.id) AS linked_flight_id
+      FROM planned_legs l
+     WHERE l.id = ?
+  `).get(legId) as (PlannedLeg & { linked_flight_id: number | null }) | undefined;
+  if (!row) return null;
+  return attachPlannedLegChildren(row);
+}
+
+/** Returns the existing leg when this trip already holds a leg with these bytes. */
+export function findPlannedLegBySource(tripId: number, sha256: string): PlannedLeg | null {
+  const row = db.prepare(
+    'SELECT * FROM planned_legs WHERE trip_id = ? AND source_sha256 = ? LIMIT 1'
+  ).get(tripId, sha256) as PlannedLeg | undefined;
+  return row ?? null;
+}
+
+/**
+ * Deletes a leg. Children go by ON DELETE CASCADE and any linked flight is
+ * unlinked by ON DELETE SET NULL on flights.planned_leg_id — but that FK
+ * action does not know about the other two bookkeeping columns, so they are
+ * cleared and the flight's trip_id is restored from
+ * planned_leg_prev_trip_id in the same transaction. Deleting a leg must never
+ * leave a flight stranded in a trip it was moved into by a link that no
+ * longer exists. design.md §16.
+ */
+export function deletePlannedLeg(legId: number): boolean {
+  return db.transaction((): boolean => {
+    const linkedFlight = db.prepare(
+      'SELECT id, planned_leg_prev_trip_id FROM flights WHERE planned_leg_id = ?'
+    ).get(legId) as { id: number; planned_leg_prev_trip_id: number | null } | undefined;
+
+    const result = db.prepare('DELETE FROM planned_legs WHERE id = ?').run(legId);
+    if (result.changes === 0) return false;
+
+    if (linkedFlight) {
+      db.prepare(`
+        UPDATE flights
+           SET trip_id = ?,
+               planned_leg_link_source = NULL,
+               planned_leg_prev_trip_id = NULL
+         WHERE id = ?
+      `).run(linkedFlight.planned_leg_prev_trip_id, linkedFlight.id);
+    }
+
+    return true;
+  })();
+}
+
+/**
+ * Full permutation, renumbered 1..N in one transaction. Caller has already
+ * checked legIds is exactly this trip's set of leg ids (design.md §7.2).
+ */
+export function reorderPlannedLegs(tripId: number, legIds: number[]): boolean {
+  return db.transaction((): boolean => {
+    const update = db.prepare('UPDATE planned_legs SET seq = ? WHERE id = ? AND trip_id = ?');
+    legIds.forEach((legId, index) => {
+      update.run(index + 1, legId, tripId);
+    });
+    return true;
   })();
 }

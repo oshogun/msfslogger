@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>IFR</FlightplanType>
+      <CruisingAlt>9000</CruisingAlt>
+      <CruisingAltF>9000.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <FileVersion>1.2</FileVersion>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <SimData>MSFS</SimData>
+    <NavData Cycle="1801">NAVIGRAPH</NavData>
+    <Alternates>
+      <Alternate>
+        <Name>Monterey Rgnl</Name>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952" Alt="257.00"/>
+      </Alternate>
+    </Alternates>
+    <Alternates>
+      <Alternate>
+        <Name>Charles M Schulz - Sonoma Coun</Name>
+        <Ident>KSTS</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-122.812767" Lat="38.508984" Alt="128.00"/>
+      </Alternate>
+      <Alternate>
+        <Name>Santa Barbara Muni</Name>
+        <Ident>KSBA</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-119.841507" Lat="34.426201" Alt="14.00"/>
+      </Alternate>
+    </Alternates>
+    <Waypoints>
+      <Waypoint>
+        <Name>San Francisco Intl</Name>
+        <Ident>KSFO</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-122.375519" Lat="37.618023" Alt="13.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>EBAYE</Ident>
+        <Region>K2</Region>
+        <Type>WAYPOINT</Type>
+        <Pos Lon="-120.260559" Lat="35.868721" Alt="9000.00"/>
+      </Waypoint>
+    </Waypoints>
+    <Waypoints>
+      <Waypoint>
+        <Ident>SUDDO</Ident>
+        <Region>K2</Region>
+        <Type>WAYPOINT</Type>
+        <Pos Lon="-120.128807" Lat="34.383888" Alt="9000.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Name>Los Angeles Intl</Name>
+        <Ident>KLAX</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-118.409332" Lat="33.942474" Alt="111.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>
