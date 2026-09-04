@@ -1,0 +1,896 @@
+{
+  "run_id": "2026-09-04-lnmpln-trip-planner",
+  "goal": "Import Little Navmap .lnmpln flight plans as the expected route of a trip, so tracked flights are pre-logged as legs of that trip with a known destination and predicted route.",
+  "frozen_decisions": [
+    "XML parsing uses fast-xml-parser as a new server runtime dependency. No hand-rolled XML parse.",
+    "Leg auto-matching is scoped by an explicit 'active trip' flag; only unflown planned legs of the one active trip are candidates. Manual link/unlink exists as an escape hatch and ships BEFORE auto-matching.",
+    "No test framework is introduced. Verification is by running the app, by curl against endpoints, by sqlite3 against the database, and by two ts-node CLI inspectors written as part of the work.",
+    "Imported batches are ordered by chaining each leg destination ident to the next leg departure ident, applied only when the chain resolves uniquely across the batch, falling back to upload order with a warning otherwise. Upload order alone is not trustworthy: Little Navmap names files \"VFR <depname> (ICAO) to <destname> (ICAO).lnmpln\", so a file picker sorted alphabetically can hand the server a batch in reverse route order. A round trip A->B / B->A does not resolve uniquely and must fall back."
+  ],
+  "sequencing_rationale": [
+    "The two places this feature can hurt are the parser's tolerance of real files and a wrong auto-match at takeoff. Both are isolated into pure modules with their own ts-node CLI inspectors (src/inspect-lnmpln.ts, src/inspect-legmatch.ts) so they are falsifiable without MSFS and without a test framework.",
+    "Manual link/unlink (phase 3) ships before auto-matching (phase 4) on purpose: the escape hatch must exist before anything automatic can attach a flight to the wrong leg.",
+    "Map rendering (phase 2) is placed before the linking work because it is low-risk, needs only trip -> planned legs, and pays off the import immediately if the user stops there.",
+    "Each phase is gated by a reviewer task, and every task in phase N depends on the reviewer of phase N-1. This is what guarantees that tasks with overlapping allowed_paths across phases can never run concurrently; only within-phase parallelism exists, and every within-phase parallel pair has disjoint allowed_paths.",
+    "Type-file ownership is assigned deliberately: parse-shape types live in src/lnmpln.ts and persisted row types in src/types.ts, so the parser task and the DB task in phase 1 can run in parallel without touching the same file."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Import and list planned legs",
+      "ships": "A .lnmpln file (or several at once) can be imported into a trip and its planned legs are listed in the trip's legs table alongside flown flights.",
+      "tasks": [
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Planned route on the trip map",
+      "ships": "The imported route is drawn on the trip map, visually distinct from flown tracks. A trip that has only planned legs and no flights now shows a map.",
+      "tasks": [
+        "T-008",
+        "T-009"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Active trip and manual link/unlink",
+      "ships": "One trip can be marked active, and any flight can be manually linked to or unlinked from a planned leg. The escape hatch exists before anything automatic does.",
+      "tasks": [
+        "T-010",
+        "T-011",
+        "T-012",
+        "T-013",
+        "T-014"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Automatic leg matching at takeoff",
+      "ships": "Taking off near a planned leg's departure while that trip is active automatically attaches the new flight to that leg and trip, and the flight page shows the planned route under the flown track.",
+      "tasks": [
+        "T-015",
+        "T-016",
+        "T-017",
+        "T-018"
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "Live awareness, route progress, export",
+      "ships": "The live panel names the current planned leg and what remains of it, the trip journey measures progress along the planned route, and planned legs appear in the trip PDF.",
+      "tasks": [
+        "T-019",
+        "T-020",
+        "T-021",
+        "T-022",
+        "T-023"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Freeze the planned-leg data model, the LNMPLN parse contract and the phase-1 REST surface",
+      "role": "designer",
+      "phase": 1,
+      "deps": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design/data-model.md",
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design/stubs/**"
+      ],
+      "definition_of_done": [
+        "design/data-model.md specifies CREATE TABLE IF NOT EXISTS DDL for planned_legs, planned_waypoints and planned_alternates: every column, its type, nullability, default and index, written in the same style as the statements already in initDb().",
+        "It states which columns (if any) are added to existing tables, and confirms each is applied with the PRAGMA table_info + ALTER TABLE ADD COLUMN idiom already used in src/db.ts. No column is renamed, retyped or dropped.",
+        "It states the ON DELETE behaviour for trips -> planned_legs and planned_legs -> planned_waypoints/planned_alternates, given that initDb() sets PRAGMA foreign_keys = ON, and says explicitly what happens to a planned leg when its trip is deleted.",
+        "It declares the ParsedFlightPlan TypeScript interface (the parser's output) and states that it lives in src/lnmpln.ts, while persisted row types live in src/types.ts. This split is required so that T-002 and T-003 can run in parallel without editing the same file.",
+        "Every one of the 12 format traps listed in intake.md maps to a named field or a stated rule in ParsedFlightPlan: at minimum isSnippet (non-AIRPORT endpoints), cruiseAltFt (CruisingAltF preferred over CruisingAlt), remarks (Comment or Description accepted), createdAt (normalised two-digit-offset timestamp), and approxDistanceNm carrying an explicit 'approximate' flag because procedure waypoints are never present in the file.",
+        "It specifies the phase-1 REST surface: method, path, request body/multipart shape, success response shape and error status codes for import (multiple files in one request), list, get one, delete one and reorder. Paths are chosen so literal segments are registrable before the existing /:id routes and before the SPA catch-all.",
+        "It states whether planned legs and their waypoints are embedded in the GET /api/trips/:id payload or fetched from a separate endpoint, and gives the reason (payload size vs round trips), because both the trip page and the trip map consume it.",
+        "It states the batch-import failure policy: whether one bad file fails the whole request or the response reports per-file outcomes.",
+        "It contains no implementation code beyond interface stubs and DDL.",
+        "It specifies the batch ordering rule (design.md §9.2): destination-ident-to-departure-ident chaining, the uniqueness condition under which it is applied, the fallback to upload order, and the warning returned to the client when the chain does not resolve. It states how seq is assigned in each case."
+      ],
+      "risks": [
+        "Over-modelling: SID/STAR/approach names are worth storing as text on the leg, but modelling procedure legs as first-class rows would be speculative, since the file never contains their waypoints.",
+        "Embedding waypoints in the trip payload could bloat GET /api/trips/:id for a long trip; the decision needs to be made here rather than discovered in the client.",
+        "Chain resolution is ambiguous for any batch containing a round trip or a repeated field pairing; the contract must define uniqueness precisely enough that T-004 can implement the refusal rather than guess an order."
+      ],
+      "model": "opus",
+      "model_rationale": "Freezes contracts for the whole feature; ambiguous and cross-cutting."
+    },
+    {
+      "id": "T-002",
+      "title": "LNMPLN parser module, fast-xml-parser dependency, fixtures and a CLI inspector",
+      "role": "dispatcher",
+      "phase": 1,
+      "deps": [
+        "T-001"
+      ],
+      "frozen_contracts": [
+        "T-001: ParsedFlightPlan interface and the trap-to-field mapping"
+      ],
+      "allowed_paths": [
+        "package.json",
+        "package-lock.json",
+        "src/lnmpln.ts",
+        "src/inspect-lnmpln.ts",
+        "samples/lnmpln/**",
+        "src/geo.ts"
+      ],
+      "definition_of_done": [
+        "fast-xml-parser is in package.json dependencies (not devDependencies) with a caret-pinned version, and package-lock.json is updated by a real npm install.",
+        "src/lnmpln.ts exports a parse function returning exactly the ParsedFlightPlan shape frozen in T-001, and imports nothing from ./db and nothing from fs: it takes a string or Buffer and returns a value. Verify with grep that the module has no database or filesystem import.",
+        "samples/lnmpln/ contains the four REAL Little Navmap 3.0.18 exports supplied by the user - the VFR trio KSBA->KMRY, KMRY->KSTS, KSTS->KACV, and the IFR KSFO->KLAX - and all four parse: npx ts-node src/inspect-lnmpln.ts over them reports the correct departure and destination idents, waypoint counts of 7, 5, 6 and 3 respectively, and cruise altitudes of 7500, 2500, 3500 and 27000 ft.",
+        "The IFR fixture round-trips its full procedure set through the parser: SID WESLA5 / runway 28L / transition SUSEY; STAR IRNMN2 / runway 24R / transition BURGL; approach KLAX24R / runway 24R / type CUSTOM / CustomDistance 3.00 / CustomAltitude 1000.00 / CustomOffsetAngle 0.00. Every one of those values reaches the ParsedFlightPlan; none is silently dropped.",
+        "THE XSD IS NOT AN EXHAUSTIVE DESCRIPTION OF WHAT LITTLE NAVMAP WRITES. <CustomOffsetAngle> appears in the real IFR file and is absent from the XSD copy at .claude/runs/2026-09-04-lnmpln-trip-planner/lnmpln.xsd, whose Approach declares exactly nine children and does not include it. The same gap affects SID, which the XSD gives only Name/Runway/Transition while the manual documents a Type=CUSTOMDEPART variant with CustomDistance. The parser must therefore read by tag name and tolerate elements the XSD does not declare, and must never validate-and-reject on the grounds that an element is undocumented.",
+        "No acceptance check anywhere in this task is expressed as conformance to the XSD; correctness is judged against the real files and the manual, with the XSD treated as a partial guide.",
+        "The four real files cover only part of the trap list, so these SYNTHESIZED fixtures are still required and must be added alongside them, each named so its purpose is obvious: a UTF-8 BOM-prefixed file (trap 11); two separate <Waypoints> blocks and two <Alternates> blocks (trap 4); ANY file containing an <Alternates> block at all, since no real file has one (trap 4 and the alternates path generally); <Comment> in Header and Waypoint plus a second file using <Description> in both (trap 2 - neither tag appears in any real file); a Waypoint placing its remark after <Pos>, deviating from XSD element order (trap 3); a snippet whose first and last Waypoint Type is not AIRPORT (trap 6 - all eight real endpoints are AIRPORT); a Waypoint whose <Pos> has no Alt attribute (trap 8 - every real Pos carries Alt); a Header whose CruisingAlt and CruisingAltF DISAGREE (trap 9 - all four real files agree, so no real fixture can prove which field the parser read); a two-digit-offset CreationDate of the form 2020-09-11T18:05:15+02 (trap 10 - all four real files use a full -03:00 offset that Date parses natively); an XML comment block including the nested/unbalanced one from the manual (trap 7); a <Departure> element with a parking Start and Type (trap 12 - absent from all four real files); a published non-custom approach carrying ARINC, Suffix and TransitionType; and every rejection path from the malformed-input line below.",
+        "The parser tolerates <AircraftPerformance> with no <FilePath> child: all three real files carry only <Type> and <Name>, though intake.md lists FilePath among its children. A missing FilePath is not an error.",
+        "The parser preserves ident strings as strings across all three real files: KSBA, KMRY, KSTS, KACV and en-route idents such as SUDDO, OINGO, ZORAN, HMPBK, GIPVY are never coerced to numbers or booleans.",
+        "npx ts-node src/inspect-lnmpln.ts samples/lnmpln/*.lnmpln prints, per file: departure ident and type, destination ident and type, cruise altitude in feet, waypoint count, alternate count, isSnippet, and exits 0.",
+        "The two-block fixture reports the sum of both blocks' waypoints, in document order, proving the maxOccurs=unbounded concatenation.",
+        "A fixture where CruisingAlt and CruisingAltF disagree reports the CruisingAltF value.",
+        "A CreationDate of the form 2020-09-11T18:05:15+02 is printed as a valid ISO instant, not Invalid Date.",
+        "The official example's nested/unbalanced XML comment block around the custom SID does not break the parse.",
+        "Malformed input is rejected with a one-line reason and a non-zero exit, never a stack trace or a partial object, for each of: input that is not XML; XML with no <Flightplan>; a plan with zero waypoints; a waypoint with Lat=91; a waypoint with Lon=-181. Add these as samples/lnmpln/synthetic/bad-*.lnmpln.",
+        "Waypoints are read by tag name, never by position, so the fixture that puts Description after Pos parses identically to one that does not.",
+        "npx tsc --noEmit passes.",
+        "The NavData cycle is read per file and not assumed constant across a logbook: the VFR trio carries Cycle=\"1801\" and the IFR file Cycle=\"2609\".",
+        "CORRECTED 2026-09-04 (Orchestrator): the chain-sort demonstration globs samples/lnmpln/VFR*.lnmpln, not all four real files. The all-four glob is EXPECTED to report NO_UNIQUE_HEAD because the IFR plan belongs to a different trip and gives the batch two heads. Do not treat that as a failure and do not make the all-four glob chain.",
+        "CORRECTED 2026-09-04 (Orchestrator): synthesized fixtures, including every bad-*.lnmpln, live in samples/lnmpln/synthetic/. The top level of samples/lnmpln/ holds ONLY genuine Little Navmap exports, because samples/lnmpln/*.lnmpln is written into acceptance criteria and their original filenames are load-bearing evidence for the ordering defect."
+      ],
+      "risks": [
+        "PARTLY RETIRED, FURTHER REDUCED BY THE IFR FILE: four genuine Little Navmap 3.0.18 exports now sit in samples/lnmpln/. Real data now covers the parse happy path, procedures (SID, STAR and a CUSTOM approach), both IFR and VFR flightplan types, a short 3-waypoint route, and two different NavData cycles. What remains synthetic is still substantial: multiple <Waypoints> blocks, alternates of any kind (no real file has an <Alternates> block), the two-digit CreationDate offset, a BOM, XML comments, a missing Pos/@Alt, a <Departure> element, a published non-custom approach, and every rejection path. All four files are still one program version and one region.",
+        "LOWERED: the Designer frozen fast-xml-parser config was prototyped against all three real files and parses them correctly - idents stay strings, the isArray jpaths resolve, and the full-offset CreationDate parses natively. The residual concern is narrower than originally scored but not gone: a single-element <Waypoints> block collapsing to an object rather than an array is still only exercised by a synthesized fixture, and the config has never been run against an IFR plan with procedures."
+      ],
+      "model": "opus",
+      "model_rationale": "Highest-risk task in the plan. New module + dependency + geo extraction + 13 format traps + UNKNOWN_ELEMENT + chain-sort. A silent mis-parse is residual risk #1."
+    },
+    {
+      "id": "T-003",
+      "title": "Planned-leg schema migration and CRUD in src/db.ts",
+      "role": "dispatcher",
+      "phase": 1,
+      "deps": [
+        "T-001"
+      ],
+      "frozen_contracts": [
+        "T-001: DDL, ON DELETE behaviour, persisted row types",
+        "design.md Amendment B: widened procedure columns on planned_legs"
+      ],
+      "allowed_paths": [
+        "src/db.ts",
+        "src/types.ts"
+      ],
+      "definition_of_done": [
+        "initDb() creates the three new tables with CREATE TABLE IF NOT EXISTS per the T-001 DDL, and their indexes with CREATE INDEX IF NOT EXISTS.",
+        "Starting the server twice against the same flights.db produces no error; sqlite3 flights.db \".schema planned_legs\" shows one definition.",
+        "Starting the server against a copy of the existing flights.db upgrades it in place: sqlite3 copy.db \"select count(*) from planned_legs\" returns 0, and select count(*) from flights and from trips return the same numbers as before the upgrade.",
+        "src/types.ts gains the persisted row types from T-001; no existing exported type loses or changes a field.",
+        "Exported functions cover: create a leg with its waypoints and alternates, list legs for a trip in seq order with children attached, get one leg, delete one leg, reorder legs within a trip.",
+        "Creating a leg is wrapped in a single better-sqlite3 transaction: force a failure partway (e.g. a deliberately invalid waypoint) and confirm with sqlite3 that no planned_waypoints rows survive for that leg.",
+        "deleteTrip() on a trip that has planned legs still returns true, and sqlite3 flights.db \"select count(*) from planned_legs where trip_id not in (select id from trips)\" returns 0.",
+        "GET /api/trips and GET /api/flights return the same shapes as before (additive fields only), confirmed by curl before and after.",
+        "No function in this task reads or writes flights.flight_plan_name or the flight_plans/ directory.",
+        "The procedure columns on planned_legs cover the full approach record, not just its name: approach type, arinc, suffix, transition_type, custom_distance, custom_altitude and custom_offset_angle, plus the SID type and custom_distance, per design.md Amendment B. The earlier nine-column freeze had no home for a CUSTOM approach type or any of its three Custom* values, so a stored row could not distinguish a custom runway-extension approach from a published one.",
+        "Every added procedure column is nullable and applied additively, since the three VFR fixtures have no <Procedures> block at all and must continue to import with all of them NULL.",
+        "Verifiable with sqlite3: after importing a plan with no procedures, select on the procedure columns returns NULL for every one of them, and the leg is otherwise complete."
+      ],
+      "risks": [
+        "PRAGMA foreign_keys = ON is already set, so a REFERENCES clause on the new tables is genuinely enforced. A leg row inserted with a trip_id that does not exist will now throw where the older unconstrained flights.trip_id would not have. The import endpoint must therefore validate the trip exists first (T-004).",
+        "A cascade from trips is the right default but makes trip deletion destroy imported plans silently; the UI must warn (T-005/T-013).",
+        "The procedure column set is driven by one real IFR file plus the manual. A published (non-custom) approach with ARINC, Suffix and TransitionType populated is still unseen in real data, so those three columns are modelled on documentation alone."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Wide but fully specified: schema.sql gives 3 tables, 18 procedure columns, 4 ALTER steps and the cascade verbatim. Mechanical against a frozen DDL."
+    },
+    {
+      "id": "T-004",
+      "title": "REST endpoints: LNMPLN import (multi-file) and planned-leg CRUD",
+      "role": "dispatcher",
+      "phase": 1,
+      "deps": [
+        "T-002",
+        "T-003"
+      ],
+      "frozen_contracts": [
+        "T-001: REST surface, batch-import failure policy, response shapes",
+        "T-001/design.md §9.2: batch ordering rule, uniqueness condition, fallback and warning"
+      ],
+      "allowed_paths": [
+        "src/server.ts"
+      ],
+      "definition_of_done": [
+        "The import endpoint accepts one or many .lnmpln files in a single multipart request and returns 201 with the created legs in the shape frozen in T-001.",
+        "A separate multer instance (or separate limits) is used for LNMPLN uploads; the existing 20 MB MAX_FLIGHT_PLAN_BYTES PDF limit is untouched, and the LNMPLN limit is far smaller and stated in the code.",
+        "Rejections return { error: string } with a proper status, matching the existing handlers' style, for: no file; a file that is not XML; a file the parser refuses; a file over the size limit; a trip id that does not exist (404); a malformed id (400).",
+        "The batch failure policy frozen in T-001 is implemented and observable: a request mixing one good and one bad file produces exactly the documented outcome, and the response names the failing file and the reason.",
+        "Imported batches are ordered by chaining destination ident to departure ident, not by multipart upload order, per design.md §9.2. seq is assigned from the resolved chain.",
+        "RESOLVING CASE, verifiable against the real fixtures and the sharpest regression test this feature has: POST the three real files from samples/lnmpln/ in ALPHABETICAL filename order (which is KSTS->KACV, KMRY->KSTS, KSBA->KMRY, exactly the reverse of the route) into an empty trip, then run a single query - sqlite3 flights.db \"select seq, <departure ident col>, <destination ident col> from planned_legs where trip_id = <id> order by seq\" using the column names from the T-001 DDL. It must return exactly three rows: 1 KSBA KMRY, 2 KMRY KSTS, 3 KSTS KACV.",
+        "FALLBACK CASE: a batch whose chain does not resolve uniquely - at minimum a round trip (import KSBA->KMRY together with a hand-made KMRY->KSBA) and a batch of two unrelated legs that share no idents - is stored in upload order, and the response carries a warning naming the reason. Verify with the same sqlite3 query that seq follows upload order in both.",
+        "The warning is a warning, not an error: the fallback import still returns success and still creates the legs, so a batch that cannot be chained is never silently dropped.",
+        "Re-importing the same three files into a second trip produces the same resolved order, proving the sort does not depend on filesystem or multipart field ordering.",
+        "All new literal routes are registered before the existing /:id routes and before app.get('*'); curl -sS on every new path returns JSON with a JSON content-type, never the SPA index.html.",
+        "GET returns legs in seq order with waypoints and alternates attached.",
+        "DELETE removes a leg and its children; a repeated DELETE returns 404; sqlite3 confirms no orphan waypoint rows remain.",
+        "The reorder endpoint changes seq, and a subsequent GET returns the new order.",
+        "Regression check on the unrelated PDF feature: POST, GET and DELETE of a PDF against /api/flights/:id/flight-plan still work and flights.flight_plan_name is set and cleared as before.",
+        "The task records a copy-pasteable curl transcript covering import, list, delete, reorder and three rejection cases.",
+        "PROCEDURE ROUND-TRIP, verifiable against the real IFR fixture with one query: import \"IFR San Francisco Intl (KSFO) to Los Angeles Intl (KLAX).lnmpln\", then sqlite3 flights.db \"select <sid cols>, <star cols>, <approach cols> from planned_legs where trip_id = <id>\" using the column names from the T-003 DDL. It must return WESLA5, 28L, SUSEY for the SID; IRNMN2, 24R, BURGL for the STAR; and KLAX24R, 24R, CUSTOM, 3.0, 1000.0, 0.0 for the approach name, runway, type, custom distance, custom altitude and custom offset angle. A NULL in any of those twelve values is a failure.",
+        "The IFR fixture does not chain with the VFR trio, and a batch mixing them falls back with reason NO_UNIQUE_HEAD rather than inventing an order. Verify by importing all four files in one request and confirming the fallback warning names that reason and that all four legs are still created in upload order.",
+        "The IFR file imports as its own trip, separate from the VFR trip, and legs belonging to the two trips never interleave.",
+        "NOTE 2026-09-04 (Orchestrator, after review finding F-8): DoD 15 asks for a curl transcript, but this task allowed_paths is [\"src/server.ts\"], so it had nowhere to write one. The intent — every endpoint exercised against a real server — was satisfied: T-004 reported the transcript in its response envelope and the phase-1 Reviewer independently reproduced import, list, delete, reorder and the rejection cases. Future tasks that must PRODUCE an artifact need a reports path in allowed_paths."
+      ],
+      "risks": [
+        "Route ordering is a known trap in this file; a new route registered after app.get('*') will silently return HTML and look like a client bug.",
+        "Multer errors surface through the existing error middleware; a new upload limit must produce a JSON error, not an HTML stack page.",
+        "Chain-sorting is inference, not fact. It is right for the common case and wrong for a genuine out-and-back flown in one direction only; the fallback plus the reorder endpoint from this same task are what make a wrong inference cheap to correct."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Endpoint shapes, statuses and the batch-import policy are frozen in §7.1. Integrates chain-sort rather than deciding it."
+    },
+    {
+      "id": "T-005",
+      "title": "Trip page: import control and planned legs as ghost rows in the legs table",
+      "role": "dispatcher",
+      "phase": 1,
+      "deps": [
+        "T-004"
+      ],
+      "frozen_contracts": [
+        "T-001: planned-leg JSON payload shape"
+      ],
+      "allowed_paths": [
+        "client/src/pages/TripDetail.tsx",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/types.ts",
+        "client/src/utils/api.ts",
+        "client/src/index.css"
+      ],
+      "definition_of_done": [
+        "The trip page has an import control that accepts multiple .lnmpln files in one go; after a successful import the page shows the new planned legs without a manual browser reload.",
+        "Planned legs appear in the existing legs table as visually distinct ghost rows (dimmed and/or dashed), interleaved with flown flights in route order, each labelled 'planned'.",
+        "Each ghost row shows departure and destination idents, cruise altitude and waypoint count, and any distance derived from the waypoint chain is shown with an explicit 'approx.' qualifier, because the file never contains procedure waypoints.",
+        "A plan whose endpoints are not airports is labelled a snippet and does not display an invented ICAO.",
+        "A planned leg can be deleted from the UI behind a confirmation.",
+        "Import failures render the server's { error } message inline next to the control; no blank screen and no unhandled promise rejection in the console.",
+        "client/src/types.ts mirrors the server types added in T-003 field-for-field, including nullability.",
+        "A trip with zero planned legs renders exactly as it did before this change (compare against the current page side by side).",
+        "npm run build:client completes with no TypeScript errors.",
+        "When the import response carries the chain-resolution warning from T-004, the trip page shows it as a non-blocking notice next to the newly imported legs, saying the order was taken from upload order and can be corrected.",
+        "The user can reorder planned legs from the UI via the reorder endpoint from T-004, so a wrong inferred order is fixable without touching the database.",
+        "Verifiable against the real fixtures: importing the three files from samples/lnmpln/ through the file picker in its default alphabetical order shows them in the legs table as KSBA->KMRY, then KMRY->KSTS, then KSTS->KACV, with no warning shown."
+      ],
+      "risks": [
+        "Interleaving planned and flown rows in one table needs a defined ordering rule for a planned leg that has not been flown and has no date; decide it here and state it in a comment.",
+        "client/src/types.ts is hand-maintained; a drift between it and src/types.ts will not be caught by any test."
+      ],
+      "model": "sonnet",
+      "model_rationale": "UI work against the frozen §9.3 interleaving rule."
+    },
+    {
+      "id": "T-006",
+      "title": "Build, dependency and migration rehearsal against a copy of the live database",
+      "role": "devops",
+      "phase": 1,
+      "deps": [
+        "T-004",
+        "T-005"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reports/**"
+      ],
+      "definition_of_done": [
+        "npm install from a clean node_modules resolves fast-xml-parser, and npm run build (client then server) exits 0 with no TypeScript errors.",
+        "A copy of the live flights.db (taken with the WAL checkpointed, per the existing backup path) is upgraded by starting the built server against it; the report records sqlite3 .tables and the flights/trips row counts before and after, and the counts are unchanged.",
+        "The rehearsal uses the three real fixtures as its end-to-end scenario rather than synthesized data: against the upgraded copy, create a trip, import all three files in alphabetical order, and record the seq/ident query output in the report. This exercises migration, import, chain-sort and read-back in one pass on a database that carries real history.",
+        "npm run backup still succeeds after the schema change, and sqlite3 <backup> \".tables\" lists the three new tables.",
+        "The report states the installed size and transitive dependency count added by fast-xml-parser, and whether Dockerfile or docker-compose.yml need any change (do not change them in this task).",
+        "The report is written to reports/phase1.md. No source file, package.json or Dockerfile is modified by this task.",
+        "After npm run backup, restoring that backup into a scratch directory yields a database where the three planned legs survive with seq 1,2,3 in route order; the report records the query output from the restored copy."
+      ],
+      "risks": [
+        "Rehearsing against the live flights.db rather than a copy would be destructive; the task must copy first, with the WAL accounted for."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Migration rehearsal against a copy of the live DB. Mechanical, but reading a migration failure correctly needs more than a light model."
+    },
+    {
+      "id": "T-007",
+      "title": "Review phase 1: parser, schema, endpoints, client, build",
+      "role": "reviewer",
+      "phase": 1,
+      "deps": [
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase1.md"
+      ],
+      "definition_of_done": [
+        "T-002, T-003, T-004, T-005 and T-006 are each reviewed individually against their own definition_of_done, with a per-task verdict recorded.",
+        "Confirms every migration is additive and idempotent and that no existing column or table was altered, renamed or dropped.",
+        "Confirms the LNMPLN feature nowhere reads or writes flights.flight_plan_name or the flight_plans/ directory, so the PDF attachment feature is untouched.",
+        "Confirms every new endpoint validates its input explicitly and returns { error: string } with a proper status, and that no user-supplied string is interpolated into SQL (all statements parameterised).",
+        "Confirms the parser rejects rather than crashes on every bad fixture, and that the reviewer re-ran src/inspect-lnmpln.ts independently.",
+        "Confirms comments explain why rather than what, matching the repo's style, and that no test framework or test runner was added.",
+        "Verdict approve or request_changes, with concrete file:line findings, written to reviews/phase1.md."
+      ],
+      "risks": [
+        "If no real Little Navmap file has been supplied by this point, the reviewer should record that the parser is verified only against synthesized fixtures and flag it as residual risk rather than blocking the phase."
+      ],
+      "model": "opus",
+      "model_rationale": "Phase-1 review covers the parser. The review is the only thing standing between a mis-parse and the database."
+    },
+    {
+      "id": "T-008",
+      "title": "Draw the planned route on the trip map, distinct from flown tracks",
+      "role": "dispatcher",
+      "phase": 2,
+      "deps": [
+        "T-007"
+      ],
+      "frozen_contracts": [
+        "T-001: planned-leg JSON payload shape including waypoints"
+      ],
+      "allowed_paths": [
+        "client/src/components/TripMap.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/index.css"
+      ],
+      "definition_of_done": [
+        "TripMap takes an optional planned-legs prop; when it is omitted the component renders exactly as it does today, so every existing caller (including PrintTrip) is unaffected.",
+        "Planned routes render as dashed polylines in a colour clearly outside the LEG_COLORS palette, drawn beneath the flown tracks, with a tooltip naming the planned leg and its route.",
+        "Waypoints render as small markers showing their ident on hover.",
+        "The bounds controller fits over flown points and planned waypoints together, so a trip with planned legs but no flights shows a fitted map instead of the current 'No GPS points recorded for this trip.' message.",
+        "A trip with flights and no planned legs is pixel-comparable to before the change.",
+        "The trip PDF export still works: /print/trip/:id renders and GET /api/trips/:id/export.pdf returns a PDF containing the flown tracks, unchanged.",
+        "A planned leg crossing the antimeridian does not draw a polyline wrapping the wrong way round the world, or the limitation is documented in a comment if leaflet's default handling is accepted.",
+        "npm run build:client completes with no TypeScript errors.",
+        "EXPECTED-BEHAVIOUR RULE, not a defect: where a plan has procedures, the drawn planned route will visibly diverge from the flown track at both ends. LNM never writes procedure waypoints, so the en-route skeleton is close to a straight line between the airports - in the real IFR fixture, KSFO to EBAYE to KLAX measures 293.5 nm against a direct great circle of 293.2 nm, a 0.08 percent excess - while the real aircraft curves away through the SID at one end and the STAR and approach at the other. This divergence must be left visible and must NOT be corrected by snapping, interpolating or otherwise fitting the planned line to the flown track. Where the leg has a SID, STAR or approach, the UI says so, so the gap reads as missing procedure data rather than a drawing error."
+      ],
+      "risks": [
+        "MapReadySignal drives the PDF export's readiness detection. Adding layers that load asynchronously could delay or break the 'ready' signal and hang the Puppeteer render; verify the export still settles.",
+        "Antimeridian wrapping is a real hazard for exactly the kind of long-haul trip this feature targets.",
+        "A reviewer or a later dispatcher seeing the planned line depart from the flown track at both ends will reasonably read it as a rendering bug. The DoD line above exists to stop that: any change making the two lines agree at the ends is a regression, not a fix."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Leaflet rendering against frozen §6.2 divergence rules."
+    },
+    {
+      "id": "T-009",
+      "title": "Review phase 2: planned route rendering and export non-regression",
+      "role": "reviewer",
+      "phase": 2,
+      "deps": [
+        "T-008"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase2.md"
+      ],
+      "definition_of_done": [
+        "T-008 reviewed against its definition_of_done, with the reviewer independently loading a trip page with and without planned legs.",
+        "Confirms the new TripMap prop is optional and that PrintTrip's behaviour is unchanged, by rendering a trip PDF and comparing it to one produced before the change.",
+        "Confirms the planned route is unmistakably distinguishable from a flown track at a glance, not merely a different shade.",
+        "Verdict approve or request_changes with file:line findings, written to reviews/phase2.md."
+      ],
+      "risks": [],
+      "model": "sonnet",
+      "model_rationale": "Scoped review of one rendering change plus export non-regression."
+    },
+    {
+      "id": "T-010",
+      "title": "Freeze the active-trip semantics, the flight-to-leg link, and the auto-match algorithm",
+      "role": "designer",
+      "phase": 3,
+      "deps": [
+        "T-001"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design/matching.md"
+      ],
+      "definition_of_done": [
+        "design/matching.md states where the active-trip flag lives (a column on trips or a single-row settings table), and gives the exact statement sequence that guarantees at most one active trip at any time.",
+        "It defines the flight-to-planned-leg link: which table holds it, and its uniqueness rules (a planned leg has at most one flight; a flight has at most one planned leg).",
+        "It specifies that unlink restores prior state: whether trip_id was set by the auto-link is recorded, so unlinking restores the flight's previous trip_id instead of blindly nulling it.",
+        "It gives the auto-match algorithm as a pure function signature: inputs (takeoff lat/lon, timestamp, aircraft type, the candidate legs) and output (a chosen leg id, or null together with a reason code from a named enum).",
+        "It states the departure-radius threshold in nautical miles and justifies it against the fact that FlightManager.startFlight() only fires once the aircraft is already airborne (airspeed > 30 kts for 3 debounce frames), so the reported position can be several miles from the field.",
+        "It enumerates every refusal rule explicitly: no active trip; the leg is already flown; the leg is already linked to another flight; the flight is already manually linked; two or more candidate legs are within the radius (ambiguous, refuse rather than guess); the leg is a snippet with no departure airport.",
+        "It defines the landing behaviour: what happens when the arrival is far from the planned destination (keep the link and flag a deviation, or unlink), and what the user is shown.",
+        "It states that matching must run once per flight start, must not add per-frame cost, and must not perform a second linear scan of the ~40k-row airport table per frame.",
+        "It states the restart behaviour: the link is persisted at takeoff, so a server restart mid-flight loses nothing.",
+        "It lists the reason codes verbatim, so both the API and the UI can explain a refusal instead of failing silently.",
+        "It contains no implementation code beyond the function signature and the reason-code enum."
+      ],
+      "risks": [
+        "The dangerous default is a generous radius that silently attaches a flight to the wrong leg. The contract should bias hard toward refusing: an unlinked flight is a small annoyance, a wrongly linked one corrupts a trip's record and the user may not notice.",
+        "Two legs departing the same airport (a there-and-back trip, or a multi-day trip returning to base) is not an edge case in this domain, it is the common case. The ambiguity rule carries most of the weight here."
+      ],
+      "model": "opus",
+      "model_rationale": "Freezes matcher semantics; the high-consequence half of the design."
+    },
+    {
+      "id": "T-011",
+      "title": "Persist the active-trip flag and the flight-to-planned-leg link",
+      "role": "dispatcher",
+      "phase": 3,
+      "deps": [
+        "T-009",
+        "T-010"
+      ],
+      "frozen_contracts": [
+        "T-010: active-trip storage, link uniqueness, unlink-restores-prior-state rule"
+      ],
+      "allowed_paths": [
+        "src/db.ts",
+        "src/types.ts"
+      ],
+      "definition_of_done": [
+        "AMENDED 2026-09-04 after the phase-1 review: trips.is_active, flights.planned_leg_id/_link_source/_prev_trip_id and BOTH partial UNIQUE indexes were already added by T-003, because design.md §3 freezes the migration as a single block and the flights.planned_leg_id foreign key cannot be declared before planned_legs exists. That is correct and must NOT be reverted. This task therefore owns only the FUNCTIONS that use those columns (setActiveTrip, linkFlightToPlannedLeg, unlink and the prev-trip restore), not the DDL. Verify the columns and indexes are already present rather than re-adding them.",
+        "The active-trip flag is persisted per T-010, applied additively with the PRAGMA table_info + ALTER TABLE ADD COLUMN idiom if it is a column.",
+        "Activating trip B deactivates trip A in the same transaction: sqlite3 flights.db \"select count(*) from trips where is_active = 1\" returns 0 or 1, never more, after any sequence of activations.",
+        "Link columns are added additively; existing flight rows get NULL and are otherwise untouched.",
+        "link(flightId, legId) and unlink(flightId) are exported; unlink restores the trip_id the flight had before an auto-link, per T-010.",
+        "Linking a leg that is already linked to a different flight fails loudly with an error rather than silently overwriting; verified by attempting it twice via the db layer.",
+        "Deleting a flight clears the link and leaves the planned leg unflown and re-linkable: sqlite3 confirms the leg's link column is NULL and it appears again in the unflown list.",
+        "Deleting a planned leg clears the link and leaves the flight and its trip membership intact.",
+        "Restarting the server twice against the same database produces no error and no duplicate columns."
+      ],
+      "risks": [
+        "Deleting a flight or leg through a path that bypasses these helpers would leave a dangling link; check every existing delete path in src/db.ts, not just the new ones."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Two columns and two partial unique indexes, statement order frozen in §11.2."
+    },
+    {
+      "id": "T-012",
+      "title": "REST endpoints for the active trip and for manual link/unlink",
+      "role": "dispatcher",
+      "phase": 3,
+      "deps": [
+        "T-011"
+      ],
+      "frozen_contracts": [
+        "T-010: reason codes and link semantics"
+      ],
+      "allowed_paths": [
+        "src/server.ts"
+      ],
+      "definition_of_done": [
+        "Endpoints exist to mark a trip active, to clear the active trip, and to read which trip is active.",
+        "Endpoints exist to link a flight to a planned leg and to unlink a flight, returning { error: string } with 404 for unknown ids and 409 when the leg is already linked to another flight.",
+        "GET /api/trips (or the documented equivalent) exposes which trip is active, so the client does not need a second call to render a badge.",
+        "All new routes are registered before the /:id routes they could shadow and before app.get('*'); curl on each returns JSON, never index.html.",
+        "A curl transcript is recorded covering: activate, read, re-activate a different trip (first is deactivated), link, double-link rejection, unlink, unlink of an unlinked flight.",
+        "Manual linking is deliberately NOT restricted to the active trip: any unflown planned leg of any trip can be linked by hand, since this is the escape hatch. This is asserted by a curl case.",
+        "Existing trip and flight endpoints return unchanged shapes apart from additive fields."
+      ],
+      "risks": [
+        "The active-trip endpoints are the one place where a user action changes what the takeoff path will do later; the response should make the current state unambiguous."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Endpoints frozen in §11.3 and §12.3."
+    },
+    {
+      "id": "T-013",
+      "title": "Client: active-trip toggle and manual link/unlink controls",
+      "role": "dispatcher",
+      "phase": 3,
+      "deps": [
+        "T-012"
+      ],
+      "frozen_contracts": [
+        "T-010: link semantics and reason codes",
+        "T-012: endpoint shapes"
+      ],
+      "allowed_paths": [
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/Home.tsx",
+        "client/src/types.ts",
+        "client/src/utils/api.ts",
+        "client/src/index.css"
+      ],
+      "definition_of_done": [
+        "The trip page has a control to make this trip the active trip and to clear it, and the current state is visible without hovering or guessing.",
+        "Activating a trip from its page visibly deactivates any previously active trip after a refresh of the trip list.",
+        "Home shows which trip is active with a badge, so the state is discoverable from the landing page.",
+        "A planned leg row offers 'link a flight' and a linked one offers 'unlink', both taking effect without a manual browser reload.",
+        "The flight picker offers flights that are not already linked, and the leg picker offers unflown legs of any trip, matching the deliberate non-restriction in T-012.",
+        "A 409 from a double-link renders the server's message inline rather than failing silently.",
+        "client/src/types.ts mirrors the server types added in T-011 field-for-field.",
+        "A trip that is not active and has no planned legs renders exactly as it did before this change.",
+        "npm run build:client completes with no TypeScript errors."
+      ],
+      "risks": [
+        "The active-trip flag is global state exposed on a per-trip page; if the badge is not also on Home, a user can leave the wrong trip active for weeks and only discover it when a flight attaches to the wrong leg."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Client controls over frozen endpoints."
+    },
+    {
+      "id": "T-014",
+      "title": "Review phase 3: active-trip semantics and the manual escape hatch",
+      "role": "reviewer",
+      "phase": 3,
+      "deps": [
+        "T-011",
+        "T-012",
+        "T-013"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase3.md"
+      ],
+      "definition_of_done": [
+        "T-011, T-012 and T-013 each reviewed individually against their definition_of_done, with a per-task verdict.",
+        "The reviewer independently verifies the at-most-one-active-trip invariant by activating several trips in sequence and querying with sqlite3.",
+        "The reviewer independently verifies that unlink restores the flight's prior trip_id rather than nulling it, using a flight that was in a trip before being linked.",
+        "Confirms the escape hatch is complete: every state reachable by linking can be undone by unlinking, from the UI, without touching the database.",
+        "Confirms nothing in this phase changed how flights are recorded; a flight taken with no active trip is stored exactly as before.",
+        "Verdict approve or request_changes with file:line findings, written to reviews/phase3.md."
+      ],
+      "risks": [
+        "This is the gate that must not be waved through: phase 4 is only safe to build on top of a manual undo that demonstrably works."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Reviews the escape hatch before anything automatic exists."
+    },
+    {
+      "id": "T-015",
+      "title": "Pure leg-matching module with a scenario CLI harness",
+      "role": "dispatcher",
+      "phase": 4,
+      "deps": [
+        "T-014"
+      ],
+      "frozen_contracts": [
+        "T-010: function signature, radius threshold, refusal rules, reason codes"
+      ],
+      "allowed_paths": [
+        "src/legMatcher.ts",
+        "src/inspect-legmatch.ts",
+        "src/geo.ts"
+      ],
+      "definition_of_done": [
+        "src/legMatcher.ts exports the pure function with the signature frozen in T-010 and performs no database, filesystem or network access; verified by grep showing no import of ./db, ./airports, fs or http.",
+        "Every refusal path returns the documented reason code from T-010; no path returns a bare null with no reason.",
+        "npx ts-node src/inspect-legmatch.ts runs a scenario table printing expected versus actual for each case and exits non-zero if any case disagrees.",
+        "The scenario table includes at minimum: an exact match over the field; a takeoff 8 nm out on climb (matches); a takeoff 40 nm away (refuses, out of radius); two candidate legs departing the same airport (refuses, ambiguous); a leg already flown (refuses); a leg already linked (refuses); no active trip (refuses); a snippet leg with no departure airport (refuses); and an antimeridian pair such as NZAA to NFFN where a naive longitude difference computes a wrong distance.",
+        "The scenario table draws its coordinates from the four real fixtures wherever it can, so thresholds are exercised against genuine airport positions: KSBA, KMRY, KSTS and KACV from the VFR trip and KSFO and KLAX from the IFR plan. KMRY appearing as both a destination and a departure gives a real test that an already-flown leg is excluded while its successor remains a candidate.",
+        "The AMBIGUOUS case stays SYNTHETIC and must be constructed by hand: no two of the real legs depart the same field, so the real fixtures cannot exercise the refusal that matters most. The scenario table must state this in a comment so a later reader does not mistake real coverage for complete coverage.",
+        "The antimeridian case is asserted explicitly, because raw-degree distance maths is the classic silent failure here.",
+        "The module does not modify src/flightManager.ts; integration is T-016.",
+        "npx tsc --noEmit passes.",
+        "The IFR fixture adds a real long-leg case (293 nm KSFO to KLAX) alongside the short VFR hops, so the radius constants are exercised at both ends of the range rather than one. It adds no ambiguity coverage: KSFO and KLAX collide with none of the VFR fields either."
+      ],
+      "risks": [
+        "HIGHEST-CONSEQUENCE MODULE IN THE FEATURE. A false positive attaches a flight to the wrong leg and corrupts a trip's record; a false negative merely means the user links it by hand. The scenario table should be written to make false positives fail loudly.",
+        "The thresholds chosen here are guesses until real MSFS takeoffs are observed; make them named constants with a comment stating what they were calibrated against.",
+        "The real fixtures make the matching happy path concrete but give zero coverage of the ambiguity refusal, which is the path that prevents silent data corruption. Coverage of that path is exactly as synthetic as it was before the files arrived."
+      ],
+      "model": "opus",
+      "model_rationale": "A wrong match silently corrupts a trip record. Refusal precedence and ambiguity handling are subtle and adversarial."
+    },
+    {
+      "id": "T-016",
+      "title": "Hook auto-matching into the takeoff and landing transitions",
+      "role": "dispatcher",
+      "phase": 4,
+      "deps": [
+        "T-015"
+      ],
+      "frozen_contracts": [
+        "T-010: landing/deviation rule, once-per-flight cost constraint",
+        "T-015: matcher signature"
+      ],
+      "allowed_paths": [
+        "src/flightManager.ts",
+        "src/index.ts"
+      ],
+      "definition_of_done": [
+        "startFlight() consults the matcher after its existing findNearestAirport() call and, on a match, links the new flight to the planned leg and to its trip in the same code path, logging one line naming the flight, the leg and the reason code, in the style of the existing [FlightManager] logs.",
+        "On refusal the flight is created exactly as it is today, and one line logs the reason code, so a non-match is never silent.",
+        "endFlight() applies the deviation rule frozen in T-010 and logs what it decided.",
+        "A flight recorded with no active trip produces a database row identical, column for column, to one recorded before this change; verified by comparing a row taken before and after with sqlite3.",
+        "Verified without MSFS by posting synthetic frames to the existing /api/ingest endpoint: a takeoff sequence near a planned departure links the flight, and the same sequence 100 nm away does not.",
+        "The matcher runs once per flight start, not per frame: a simulated flight of at least 50 frames produces exactly one match log line.",
+        "The candidate legs are loaded once at takeoff, not per frame, and no additional scan of the airport table is added to the frame path.",
+        "An auto-linked flight can still be unlinked from the UI (T-013), and the unlink survives a server restart."
+      ],
+      "risks": [
+        "startFlight() is the hot path of the whole application. Any exception thrown by the matcher or the link write must not prevent the flight from being recorded; wrap the auto-link so that a failure degrades to an unlinked flight rather than a lost one.",
+        "The landing re-check runs in endFlight(), which is also reached from onCrash() and onSimDisconnect(); the deviation rule must behave sanely when a flight ends nowhere near any airport."
+      ],
+      "model": "opus",
+      "model_rationale": "Touches FlightManager, the highest-consequence existing code in the repo. Must add zero per-frame cost and leave the no-active-trip path byte-identical."
+    },
+    {
+      "id": "T-017",
+      "title": "Flight page: show the planned route under the flown track and the leg it is attached to",
+      "role": "dispatcher",
+      "phase": 4,
+      "deps": [
+        "T-014"
+      ],
+      "frozen_contracts": [
+        "T-010: link semantics",
+        "T-012: link/unlink endpoints"
+      ],
+      "allowed_paths": [
+        "client/src/components/FlightMap.tsx",
+        "client/src/pages/FlightDetail.tsx"
+      ],
+      "definition_of_done": [
+        "When a flight is linked to a planned leg, FlightMap draws the planned route as a dashed line beneath the flown track, using the same visual language as the trip map from T-008.",
+        "FlightDetail names the planned leg and its trip, and offers an unlink control that works without a manual reload.",
+        "A flight with no link renders exactly as it does today, including the map.",
+        "FlightMap's new prop is optional, so PrintFlight is unaffected and the flight PDF export still renders.",
+        "npm run build:client completes with no TypeScript errors.",
+        "EXPECTED-BEHAVIOUR RULE, not a defect: where a plan has procedures, the drawn planned route will visibly diverge from the flown track at both ends. LNM never writes procedure waypoints, so the en-route skeleton is close to a straight line between the airports - in the real IFR fixture, KSFO to EBAYE to KLAX measures 293.5 nm against a direct great circle of 293.2 nm, a 0.08 percent excess - while the real aircraft curves away through the SID at one end and the STAR and approach at the other. This divergence must be left visible and must NOT be corrected by snapping, interpolating or otherwise fitting the planned line to the flown track. Where the leg has a SID, STAR or approach, the UI says so, so the gap reads as missing procedure data rather than a drawing error."
+      ],
+      "risks": [
+        "This is the screen where a user will notice a wrong auto-match; the unlink control being one click away is what makes phase 4 safe to ship.",
+        "This is the screen where the end-divergence is most visible, since a single flight fills the map, so the temptation to snap the planned line to the track is strongest here."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Overlay rendering against frozen rules."
+    },
+    {
+      "id": "T-018",
+      "title": "Review phase 4: adversarial review of auto-matching",
+      "role": "reviewer",
+      "phase": 4,
+      "deps": [
+        "T-015",
+        "T-016",
+        "T-017"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase4.md"
+      ],
+      "definition_of_done": [
+        "T-015, T-016 and T-017 each reviewed individually against their definition_of_done, with a per-task verdict.",
+        "The reviewer attempts to produce a false positive on purpose, using a HAND-BUILT trip whose planned legs depart from two nearby airports, and confirms the matcher refuses rather than picks. This cannot be done with the three real fixtures - none of them share a departure field - so the reviewer must construct it.",
+        "The reviewer independently replays a synthetic takeoff through /api/ingest with no active trip and confirms the resulting flight row is identical to the pre-change baseline.",
+        "Confirms that a thrown error inside the auto-link path cannot prevent a flight from being recorded, by forcing one.",
+        "Confirms every refusal is logged with a reason code and that no refusal path is silent.",
+        "Confirms the frame path gained no per-frame database query or airport scan.",
+        "Verdict approve or request_changes with file:line findings, written to reviews/phase4.md.",
+        "The reviewer runs the full feature end to end against the real three-leg trip from samples/lnmpln/: import all three in alphabetical order, mark the trip active, replay a synthetic KSBA takeoff through /api/ingest, and confirm the flight attaches to leg 1 and not to legs 2 or 3. Then replay a KMRY takeoff and confirm it attaches to leg 2 while leg 1 stays linked to the first flight.",
+        "The reviewer also imports the real IFR fixture as a second trip and confirms that activating the VFR trip does not make the KSFO leg a candidate, and vice versa, so active-trip scoping is checked against two real trips rather than one."
+      ],
+      "risks": [],
+      "model": "opus",
+      "model_rationale": "Explicitly an adversarial review of auto-matching. The plan puts the false-positive weight here."
+    },
+    {
+      "id": "T-019",
+      "title": "Live panel: current planned leg, destination and what remains of the route",
+      "role": "dispatcher",
+      "phase": 5,
+      "deps": [
+        "T-018"
+      ],
+      "frozen_contracts": [
+        "T-010: link semantics",
+        "T-001: waypoint payload shape"
+      ],
+      "allowed_paths": [
+        "src/server.ts",
+        "src/types.ts",
+        "client/src/components/LivePanel.tsx",
+        "client/src/hooks/useStatus.ts",
+        "client/src/types.ts"
+      ],
+      "definition_of_done": [
+        "/api/status gains planned-leg context only while the state is FLYING and the flight is linked; the payload is otherwise byte-identical to today, verified by curl before and after with no flight in progress.",
+        "The live panel shows the planned destination ident, the next waypoint, and the remaining distance along the planned route, with remaining distance qualified as approximate for the same reason as elsewhere: procedure waypoints are absent from the file.",
+        "When the flight is unlinked, or the state is IDLE, the panel renders exactly as it does today.",
+        "The status endpoint stays cheap: the planned leg and its waypoints are loaded once when the link is established, not re-queried on every poll; verified by counting queries or by a log line over 20 polls.",
+        "npm run build completes with no TypeScript errors."
+      ],
+      "risks": [
+        "useStatus polls continuously; any per-poll join over waypoints turns a cheap endpoint into a hot query. Caching the linked leg in FlightManager state is the natural fix but adds state that must be invalidated on unlink."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Live panel over frozen data."
+    },
+    {
+      "id": "T-020",
+      "title": "Measure trip progress along the planned route in journey.ts",
+      "role": "dispatcher",
+      "phase": 5,
+      "deps": [
+        "T-019"
+      ],
+      "frozen_contracts": [
+        "T-001: planned waypoint payload"
+      ],
+      "allowed_paths": [
+        "src/journey.ts",
+        "client/src/types.ts",
+        "client/src/components/TripAtlas.tsx"
+      ],
+      "definition_of_done": [
+        "buildJourney() gains progress measured along the planned route (distance completed against total planned route distance), never raw distance flown, honouring the constraint recorded in the existing comment in src/journey.ts.",
+        "That comment is updated in place to record that progress now exists and is measured along the planned route, so the note stays true rather than stale.",
+        "A trip with no planned legs returns a journey identical to before: curl /api/trips/:id/journey on such a trip produces the same JSON as the pre-change build, verified by diff.",
+        "Progress is clamped to 0..100 and does not exceed 100 when the flown distance exceeds the planned distance, which is the normal case since procedure legs are missing from the plan.",
+        "The atlas displays the progress only for trips that have planned legs, and shows nothing new for trips that do not.",
+        "npm run build completes with no TypeScript errors."
+      ],
+      "risks": [
+        "The removed 'around the world' bar was removed for a good reason; reintroducing a progress indicator that is subtly wrong would repeat the mistake. Progress must be defined against the planned route only, and must be absent, not zero, when there is no plan."
+      ],
+      "model": "sonnet",
+      "model_rationale": "One function in journey.ts; the clamp is load-bearing but the rule is frozen in §6."
+    },
+    {
+      "id": "T-021",
+      "title": "Planned legs in the trip PDF export",
+      "role": "dispatcher",
+      "phase": 5,
+      "deps": [
+        "T-018"
+      ],
+      "frozen_contracts": [
+        "T-001: planned-leg payload",
+        "T-008: planned-route map rendering"
+      ],
+      "allowed_paths": [
+        "client/src/pages/PrintTrip.tsx",
+        "src/pdfExport.ts"
+      ],
+      "definition_of_done": [
+        "The trip PDF lists planned legs as clearly-marked unflown rows and draws them on the printed map, using TripMap's planned prop from T-008.",
+        "GET /api/trips/:id/export.pdf?plans=0 still skips the attached PDF flight plans; the query parameter's meaning is unchanged and the two features remain distinct in the code and in the printed labels.",
+        "Exporting a trip with no planned legs produces a PDF equivalent to one produced before this change.",
+        "The Puppeteer render still settles: MapReadySignal fires and the export completes for a trip with planned legs but no flown points, which would previously have rendered the empty-map message.",
+        "The printed map uses preferCanvas=false as the print pages already do, so planned routes print as vector paths rather than soft raster.",
+        "npm run build completes with no TypeScript errors."
+      ],
+      "risks": [
+        "A map that never signals ready hangs the export indefinitely; this is the single most likely way this task breaks an existing feature."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Print-route changes; the Puppeteer hang risk is called out in its own DoD."
+    },
+    {
+      "id": "T-022",
+      "title": "Review phase 5: live panel, progress and export",
+      "role": "reviewer",
+      "phase": 5,
+      "deps": [
+        "T-019",
+        "T-020",
+        "T-021"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase5.md"
+      ],
+      "definition_of_done": [
+        "T-019, T-020 and T-021 each reviewed individually against their definition_of_done, with a per-task verdict.",
+        "The reviewer independently diffs /api/status and /api/trips/:id/journey output for a trip with no planned legs against the pre-change build and confirms they are unchanged.",
+        "The reviewer independently exports a trip PDF with and without planned legs and confirms both complete and are correct.",
+        "Confirms the word 'flight plan' is not used ambiguously in any new user-facing string: the PDF attachment and the imported LNMPLN route are named distinctly.",
+        "Verdict approve or request_changes with file:line findings, written to reviews/phase5.md."
+      ],
+      "risks": [],
+      "model": "sonnet",
+      "model_rationale": "Scoped review of three additive surfaces."
+    },
+    {
+      "id": "T-023",
+      "title": "Ship: clean build, container build, backup rehearsal and README",
+      "role": "devops",
+      "phase": 5,
+      "deps": [
+        "T-022"
+      ],
+      "allowed_paths": [
+        "Dockerfile",
+        "docker-compose.yml",
+        "README.md",
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/reports/**"
+      ],
+      "definition_of_done": [
+        "npm ci followed by npm run build succeeds from a clean checkout with no TypeScript errors.",
+        "The Docker image builds and the container starts and serves /api/status; if the new samples/ directory or fast-xml-parser required a Dockerfile or .dockerignore change, it is made here and explained.",
+        "npm run backup succeeds and a restore from that backup into a scratch directory yields a database whose planned_legs rows survive, verified with sqlite3.",
+        "README documents importing .lnmpln plans, the active-trip flag, and manual link/unlink, and states plainly that an imported Little Navmap plan is a different thing from a PDF flight plan attached to a flight.",
+        "A closing report at reports/ship.md records the build output, the image size delta and any residual risk carried into production."
+      ],
+      "risks": [
+        "The README already describes the PDF attachment as the 'flight plan' feature; without an explicit distinction the two will be conflated by the next reader, including a future agent."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Build, container, backup rehearsal and README."
+    }
+  ],
+  "global_risks": [
+    "PARTLY RETIRED (2026-09-04, twice): four genuine Little Navmap 3.0.18 exports now sit in samples/lnmpln/ - a VFR trio chaining into one trip (KSBA to KMRY to KSTS to KACV) and a separate IFR plan (KSFO to KLAX, FL270). Real data now covers the parse happy path, both flightplan types, a full <Procedures> block with a CUSTOM approach, routes from 3 to 7 waypoints, and two NavData cycles. What survives is narrower but real: no file has an <Alternates> block, a <Departure> element, multiple <Waypoints> blocks, a BOM, an XML comment, a missing Pos/@Alt, a two-digit CreationDate offset, or disagreeing CruisingAlt/CruisingAltF, and none of the eight endpoints is a non-airport. Those, every rejection path, and a published non-custom approach remain covered only by fixtures we wrote ourselves. All four files are also one program version and one region.",
+    "Auto-matching at takeoff is the only place this feature can silently corrupt existing data. It is deliberately sequenced last among the behavioural phases, behind a working manual unlink, behind a pure module with a scenario harness, and behind an adversarial review.",
+    "There is no test framework and none is being added, so the two ts-node inspectors are the entire regression net for the parser and the matcher. They should be kept runnable and referenced in the README, or they will rot.",
+    "flights.db is live user data with a WAL. Every schema rehearsal must run against a checkpointed copy, never the working database.",
+    "Two features are called 'flight plan' in this codebase. Every task above that touches user-facing strings or the export path carries an explicit non-conflation check.",
+    "Batch ordering is inferred rather than declared. The chain-sort exists because Little Navmap filenames sort alphabetically into an order unrelated to the route, and the three real fixtures demonstrate this precisely: alphabetically they arrive in exact reverse. The inference is right for a linear trip and wrong for an out-and-back, which is why the fallback, the warning and the manual reorder all have to work.",
+    "The XSD at .claude/runs/2026-09-04-lnmpln-trip-planner/lnmpln.xsd is NOT an exhaustive description of what Little Navmap writes. The real IFR file contains <CustomOffsetAngle>, which the XSD Approach does not declare among its nine children; the XSD SID likewise declares only Name/Runway/Transition while the manual documents a Type=CUSTOMDEPART variant with CustomDistance. Any task that treats the XSD as complete will drop real data silently. Read by tag name, tolerate undeclared elements, and never reject an element for being undocumented."
+  ],
+  "open_questions": [
+    "ANSWERED (2026-09-04): four real .lnmpln files are now in samples/lnmpln/, including the IFR export with procedures that was the outstanding ask. The remaining fixture gaps are narrower and mostly cannot be produced by flying: a plan with <Alternates>, a plan saved from a parking position so it carries <Departure>, and a file from an older Little Navmap version. Ask the user for those only if cheap; otherwise synthesize and accept the residual risk.",
+    "What departure radius feels right in practice? T-010 must pick a number, but it can only be calibrated once real takeoffs are observed; expect one tuning pass after phase 4 ships.",
+    "Should importing a plan whose departure matches an already-flown flight in the same trip offer to link them retroactively? Out of scope as planned, but a natural follow-up once phase 3 exists.",
+    "Should the chain-sort also run when legs are added to a trip that already has planned legs, chaining onto the existing tail rather than only within the uploaded batch? Out of scope as planned - T-004 chains within the batch only - but it is the obvious next question the first time someone imports leg 4 of a trip on its own.",
+    "How should a leg with procedures present its distance? The en-route skeleton understates the flown route by the length of the SID, STAR and approach, which the file never contains. T-005 already labels such distances approximate; whether to additionally show that procedures are present, so the reader knows WHY it is approximate, is a UX call worth making once real legs are on screen."
+  ],
+  "amendments": [
+    {
+      "by": "orchestrator",
+      "date": "2026-09-04",
+      "change": "Added src/geo.ts to the allowed_paths of T-002 (creates it) and T-015 (imports it), per the Designer freeze §4.1/§4.2. T-002 and T-015 are in different phases and never run in parallel, so the disjointness rule still holds."
+    },
+    {
+      "by": "planner",
+      "date": "2026-09-04",
+      "change": "Folded the §9.2 batch-ordering defect into the plan and reshaped the fixture risk now that three real .lnmpln files have arrived. Added the chain-sort as a frozen decision. T-001 gains a DoD line requiring the ordering rule, uniqueness condition, fallback and warning to be specified. T-004 owns the implementation and carries the sharpest regression test in the feature: importing the three real files in alphabetical order (which is exact reverse route order) must yield seq 1,2,3 = KSBA->KMRY, KMRY->KSTS, KSTS->KACV from one sqlite3 query, plus a fallback case covering a round trip. T-005 surfaces the fallback warning and the manual reorder. T-006 and T-018 now use the real three-leg trip as their integration scenario instead of synthesized data. T-002 and T-015 now state which fixtures are real and which must still be synthesized. Beyond the traps the Orchestrator listed (4, 5, 7, 8, 10, 11, 12), inspection of the files shows traps 2, 3, 6 and 9 are ALSO still synthetic: no <Comment> or <Description> appears in any of the three, no waypoint deviates from XSD element order, all six endpoints are AIRPORT, and CruisingAlt equals CruisingAltF in all three so no real fixture can prove the parser reads the float. Also noted: <AircraftPerformance> in all three carries no <FilePath> child, though intake.md lists it. No task ids were renumbered and no task was added or removed.",
+      "tasks_touched": [
+        "T-001",
+        "T-002",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-015",
+        "T-018"
+      ]
+    },
+    {
+      "by": "planner",
+      "date": "2026-09-04",
+      "change": "Folded design.md Amendment B into the plan after the real IFR fixture (KSFO to KLAX, FL270, SID WESLA5/28L/SUSEY, STAR IRNMN2/24R/BURGL, CUSTOM approach KLAX24R) arrived. T-003 picks up the widened procedure schema: the earlier nine-column freeze had no home for the approach type or its three Custom* values, so columns for approach type/arinc/suffix/transition_type/custom_distance/custom_altitude/custom_offset_angle and SID type/custom_distance are now required, all nullable so the procedure-free VFR trio still imports. T-002 must populate them and must tolerate elements the XSD does not declare; no acceptance line in that task is now phrased as XSD conformance. T-004 gains a twelve-value procedure round-trip check against the IFR fixture in one sqlite3 query, plus a mixed-batch NO_UNIQUE_HEAD fallback case. T-008 and T-017 gain an expected-behaviour rule: the planned route visibly diverging from the flown track at both ends is CORRECT where procedures exist, must stay visible, and must not be snapped to the track. Fixture accounting updated in T-002 and T-015; T-018 now scopes active-trip checks against two real trips. Independently verified while amending: CustomOffsetAngle is absent from the XSD Approach (which declares exactly nine children), the XSD SID also omits the documented Type/CustomDistance so the gap is not unique to Approach, no real file has an <Alternates> or <Departure> element, cycles are 1801 (x3) and 2609, and the skeleton-versus-great-circle figures recompute to 293.48 nm against 293.23 nm, a 0.084 percent excess. No task ids renumbered; no task added or removed.",
+      "tasks_touched": [
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-008",
+        "T-015",
+        "T-017",
+        "T-018"
+      ]
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-04",
+      "change": "Assigned a model tier and rationale to every task per the new agents.md model-choice rule. Recorded the policy in model_policy. No task, dependency or allowed_path changed."
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-04",
+      "change": "T-002 DoD corrections after the dispatcher run: bad-* fixtures are under samples/lnmpln/synthetic/, and the chain-sort demonstration globs VFR*.lnmpln since the all-four glob correctly reports NO_UNIQUE_HEAD once the IFR fixture is present. Also approved the additive ParsedFlightPlan provenance fields (simData, navDataSource, navDataCycle) and required UNKNOWN_ELEMENT to scan <Procedures>."
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-04",
+      "change": "Phase-1 review closed: verdict approve. Ratified T-003 owning the full migration block per reviewer adjudication 2 and narrowed T-011 to the functions only. Recorded that T-004 DoD 15 asked for an artifact the task had no writable path for. Findings F-1 to F-4 dispatched as T-004b; F-5, F-6, F-7 deferred as follow-ups."
+    }
+  ],
+  "model_policy": {
+    "rule": "agents.md: model choice must match task complexity — lighter/faster for simple scoped tasks, stronger reasoning for ambiguous, cross-file or high-risk tasks.",
+    "assigned_by": "orchestrator",
+    "date": "2026-09-04",
+    "tiers": {
+      "opus": "Ambiguous, cross-file, or high-risk: the parser, the matcher, the FlightManager hook, and the two reviews that gate them.",
+      "sonnet": "Scoped work against a frozen contract — schema, endpoints, client, rendering, and the narrower reviews.",
+      "haiku": "Not assigned. No task in this plan is both trivial and low-consequence; see notes."
+    },
+    "notes": "Every remaining task either edits shared state or is gated by a contract whose misreading is expensive. The one genuine haiku candidate — writing the synthetic bad-*.lnmpln fixtures — is a sub-part of T-002 and is not worth splitting out purely to fit a tier."
+  }
+}

@@ -1,16 +1,41 @@
 import express from 'express';
 import multer, { MulterError } from 'multer';
 import path from 'path';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName } from './db';
+import { createHash } from 'crypto';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
 import { buildJourney } from './journey';
+import { parseLnmpln, LnmplnParseError, chainOrderForBatch, type ParsedFlightPlan } from './lnmpln';
 import type { FlightManager } from './flightManager';
-import type { Flight, FlightEditPayload, TripEditPayload } from './types';
+import type { Flight, FlightEditPayload, TripEditPayload, PlannedLegWithChildren } from './types';
 import { createIngestRouter } from './ingest';
 
 const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FLIGHT_PLAN_BYTES } });
+
+// ── LNMPLN import ──────────────────────────────────────────────────────────
+// A separate multer instance, deliberately: a real .lnmpln plan is a few KB of
+// XML, so it gets its own, much smaller, limit rather than sharing
+// MAX_FLIGHT_PLAN_BYTES (20 MB, PDFs). design.md §7.1, §20 item 2.
+const MAX_LNMPLN_BYTES = 512 * 1024;
+const MAX_LNMPLN_FILES = 25;
+const uploadLnmpln = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_LNMPLN_BYTES, files: MAX_LNMPLN_FILES },
+});
+
+/**
+ * Content sniffing for an uploaded .lnmpln: after BOM stripping and
+ * trimStart(), the bytes must begin with '<'. The extension is not trusted and
+ * not required. Mirrors the parser's own BOM handling so a file that passes
+ * here is never rejected by the parser for the same reason. design.md §7.1.
+ */
+function looksLikeXml(buf: Buffer): boolean {
+  let text = buf.toString('utf8');
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  return text.trimStart().startsWith('<');
+}
 
 /** ASCII-safe slug, so Content-Disposition needs no RFC 5987 encoding. */
 function slugify(value: string): string {
@@ -345,6 +370,182 @@ export function createServer(flightManager: FlightManager): express.Express {
     }
   });
 
+  // ── Planned legs ───────────────────────────────────────────────────────────
+  // Registered after ── Trips ── and before ── PDF export ──, so every literal
+  // route here stays ahead of app.get('*'). design.md §7.3.
+
+  app.post('/api/trips/:id/planned-legs', uploadLnmpln.array('lnmpln', MAX_LNMPLN_FILES), (req, res) => {
+    const tripId = parseInt(req.params.id, 10);
+    if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id' }); return; }
+    if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found' }); return; }
+
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (files.length === 0) { res.status(400).json({ error: 'No files uploaded' }); return; }
+
+    const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === '1';
+
+    interface FileOutcome {
+      filename: string;
+      status: 'imported' | 'duplicate' | 'rejected';
+      planned_leg_id?: number;
+      warnings?: { code: string; message: string }[];
+      error?: string;
+    }
+
+    const results: FileOutcome[] = [];
+    // Only successfully-parsed, non-duplicate files participate in chain-sort
+    // and get inserted; in upload order until chainOrderForBatch reorders them.
+    const toInsert: { filename: string; sha256: string; plan: ParsedFlightPlan; resultIndex: number }[] = [];
+    // F-1: findPlannedLegBySource only sees rows already committed, and every
+    // insert in this handler happens after this whole scan loop — so without
+    // this, the same file twice in one request sailed past the DB check both
+    // times and came out as two legs. Tracks the resultIndex of the first
+    // (non-duplicate) occurrence of each hash so a repeat within the batch is
+    // caught before it ever reaches toInsert.
+    const seenInBatch = new Map<string, number>();
+    // resultIndex (duplicate) -> resultIndex (the in-batch original) so the
+    // duplicate's planned_leg_id can be backfilled once the original is
+    // actually inserted below, the same as the cross-request case reports one.
+    const duplicateOfInBatch = new Map<number, number>();
+
+    for (const file of files) {
+      const filename = file.originalname;
+
+      if (!looksLikeXml(file.buffer)) {
+        results.push({ filename, status: 'rejected', error: "NOT_XML: file does not begin with '<'" });
+        continue;
+      }
+
+      let plan: ParsedFlightPlan;
+      try {
+        plan = parseLnmpln(file.buffer);
+      } catch (err) {
+        if (err instanceof LnmplnParseError) {
+          results.push({ filename, status: 'rejected', error: `${err.code}: ${err.message}` });
+          continue;
+        }
+        res.status(500).json({ error: String(err) });
+        return;
+      }
+
+      const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+
+      if (!allowDuplicates) {
+        const existing = findPlannedLegBySource(tripId, sha256);
+        if (existing) {
+          results.push({
+            filename, status: 'duplicate', planned_leg_id: existing.id,
+            error: `Already imported into this trip as leg ${existing.seq}`,
+          });
+          continue;
+        }
+
+        const dupOf = seenInBatch.get(sha256);
+        if (dupOf !== undefined) {
+          results.push({
+            filename, status: 'duplicate',
+            error: `Duplicate of "${results[dupOf].filename}" earlier in this upload`,
+          });
+          duplicateOfInBatch.set(results.length - 1, dupOf);
+          continue;
+        }
+      }
+
+      // F-2: a warning means the parser tolerated something worth a human's
+      // attention (design.md §5.4e) — log it at import time, since nothing
+      // downstream of a successful import currently does.
+      for (const w of plan.warnings) {
+        console.warn(`[LNMPLN] ${filename}: ${w.code}: ${w.message}`);
+      }
+
+      results.push({ filename, status: 'imported', warnings: plan.warnings });
+      seenInBatch.set(sha256, results.length - 1);
+      toInsert.push({ filename, sha256, plan, resultIndex: results.length - 1 });
+    }
+
+    const order = chainOrderForBatch(toInsert.map((t) => t.plan));
+
+    const imported: PlannedLegWithChildren[] = [];
+    try {
+      for (const idx of order.order) {
+        const entry = toInsert[idx];
+        const legId = createPlannedLeg({
+          tripId, plan: entry.plan, sourceFilename: entry.filename, sourceSha256: entry.sha256,
+        });
+        results[entry.resultIndex].planned_leg_id = legId;
+        imported.push(getPlannedLegById(legId)!);
+      }
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+      return;
+    }
+
+    for (const [dupIdx, origIdx] of duplicateOfInBatch) {
+      results[dupIdx].planned_leg_id = results[origIdx].planned_leg_id;
+    }
+
+    if (imported.length === 0) {
+      // F-3: chainOrderForBatch([]) reports SINGLE_LEG, which is meaningless
+      // for a batch that inserted nothing — omit it rather than log a chain
+      // verdict for zero legs. The client only branches on batch.ordering,
+      // and only when it's present, so this is safe on that side too.
+      res.status(400).json({ imported, results });
+      return;
+    }
+    const batch = { ordering: (order.resolved ? 'chain' : 'upload') as 'chain' | 'upload', reason: order.reason };
+    res.status(201).json({ imported, batch, results });
+  });
+
+  app.get('/api/trips/:id/planned-legs', (req, res) => {
+    const tripId = parseInt(req.params.id, 10);
+    if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id' }); return; }
+    if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found' }); return; }
+    try {
+      res.json(getPlannedLegsForTrip(tripId));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.patch('/api/trips/:id/planned-legs/order', (req, res) => {
+    const tripId = parseInt(req.params.id, 10);
+    if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id' }); return; }
+    if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found' }); return; }
+
+    const { legIds } = req.body as { legIds?: unknown };
+    if (!Array.isArray(legIds) || !legIds.every((x) => Number.isInteger(x))) {
+      res.status(400).json({ error: 'legIds must be an array of integers' }); return;
+    }
+
+    const existingIds = getPlannedLegsForTrip(tripId).map((l) => l.id).sort((a, b) => a - b);
+    const providedIds = [...(legIds as number[])].sort((a, b) => a - b);
+    const sameMultiset = existingIds.length === providedIds.length
+      && existingIds.every((id, i) => id === providedIds[i]);
+    if (!sameMultiset) {
+      res.status(400).json({ error: 'legIds must list every planned leg of this trip exactly once' });
+      return;
+    }
+
+    reorderPlannedLegs(tripId, legIds as number[]);
+    res.json(getPlannedLegsForTrip(tripId));
+  });
+
+  app.get('/api/planned-legs/:legId', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    const leg = getPlannedLegById(legId);
+    if (!leg) { res.status(404).json({ error: 'Not found' }); return; }
+    res.json(leg);
+  });
+
+  app.delete('/api/planned-legs/:legId', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    const deleted = deletePlannedLeg(legId);
+    if (!deleted) { res.status(404).json({ error: 'Not found' }); return; }
+    res.json({ deleted: true });
+  });
+
   // ── PDF export ────────────────────────────────────────────────────────────
   // Registered before the SPA catch-all so they aren't swallowed by it.
 
@@ -396,10 +597,21 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (err instanceof MulterError) {
-      const message = err.code === 'LIMIT_FILE_SIZE'
-        ? `File too large (max ${MAX_FLIGHT_PLAN_BYTES / (1024 * 1024)}MB)`
-        : err.message;
-      res.status(400).json({ error: message });
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        // err.field distinguishes which multer instance hit its limit: the
+        // shared PDF message would be wrong (and misleadingly large) for an
+        // oversized .lnmpln. design.md §7.1, §20 item 2.
+        const message = err.field === 'lnmpln'
+          ? `File too large (max ${MAX_LNMPLN_BYTES / 1024}KB)`
+          : `File too large (max ${MAX_FLIGHT_PLAN_BYTES / (1024 * 1024)}MB)`;
+        res.status(400).json({ error: message });
+        return;
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        res.status(400).json({ error: `Too many files (max ${MAX_LNMPLN_FILES})` });
+        return;
+      }
+      res.status(400).json({ error: err.message });
       return;
     }
     next(err);

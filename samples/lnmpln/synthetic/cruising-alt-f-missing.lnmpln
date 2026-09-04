@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>8000</CruisingAlt>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <Waypoints>
+      <Waypoint>
+        <Ident>KSBA</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-119.841507" Lat="34.426201" Alt="14.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952" Alt="257.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>

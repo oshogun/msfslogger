@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>6500</CruisingAlt>
+      <CruisingAltF>6500.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <Waypoints>
+      <Waypoint>
+        <Ident>WP1</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-120.128807" Lat="34.383888" Alt="6500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>OINGO</Ident>
+        <Region>K2</Region>
+        <Type>WAYPOINT</Type>
+        <Pos Lon="-120.466133" Lat="34.343418" Alt="6500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP2</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-120.800003" Lat="34.849998" Alt="6500.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>

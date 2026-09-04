@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>IFR</FlightplanType>
+      <CruisingAlt>11000</CruisingAlt>
+      <CruisingAltF>11000.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T18:08:44-03:00</CreationDate>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+    </Header>
+    <Alternates>
+      <Alternate>
+        <Name>Monterey Rgnl</Name>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952"/>
+      </Alternate>
+      <Alternate>
+        <Name>Charles M Schulz - Sonoma Coun</Name>
+        <Ident>KSTS</Ident>
+        <Type>AIRPORT</Type>
+      </Alternate>
+    </Alternates>
+    <Waypoints>
+      <Waypoint>
+        <Name>San Francisco Intl</Name>
+        <Ident>KSFO</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-122.375519" Lat="37.618023" Alt="13.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Name>Los Angeles Intl</Name>
+        <Ident>KLAX</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-118.409332" Lat="33.942474" Alt="111.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>
