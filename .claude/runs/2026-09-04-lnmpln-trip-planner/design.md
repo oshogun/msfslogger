@@ -102,6 +102,53 @@ worst on exactly the plans that have procedures.
 
 ---
 
+## Amendment C — 2026-09-05 — what the phase-3 review found
+
+Four corrections, all arising from T-014's review of the manual escape hatch.
+Three are ordinary defects and are recorded in `reviews/phase3.md`; the two
+below changed this document, and both were adjudicated by the Orchestrator
+because the frozen design was self-inconsistent rather than merely unimplemented.
+
+**C-1. Eligibility is decided in the matcher, never in the query (§13.2, §13.5).**
+The candidate loader was named `getUnflownPlannedLegsForActiveTrip` and filtered
+`status NOT IN ('flown','diverted')` in SQL. That reads as harmless — the name
+endorses it — but §13.2 step 5 defines `LEG_ALREADY_FLOWN` as a refusal reached
+*inside* the matcher, and a leg filtered out by the query never reaches step 5.
+The code was therefore unreachable in production, and the case it exists to
+explain degraded into a bare `NO_LEG_IN_RADIUS`: measured against the real
+fixtures, a second KSBA takeoff after leg 1 is flown reported the nearest
+remaining candidate at ~160 nm rather than naming the obstacle 0 nm away.
+
+The query already deferred `skipped` and already-linked legs to step 5, so
+`flown`/`diverted` was an arbitrary exception to a rule the design otherwise kept.
+§13.2's own argument for why strict ambiguity refusal is affordable — *"by the
+time leg 3 is flown, leg 1 is `flown` and linked, so step 5 filters it out"* — is
+written in terms of step 5, not the query.
+
+**The loader returns every leg of the active trip and is renamed
+`getPlannedLegCandidatesForActiveTrip`.** Step 5 is the single place eligibility
+is decided. Done now, before T-015 and T-016 exist, precisely so no call site
+needs revisiting — and so T-015's scenario harness cannot green-light a branch
+production can never reach.
+
+**C-2. `deleteTrip()` must restore link-moved flights (§16).** §16 said it needed
+no change. That holds for `trip_id` in general and still does. It does not hold
+for a flight a *link* moved into the trip: the cascade nulls `planned_leg_id`,
+the dead `trip_id` remains, and `planned_leg_prev_trip_id` is discarded unread —
+the one path where the link's promise to restore is silently broken. §16 now
+carries the fix. Ordinary trip membership is untouched, as §20 requires.
+
+**The rule both share, worth stating once.** A guard belongs at the layer every
+caller passes through. C-1 moves a decision *out* of the query into the matcher
+because that is where every candidate is judged; the re-link guard (F-2) went
+*into* `linkFlightToPlannedLeg` rather than the endpoint because T-016 calls the
+db function directly, and an endpoint guard would have protected the watched path
+while leaving the unattended one exposed. Phase 4 adds a second caller to
+everything this phase built; anything guarded only at the HTTP edge is guarded
+only against the user.
+
+---
+
 ## 1. Vocabulary, and the rule that keeps two features apart
 
 This codebase already has a feature called *flight plan*: a **PDF attached to a
@@ -1172,7 +1219,8 @@ row payload — the same choice `getTrips()` already makes for `flight_count` an
 > becomes: after deleting a linked flight,
 > `select planned_leg_id from flights where planned_leg_id = <leg>` returns no
 > rows, `select status from planned_legs where id = <leg>` returns `planned`, and
-> the leg reappears in `getUnflownPlannedLegs()`. Same guarantee, different query.
+> the leg reappears in `getPlannedLegCandidatesForActiveTrip()` as an *eligible*
+> candidate. Same guarantee, different query.
 
 ### 12.2 Unlink restores the previous trip
 
@@ -1332,6 +1380,24 @@ SNIPPET_NO_DEPARTURE_AIRPORT
 FLIGHT_ALREADY_LINKED
 ```
 
+**`nearbyLegIds` is not one set.** For `AMBIGUOUS` it carries the *eligible* ids
+— step 6's "their ids" — because an ineligible leg did not cause the ambiguity
+and naming it would blame the wrong leg. For every other outcome reached after
+the radius test it carries *all* ids within the radius, which is what §13.5's log
+line means by "within 10 nm". Before the radius is usefully applied
+(`NO_ACTIVE_TRIP`, `NO_PLANNED_LEGS`, `FLIGHT_ALREADY_LINKED`,
+`NO_LEG_IN_RADIUS`) it is empty. Clarified 2026-09-05: T-015 found the two texts
+disagreeing and implemented each where it speaks. Do not collapse them.
+
+**`FLIGHT_ALREADY_LINKED` is unreachable from `startFlight()`, by construction.**
+`insertFlight()` runs one line earlier, so a freshly inserted flight cannot
+already hold a link and the argument is always `null` there. The guard stays
+anyway: `matchPlannedLeg` is a pure function with its own harness, step 0 is
+meaningful to any other caller, and a matcher that silently ignored an existing
+link would be a worse function. Recorded 2026-09-05 (T-018 finding F-4) so the
+next reader does not "clean up" a branch that production never takes and does not
+mistake its absence from a production log sweep for a defect.
+
 These strings are the contract between the matcher, the log, the API and the UI.
 Do not rename them, do not localise them at the source, do not add a case without
 adding it here. The UI maps each to one sentence; `AMBIGUOUS` names the candidate
@@ -1342,8 +1408,16 @@ legs from `nearbyLegIds`.
 - Called **once**, from `startFlight()`, immediately after the existing
   `findNearestAirport()` call and after `insertFlight()` (the flight id is needed
   to write the link). One extra query loads the candidates:
-  `getUnflownPlannedLegsForActiveTrip()` — one indexed read over a table with tens
+  `getPlannedLegCandidatesForActiveTrip()` — one indexed read over a table with tens
   of rows, joined to `trips` on `is_active = 1`.
+
+  *Clarified 2026-09-05 (T-016).* The **matched** path costs a second read,
+  `getPlannedLegById()`, because `LegMatchCandidate` carries `departureIdent` but
+  no destination, and the log line below names the whole route. It runs once per
+  flight and only on a match. "One extra query" above is a budget for the frame
+  path and the common case; it is not a licence to drop the `LEBL→LEMD` fragment,
+  which is most of the line's value when someone is working out why a flight
+  attached to the wrong leg.
 - **Never called from `onFrame`, `recordPoint` or `writePoint`.** A 50-frame
   simulated flight must produce exactly one match log line.
 - **No new airport scan.** `findNearestAirport` is a linear scan over ~40k
@@ -1445,6 +1519,17 @@ Two rules that fall out and must be respected:
 - **`flown` and `diverted` are set by the system only.** The `PATCH` endpoint
   accepts `planned` and `skipped` and nothing else; a client cannot declare a leg
   flown.
+- **A linked leg's status is not the user's to set at all** *(2026-09-05, T-018
+  finding F-1)*. `setPlannedLegStatus` refuses with a 409 naming the flight
+  whenever the leg still has one. The narrow bug was `PATCH {status:'planned'}`
+  on a linked `flown`/`diverted` leg: it returned 200, destroyed
+  `arrival_deviation_nm`, and kept the link — a state this table does not
+  define. The guard is deliberately wider than that one case, because the table
+  already says the only route out of `flown`/`diverted` is **unlink**, which
+  clears the deviation precisely because the link is going away with it.
+  Consequence worth knowing: a `skipped` leg that was then linked by hand cannot
+  be un-skipped directly; unlink it first. That combination is contradictory
+  anyway — a leg with a flight attached is not skipped — and the 409 says so.
 
 There is no `linked` value in the `status` column on purpose: "linked" is
 `status='planned'` plus the existence of the link, so the two facts can never
@@ -1485,9 +1570,17 @@ carried-over leg link would put the new flight in no trip while claiming a leg
 that belongs to one. Combining is a repair operation; the user re-links by hand
 with the escape hatch. This is a known, documented limitation, not an oversight.
 
-**`deleteTrip(id)`** — needs **no** change. The cascade handles legs, waypoints,
-alternates and the `SET NULL` on linked flights. Flights keep their dangling
-`trip_id`, exactly as today.
+**`deleteTrip(id)`** — *amended, see Amendment C.* The cascade handles legs,
+waypoints, alternates and the `SET NULL` on linked flights, and a flight that was
+in the trip by ordinary assignment still keeps its dangling `trip_id` exactly as
+today. But a flight a **link** moved into the trip is different in kind, and the
+cascade strands it: `planned_leg_id` is nulled, the dead `trip_id` stays, and
+`planned_leg_prev_trip_id` — the record of where the flight came from — is
+discarded unread. So before the delete, in the same transaction, restore
+`trip_id` from `planned_leg_prev_trip_id` and clear all three `planned_leg_*`
+columns for every flight whose `planned_leg_id` belongs to a leg of this trip.
+The rows must be read *before* the cascade fires; afterwards the association is
+gone. Only link-moved flights are touched.
 
 **`deletePlannedLeg(legId)`** — the cascade handles the children and the
 `SET NULL`, but the flight's two bookkeeping columns must be cleared too, and its

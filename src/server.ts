@@ -2,7 +2,7 @@ import express from 'express';
 import multer, { MulterError } from 'multer';
 import path from 'path';
 import { createHash } from 'crypto';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
 import { buildJourney } from './journey';
@@ -263,6 +263,41 @@ export function createServer(flightManager: FlightManager): express.Express {
     const removed = removeFlightFromTrip(flightId);
     if (!removed) { res.status(404).json({ error: 'Flight not found' }); return; }
     res.json({ ok: true });
+  });
+
+  // ── Active trip ────────────────────────────────────────────────────────────
+  // /api/active-trip is a new top-level prefix, chosen precisely so it cannot
+  // collide with anything — in particular so it never sits as a literal in the
+  // :id slot of the destructive DELETE /api/trips/:id. design.md §11.3, §20
+  // item 15. The payload is camelCase because it is a computed view (which
+  // trip, if any, is active), not a row (design.md §17).
+
+  app.get('/api/active-trip', (_req, res) => {
+    try {
+      const tripId = getActiveTripId();
+      const trip = tripId !== null ? getTripById(tripId) : null;
+      res.json({ tripId, name: trip ? trip.name : null });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.put('/api/active-trip', (req, res) => {
+    const { tripId } = req.body as { tripId?: unknown };
+    if (tripId !== null && !Number.isInteger(tripId)) {
+      res.status(400).json({ error: 'tripId must be an integer or null' }); return;
+    }
+    if (tripId !== null && !getTripById(tripId as number)) {
+      res.status(404).json({ error: 'Trip not found' }); return;
+    }
+
+    try {
+      setActiveTrip(tripId as number | null);
+      const trip = tripId !== null ? getTripById(tripId as number) : null;
+      res.json({ tripId, name: trip ? trip.name : null });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   app.get('/api/flights/:id', (req, res) => {
@@ -544,6 +579,68 @@ export function createServer(flightManager: FlightManager): express.Express {
     const deleted = deletePlannedLeg(legId);
     if (!deleted) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ deleted: true });
+  });
+
+  app.patch('/api/planned-legs/:legId', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    // 'flown' and 'diverted' are set by the system only — by landing within
+    // ARRIVAL_RADIUS_NM of the planned destination — so a client asking for
+    // either is a 400, not a state a PATCH can request. design.md §15.
+    const { status } = req.body as { status?: unknown };
+    if (status !== 'planned' && status !== 'skipped') {
+      res.status(400).json({ error: "status must be 'planned' or 'skipped'" }); return;
+    }
+
+    if (!getPlannedLegById(legId)) { res.status(404).json({ error: 'Not found' }); return; }
+
+    try {
+      setPlannedLegStatus(legId, status);
+      res.json(getPlannedLegById(legId));
+    } catch (err) {
+      if (err instanceof PlannedLegHasLinkedFlightError) {
+        res.status(409).json({ error: err.message }); return;
+      }
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ── Flight ↔ planned-leg link ─────────────────────────────────────────────
+  // Deliberately NOT restricted to the active trip: any unflown planned leg of
+  // ANY trip can be linked by hand, since this is the escape hatch for a bad
+  // (or missing) auto-match and must not be constrained by the mechanism it
+  // exists to correct. design.md §12.3.
+
+  app.put('/api/flights/:id/planned-leg', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+    if (!getFlightById(id)) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    const { plannedLegId } = req.body as { plannedLegId?: unknown };
+    if (plannedLegId !== null && !Number.isInteger(plannedLegId)) {
+      res.status(400).json({ error: 'plannedLegId must be an integer or null' }); return;
+    }
+    if (plannedLegId !== null && !getPlannedLegById(plannedLegId as number)) {
+      res.status(404).json({ error: 'Planned leg not found' }); return;
+    }
+
+    try {
+      if (plannedLegId === null) {
+        // Idempotent, symmetric with PUT /api/active-trip: unlinking a flight
+        // that has no link is a no-op, not a 404 — there is nothing wrong
+        // with the request, the flight is already in the state it asked for.
+        unlinkFlightFromPlannedLeg(id);
+      } else {
+        linkFlightToPlannedLeg(id, plannedLegId as number, 'manual');
+      }
+      res.json(getFlightById(id));
+    } catch (err) {
+      if (err instanceof PlannedLegAlreadyLinkedError) {
+        res.status(409).json({ error: err.message }); return;
+      }
+      res.status(500).json({ error: String(err) });
+    }
   });
 
   // ── PDF export ────────────────────────────────────────────────────────────

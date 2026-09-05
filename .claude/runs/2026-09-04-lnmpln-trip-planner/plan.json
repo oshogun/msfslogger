@@ -58,7 +58,9 @@
         "T-015",
         "T-016",
         "T-017",
-        "T-018"
+        "T-018",
+        "T-024",
+        "T-025"
       ]
     },
     {
@@ -498,7 +500,8 @@
         "client/src/pages/Home.tsx",
         "client/src/types.ts",
         "client/src/utils/api.ts",
-        "client/src/index.css"
+        "client/src/index.css",
+        "client/src/components/PlannedLegRows.tsx"
       ],
       "definition_of_done": [
         "The trip page has a control to make this trip the active trip and to clear it, and the current state is visible without hovering or guessing.",
@@ -594,7 +597,8 @@
       ],
       "allowed_paths": [
         "src/flightManager.ts",
-        "src/index.ts"
+        "src/index.ts",
+        "src/db.ts"
       ],
       "definition_of_done": [
         "startFlight() consults the matcher after its existing findNearestAirport() call and, on a match, links the new flight to the planned leg and to its trip in the same code path, logging one line naming the flight, the leg and the reason code, in the style of the existing [FlightManager] logs.",
@@ -627,7 +631,9 @@
       ],
       "allowed_paths": [
         "client/src/components/FlightMap.tsx",
-        "client/src/pages/FlightDetail.tsx"
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/components/TripMap.tsx",
+        "client/src/utils/geo.ts"
       ],
       "definition_of_done": [
         "When a flight is linked to a planned leg, FlightMap draws the planned route as a dashed line beneath the flown track, using the same visual language as the trip map from T-008.",
@@ -814,6 +820,63 @@
       ],
       "model": "sonnet",
       "model_rationale": "Build, container, backup rehearsal and README."
+    },
+    {
+      "id": "T-024",
+      "title": "Show the landing outcome on a planned leg (arrival deviation)",
+      "role": "dispatcher",
+      "phase": 4,
+      "deps": [
+        "T-018"
+      ],
+      "frozen_contracts": [
+        "design.md §14: the leg row shows the badge, planned destination, actual arrival, deviation and an unlink control"
+      ],
+      "allowed_paths": [
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/index.css"
+      ],
+      "definition_of_done": [
+        "A 'flown' leg shows its deviation from the plan ('flown, 3.1 nm from plan'), secondary and quiet.",
+        "A 'diverted' leg shows the planned destination ident, the actual arrival (flights.arrival_icao, or coordinates when it did not resolve), and the deviation.",
+        "The deviation does NOT take the 'approx.' prefix: it is measured from the recorded track, not derived from the waypoint chain. §6's distinction is the point.",
+        "Legs with arrival_deviation_nm NULL — every unflown leg and every leg imported before phase 4 — render exactly as before.",
+        "plannedLegBadge() is reused, not re-defined; no second badge vocabulary.",
+        "No server change: every field is already in the payload.",
+        "Verified by rendering headlessly, not by reading the JSX."
+      ],
+      "risks": [
+        "§14's UI contract was written in phase 3 and had no owning task; phase 4 started writing the column, so without this task the feature records its most interesting fact and never shows it (T-018 finding F-3)."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Client rendering against a contract frozen in §14."
+    },
+    {
+      "id": "T-025",
+      "title": "Close phase-4 review findings F-1, F-2 and F-4",
+      "role": "dispatcher",
+      "phase": 4,
+      "deps": [
+        "T-018"
+      ],
+      "allowed_paths": [
+        "src/db.ts",
+        "src/inspect-legmatch.ts",
+        "src/flightManager.ts"
+      ],
+      "definition_of_done": [
+        "F-1: setPlannedLegStatus refuses to reset a LINKED flown/diverted leg to 'planned', which today returns 200 and destroys arrival_deviation_nm while keeping the link — a state §15 does not define. Reuses PlannedLegHasLinkedFlightError so the endpoint needs no change.",
+        "F-2: inspect-legmatch.ts gains a database-backed section asserting getPlannedLegCandidatesForActiveTrip() returns all four statuses, so a re-introduced status filter (an Amendment C revert) fails loudly instead of silently degrading LEG_ALREADY_FLOWN/LINKED/SKIPPED to NO_LEG_IN_RADIUS.",
+        "The new harness section is proven able to fail by temporarily re-adding the filter.",
+        "F-4: the comment at flightManager.ts ~258-261 is corrected — it points at a 'manual path' that does not call the matcher. The guard itself stays; step 0 is meaningful for the matcher's other callers and its harness."
+      ],
+      "risks": [
+        "F-2's harness section must not become a test framework; it is one more labelled section in an existing CLI inspector."
+      ],
+      "model": "sonnet",
+      "model_rationale": "Three well-specified fixes against findings with reproductions."
     }
   ],
   "global_risks": [
@@ -885,6 +948,32 @@
       "by": "orchestrator",
       "date": "2026-09-05",
       "change": "Fifth real fixture added by the user (KMRY->KSFO). It breaks the VFR*.lnmpln chain-sort acceptance glob by giving KMRY two successors — correct behaviour, wrong test shape — so the assertion now names the three trip files explicitly. The file also retires three synthetic-only gaps: a published non-custom approach (ILS DUYET, ARINC I28L), a SID Type=CUSTOMDEPART, and a <Departure> element with a Parking start."
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-05",
+      "change": "Phase-3 review (T-014) returned request_changes with six findings; two required adjudication because the frozen design was self-inconsistent rather than merely unimplemented. Both are written up as design.md Amendment C. (a) The auto-match candidate loader was filtering status NOT IN ('flown','diverted') in SQL, which made design.md §13.2's LEG_ALREADY_FLOWN refusal unreachable in production — measured, a second KSBA takeoff after leg 1 is flown reported NO_LEG_IN_RADIUS at ~160 nm instead of naming the leg 0 nm away. Eligibility now lives only in matcher step 5 and the loader is renamed getPlannedLegCandidatesForActiveTrip. Done before T-015/T-016 exist so no call site needs revisiting and so T-015's harness cannot green-light an unreachable branch. contracts/planned-legs.d.ts and design.md §12.1/§13.5 updated. (b) design.md §16's 'deleteTrip needs no change' held for ordinary trip membership but stranded a flight that a LINK had moved into the trip, discarding planned_leg_prev_trip_id unread — the one path breaking the link's promise to restore. §16 amended. Also ruled: the re-link guard (F-2) belongs in linkFlightToPlannedLeg, not the endpoint, because T-016 calls the db layer directly; and the active-trip control is gated behind planned_legs.length > 0 || is_active === 1, since design.md §13.2 step 2 refuses with NO_PLANNED_LEGS before distance is computed, making the control inert until a plan is imported — which restores T-013 DoD 8 and §18's 'renders exactly as it did before' criterion. No task ids renumbered, none added or removed.",
+      "tasks_touched": [
+        "T-011",
+        "T-012",
+        "T-013",
+        "T-014",
+        "T-015",
+        "T-016"
+      ]
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-05",
+      "change": "T-014 was run on opus rather than the sonnet the plan assigned. Rationale under the agents.md model-complexity rule: the task grew beyond its planned shape — three tasks across db, HTTP and client, plus two frozen-contract adjudications referred to it by the Orchestrator, against a phase the plan itself calls 'the gate that must not be waved through'. That is the ambiguous/cross-file/high-risk case the rule reserves stronger reasoning for. It paid: the two design self-inconsistencies and the DoD breach were all found by execution — a headless-Chromium render diff against a git worktree at 8cec371, and a measured 160 nm refusal — not by reading the Dispatchers' reports.",
+      "tasks_touched": [
+        "T-014"
+      ]
+    },
+    {
+      "by": "orchestrator",
+      "date": "2026-09-05",
+      "change": "Phase-4 review (T-018) returned approve with five findings; no false positive was producible in nine deliberate attempts across two hand-built trips. Actions: (a) added T-024 for finding F-3 — phase 4 writes arrival_deviation_nm on every landing of a linked flight and NOTHING in the client rendered it, while design.md §14 specifies the leg row's contract in full; no remaining planned task touched those files, so §14 would have lapsed silently. This is the review catching a scheduling gap, not a code defect. (b) added T-025 for F-1 (PATCH status:'planned' on a linked flown/diverted leg returns 200 and destroys the deviation while keeping the link — API-only, but phase 4 is what makes the column non-null in the first place), F-2 (nothing would catch a re-introduced status filter in getPlannedLegCandidatesForActiveTrip: inspect-legmatch.ts is pure and never executes the SQL, so an Amendment C revert has no failing symptom), and F-4 (the comment on the deliberately-dead FLIGHT_ALREADY_LINKED path describes a 'manual path' that does not call the matcher; guard stays, comment corrected). (c) F-5 process finding accepted: allowed_paths for T-013, T-016 and T-017 were widened mid-task by the Orchestrator and plan.json still read as though they had not been, so src/db.ts could not be diffed against its phase-3-approved state. The three task entries are now corrected to record what was actually granted. Rule going forward: a widening is an amendment, recorded when granted, not at the end."
     }
   ],
   "model_policy": {

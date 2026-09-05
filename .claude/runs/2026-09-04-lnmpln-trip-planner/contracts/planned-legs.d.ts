@@ -562,7 +562,21 @@ export interface LegMatchResult {
   reason: LegMatchReason;
   /** Distance to the chosen leg, or to the nearest candidate on a refusal. */
   distanceNm: number | null;
-  /** Ids within the radius, ascending. Lets an AMBIGUOUS refusal name its candidates. */
+  /**
+   * Ascending. Its membership depends on `reason`, and the difference is
+   * load-bearing:
+   *
+   * - `AMBIGUOUS` -> the ELIGIBLE ids only (design.md §13.2 step 6, "their ids").
+   *   An ineligible leg is not a cause of ambiguity, so naming one in the
+   *   refusal would blame the wrong leg.
+   * - every other post-radius outcome -> ALL ids within the radius, which is
+   *   the more useful log payload (§13.5's line reads "within 10 nm").
+   * - `NO_ACTIVE_TRIP`, `NO_PLANNED_LEGS`, `FLIGHT_ALREADY_LINKED`,
+   *   `NO_LEG_IN_RADIUS` -> empty; the radius was never usefully applied.
+   *
+   * Clarified 2026-09-05 after T-015 implemented both readings where the two
+   * texts differed. Do not collapse them into one rule.
+   */
   nearbyLegIds: number[];
 }
 
@@ -647,8 +661,16 @@ export declare function setActiveTrip(tripId: number | null): void;
 
 export declare function getActiveTripId(): number | null;
 
-/** Candidates for the auto-matcher: unflown legs of the active trip, one query. */
-export declare function getUnflownPlannedLegsForActiveTrip(): LegMatchCandidate[];
+/**
+ * Candidates for the auto-matcher: EVERY leg of the active trip, one query.
+ *
+ * Deliberately unfiltered. The matcher's step 5 (design.md §13.2) is the single
+ * place eligibility is decided, so that each refusal carries its specific reason
+ * code. Filtering 'flown' and 'diverted' here instead would make
+ * LEG_ALREADY_FLOWN unreachable in production and degrade the common "you
+ * already flew that one" case into a bare NO_LEG_IN_RADIUS. Amendment C.
+ */
+export declare function getPlannedLegCandidatesForActiveTrip(): LegMatchCandidate[];
 
 /** Captures prev trip_id, then moves the flight into the leg's trip. Throws on a double link. */
 export declare function linkFlightToPlannedLeg(flightId: number, legId: number, source: 'auto' | 'manual'): void;

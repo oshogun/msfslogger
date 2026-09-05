@@ -1,12 +1,12 @@
-import { useRef, useState, useEffect } from 'react';
+import { Fragment, useRef, useState, useEffect } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { TripMap } from '../components/TripMap';
 import { TripAtlas } from '../components/TripAtlas';
 import { StatsGrid } from '../components/StatsGrid';
-import { interleaveTripRows, GhostLegRow } from '../components/PlannedLegRows';
+import { interleaveTripRows, GhostLegRow, plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
 import { apiFetch, downloadPdf } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
-import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren } from '../types';
+import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 
@@ -36,6 +36,34 @@ export function TripDetail() {
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [reorderError, setReorderError] = useState('');
   const [reorderingLegId, setReorderingLegId] = useState<number | null>(null);
+
+  // Active-trip toggle (design.md §11).
+  const [activeBusy, setActiveBusy] = useState(false);
+  const [activeError, setActiveError] = useState('');
+
+  // Link a flight, initiated from a ghost (planned) leg row: pick a flight.
+  const [linkingLegId, setLinkingLegId] = useState<number | null>(null);
+  const [linkFlightChoice, setLinkFlightChoice] = useState<number | ''>('');
+  const [linkableFlights, setLinkableFlights] = useState<Flight[] | null>(null);
+  const [linkFlightsError, setLinkFlightsError] = useState('');
+  const [linkBusyLegId, setLinkBusyLegId] = useState<number | null>(null);
+  const [linkErrorByLeg, setLinkErrorByLeg] = useState<Record<number, string>>({});
+
+  // Link a flight, initiated from a flight row: pick a leg (any trip, per
+  // T-012's deliberate non-restriction — this is also how a mislinked flight
+  // is re-targeted to a different leg, design.md §12.2).
+  const [linkingFlightId, setLinkingFlightId] = useState<number | null>(null);
+  const [linkLegChoice, setLinkLegChoice] = useState<number | ''>('');
+  const [linkableLegs, setLinkableLegs] = useState<{ tripName: string; leg: PlannedLegWithChildren }[] | null>(null);
+  const [linkLegsError, setLinkLegsError] = useState('');
+  const [linkBusyFlightId, setLinkBusyFlightId] = useState<number | null>(null);
+  const [linkErrorByFlight, setLinkErrorByFlight] = useState<Record<number, string>>({});
+
+  const [unlinkBusyFlightId, setUnlinkBusyFlightId] = useState<number | null>(null);
+  const [unlinkErrorByFlight, setUnlinkErrorByFlight] = useState<Record<number, string>>({});
+
+  const [skipBusyLegId, setSkipBusyLegId] = useState<number | null>(null);
+  const [skipErrorByLeg, setSkipErrorByLeg] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (!id) { navigate('/'); return; }
@@ -218,6 +246,149 @@ export function TripDetail() {
     }
   }
 
+  async function handleToggleActive() {
+    if (!trip) return;
+    const activating = trip.is_active !== 1;
+    if (!confirm(activating
+      ? `Make "${trip.name}" the active trip? Any other active trip is cleared automatically.`
+      : `Clear "${trip.name}" as the active trip?`
+    )) return;
+    setActiveError('');
+    setActiveBusy(true);
+    try {
+      await apiFetch<ActiveTrip>('/api/active-trip', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId: activating ? trip.id : null }),
+      });
+      const updated = await apiFetch<Trip>(`/api/trips/${id}`);
+      setTrip(updated);
+    } catch (err) {
+      setActiveError('Failed: ' + (err as Error).message);
+    } finally {
+      setActiveBusy(false);
+    }
+  }
+
+  async function loadLinkableFlights() {
+    setLinkFlightsError('');
+    try {
+      const allFlights = await apiFetch<Flight[]>('/api/flights');
+      setLinkableFlights(allFlights.filter(f => f.planned_leg_id === null));
+    } catch (err) {
+      setLinkFlightsError((err as Error).message);
+    }
+  }
+
+  /**
+   * The leg picker is deliberately not scoped to this trip (design.md §12.3):
+   * manual linking is the escape hatch and must reach any unflown leg of any
+   * trip, so this fans out to every trip's own planned-legs endpoint rather
+   * than reading trip.planned_legs, which only ever holds this page's trip.
+   */
+  async function loadLinkableLegs() {
+    setLinkLegsError('');
+    try {
+      const allTrips = await apiFetch<Trip[]>('/api/trips');
+      const perTrip = await Promise.all(allTrips.map(t =>
+        apiFetch<PlannedLegWithChildren[]>(`/api/trips/${t.id}/planned-legs`)
+          .then(legs => legs.filter(l => l.linked_flight_id === null).map(leg => ({ tripName: t.name, leg })))
+      ));
+      setLinkableLegs(perTrip.flat());
+    } catch (err) {
+      setLinkLegsError((err as Error).message);
+    }
+  }
+
+  /** Shared by both link directions: same PUT either way (design.md §12.3). */
+  async function linkFlightToLeg(flightId: number, legId: number) {
+    await apiFetch<Flight>(`/api/flights/${flightId}/planned-leg`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plannedLegId: legId }),
+    });
+    // Both picker caches are now stale: the linked flight must disappear from
+    // the flight-picker and the linked leg must disappear from the leg-picker.
+    setLinkableFlights(null);
+    setLinkableLegs(null);
+    const updated = await apiFetch<Trip>(`/api/trips/${id}`);
+    setTrip(updated);
+  }
+
+  async function handleLinkFromLeg(legId: number) {
+    if (!linkFlightChoice) return;
+    setLinkErrorByLeg(prev => { const { [legId]: _drop, ...rest } = prev; return rest; });
+    setLinkBusyLegId(legId);
+    try {
+      await linkFlightToLeg(Number(linkFlightChoice), legId);
+      setLinkingLegId(null);
+      setLinkFlightChoice('');
+    } catch (err) {
+      // A 409 double-link names the offending flight (design.md §12.3) —
+      // surfaced verbatim, inline, rather than a generic failure toast.
+      setLinkErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
+    } finally {
+      setLinkBusyLegId(null);
+    }
+  }
+
+  async function handleLinkFromFlight(flightId: number) {
+    if (!linkLegChoice) return;
+    setLinkErrorByFlight(prev => { const { [flightId]: _drop, ...rest } = prev; return rest; });
+    setLinkBusyFlightId(flightId);
+    try {
+      await linkFlightToLeg(flightId, Number(linkLegChoice));
+      setLinkingFlightId(null);
+      setLinkLegChoice('');
+    } catch (err) {
+      setLinkErrorByFlight(prev => ({ ...prev, [flightId]: (err as Error).message }));
+    } finally {
+      setLinkBusyFlightId(null);
+    }
+  }
+
+  async function handleUnlinkFlight(flightId: number) {
+    if (!confirm('Unlink this flight from its planned leg? The leg becomes unflown again.')) return;
+    setUnlinkErrorByFlight(prev => { const { [flightId]: _drop, ...rest } = prev; return rest; });
+    setUnlinkBusyFlightId(flightId);
+    try {
+      await apiFetch<Flight>(`/api/flights/${flightId}/planned-leg`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plannedLegId: null }),
+      });
+      setLinkableFlights(null);
+      setLinkableLegs(null);
+      const updated = await apiFetch<Trip>(`/api/trips/${id}`);
+      setTrip(updated);
+    } catch (err) {
+      setUnlinkErrorByFlight(prev => ({ ...prev, [flightId]: (err as Error).message }));
+    } finally {
+      setUnlinkBusyFlightId(null);
+    }
+  }
+
+  async function handleToggleSkip(legId: number, nextStatus: 'planned' | 'skipped') {
+    if (!confirm(nextStatus === 'skipped' ? 'Skip this planned leg?' : 'Unskip this planned leg?')) return;
+    setSkipErrorByLeg(prev => { const { [legId]: _drop, ...rest } = prev; return rest; });
+    setSkipBusyLegId(legId);
+    try {
+      await apiFetch<PlannedLegWithChildren>(`/api/planned-legs/${legId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const updated = await apiFetch<Trip>(`/api/trips/${id}`);
+      setTrip(updated);
+    } catch (err) {
+      // A 409 here means a flight got linked to this leg between page load
+      // and click; surface the server's message rather than failing silently.
+      setSkipErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
+    } finally {
+      setSkipBusyLegId(null);
+    }
+  }
+
   if (loadError) {
     return <main className="container"><p style={{ color: '#f87171' }}>Failed to load trip: {loadError}</p></main>;
   }
@@ -230,6 +401,23 @@ export function TripDetail() {
   // is a no-op for every trip that predates this feature (design.md §9.3, §18).
   const mergedRows = interleaveTripRows(trip.flights, trip.planned_legs);
   const sortedPlannedLegs = [...trip.planned_legs].sort((a, b) => a.seq - b.seq || a.id - b.id);
+  const legByIdForFlights = new Map(trip.planned_legs.map(l => [l.id, l] as const));
+  // The "Link to leg" escape hatch only appears once this trip actually uses
+  // the planned-leg feature — otherwise a trip untouched by this feature must
+  // render exactly as it did before (design.md §18, plan.json T-013 DoD).
+  const showLinkToLeg = trip.planned_legs.length > 0;
+  // The active-trip control shares that same gate, widened by one clause: an
+  // active trip that has since lost every planned leg (all deleted) must
+  // still show the control, or the user could never clear the flag from the
+  // only page that offers it. One condition, not two that can drift.
+  //
+  // Gating (rather than always showing) is deliberate, not just cosmetic: an
+  // active trip with no planned legs is not merely unused, it is INERT — the
+  // matcher refuses with NO_PLANNED_LEGS before distance is even computed
+  // (design.md §13.2 step 2) — so offering the control on a trip that has
+  // never seen a .lnmpln import would invite setting state with no effect.
+  // T-014 F-4.
+  const showActiveTripControl = showLinkToLeg || trip.is_active === 1;
 
   const stats = [
     { label: 'Total Duration', value: formatDuration(trip.total_duration_sec) },
@@ -247,6 +435,22 @@ export function TripDetail() {
         {trip.flight_count} leg{trip.flight_count !== 1 ? 's' : ''}
         {trip.total_distance_nm != null ? ` · ${formatDistance(trip.total_distance_nm)} nm total` : ''}
       </p>
+
+      {/*
+        Gated on showActiveTripControl (see its definition above): a trip with
+        no planned legs and not active renders exactly as it did before this
+        feature (design.md §18's last bullet, T-013 DoD 8) — the control
+        appears exactly when it starts to be able to mean something. T-014 F-4.
+      */}
+      {showActiveTripControl && (
+        <div className="active-trip-row">
+          {trip.is_active === 1 && <span className="badge badge-active-trip">Active Trip</span>}
+          <button className="btn btn-ghost" disabled={activeBusy} onClick={handleToggleActive}>
+            {activeBusy ? 'Working…' : (trip.is_active === 1 ? 'Clear Active Trip' : 'Set as Active Trip')}
+          </button>
+          {activeError && <span className="edit-error">{activeError}</span>}
+        </div>
+      )}
 
       <div className="view-toggle" role="tablist">
         <button
@@ -383,6 +587,7 @@ export function TripDetail() {
                 if (row.kind === 'planned') {
                   const leg = row.leg;
                   const legIdx = sortedPlannedLegs.findIndex(l => l.id === leg.id);
+                  const pickerOpen = linkingLegId === leg.id;
                   return (
                     <GhostLegRow
                       key={`planned-${leg.id}`}
@@ -392,37 +597,127 @@ export function TripDetail() {
                       canMoveUp={legIdx > 0}
                       canMoveDown={legIdx >= 0 && legIdx < sortedPlannedLegs.length - 1}
                       busy={reorderingLegId === leg.id}
+                      linkPickerOpen={pickerOpen}
+                      onToggleLinkPicker={() => {
+                        const opening = !pickerOpen;
+                        setLinkingLegId(opening ? leg.id : null);
+                        setLinkFlightChoice('');
+                        if (opening && linkableFlights === null) loadLinkableFlights();
+                      }}
+                      linkBusy={linkBusyLegId === leg.id}
+                      linkError={linkErrorByLeg[leg.id]}
+                      linkableFlights={linkableFlights}
+                      linkFlightsError={linkFlightsError}
+                      linkFlightChoice={linkFlightChoice}
+                      onLinkFlightChoiceChange={setLinkFlightChoice}
+                      onConfirmLink={() => handleLinkFromLeg(leg.id)}
+                      skipBusy={skipBusyLegId === leg.id}
+                      skipError={skipErrorByLeg[leg.id]}
+                      onToggleSkip={() => handleToggleSkip(leg.id, leg.status === 'skipped' ? 'planned' : 'skipped')}
                     />
                   );
                 }
                 const f = row.flight;
                 const i = row.flightIndex;
+                const linkedLeg = f.planned_leg_id != null ? legByIdForFlights.get(f.planned_leg_id) : undefined;
+                const linkedBadge = linkedLeg ? plannedLegBadge(linkedLeg.status) : null;
+                // design.md §14 (T-018 F-3): the flight itself IS the linked
+                // flight, already in hand as `f` — no second fetch, exactly
+                // the mapping this row already uses for the badge above.
+                const landingNote = linkedLeg ? plannedLegLandingNote(linkedLeg, f) : null;
+                const unlinkBusy = unlinkBusyFlightId === f.id;
+                const unlinkErr = unlinkErrorByFlight[f.id];
+                const linkFlightBusy = linkBusyFlightId === f.id;
+                const linkFlightErr = linkErrorByFlight[f.id];
+                const legPickerOpen = linkingFlightId === f.id;
                 return (
-                  <tr key={`flight-${f.id}`}>
-                    <td className="td-stat">
-                      <span className="leg-color-swatch" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }}></span>
-                      Leg {i + 1}
-                    </td>
-                    <td className="td-aircraft">{f.aircraft || 'Unknown'}</td>
-                    <td className="td-date">{formatDate(f.start_time)}</td>
-                    <td className="td-stat">{formatDuration(f.duration_sec)}</td>
-                    <td className="td-stat">{formatDistance(f.distance_nm)} nm</td>
-                    <td className="td-stat">
-                      {(f.departure_icao || f.arrival_icao) ? (
-                        <span className="td-route" title={`${f.departure_name || ''} → ${f.arrival_name || ''}`}>
-                          {f.departure_icao || '???'} → {f.arrival_icao || '???'}
-                        </span>
-                      ) : (
-                        <span style={{ color: '#4b5563' }}>—</span>
-                      )}
-                    </td>
-                    <td className="td-actions">
-                      <Link to={`/flight/${f.id}`} className="btn btn-ghost" style={{ fontSize: '0.8rem' }}>View</Link>
-                    </td>
-                    <td className="td-actions">
-                      <button className="btn btn-danger" style={{ fontSize: '0.8rem' }} onClick={() => handleRemoveLeg(f.id)}>Remove</button>
-                    </td>
-                  </tr>
+                  <Fragment key={`flight-${f.id}`}>
+                    <tr>
+                      <td className="td-stat">
+                        <span className="leg-color-swatch" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }}></span>
+                        Leg {i + 1}
+                        {linkedBadge && <span className={`badge ${linkedBadge.className}`}>{linkedBadge.label}</span>}
+                      </td>
+                      <td className="td-aircraft">{f.aircraft || 'Unknown'}</td>
+                      <td className="td-date">{formatDate(f.start_time)}</td>
+                      <td className="td-stat">{formatDuration(f.duration_sec)}</td>
+                      <td className="td-stat">{formatDistance(f.distance_nm)} nm</td>
+                      <td className="td-stat">
+                        {(f.departure_icao || f.arrival_icao) ? (
+                          <span className="td-route" title={`${f.departure_name || ''} → ${f.arrival_name || ''}`}>
+                            {f.departure_icao || '???'} → {f.arrival_icao || '???'}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#4b5563' }}>—</span>
+                        )}
+                        {landingNote && (
+                          <div className={`td-planned-meta${linkedLeg?.status === 'diverted' ? ' td-planned-meta-diverted' : ''}`}>
+                            {landingNote}
+                          </div>
+                        )}
+                      </td>
+                      <td className="td-actions">
+                        <Link to={`/flight/${f.id}`} className="btn btn-ghost" style={{ fontSize: '0.8rem' }}>View</Link>
+                        {f.planned_leg_id != null ? (
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: '0.8rem' }}
+                            disabled={unlinkBusy}
+                            onClick={() => handleUnlinkFlight(f.id)}
+                          >{unlinkBusy ? 'Unlinking…' : 'Unlink'}</button>
+                        ) : showLinkToLeg ? (
+                          <button
+                            className="btn btn-ghost"
+                            style={{ fontSize: '0.8rem' }}
+                            disabled={linkFlightBusy}
+                            onClick={() => {
+                              const opening = !legPickerOpen;
+                              setLinkingFlightId(opening ? f.id : null);
+                              setLinkLegChoice('');
+                              if (opening && linkableLegs === null) loadLinkableLegs();
+                            }}
+                          >{legPickerOpen ? 'Cancel' : 'Link to leg'}</button>
+                        ) : null}
+                        {unlinkErr && <div className="edit-error">{unlinkErr}</div>}
+                      </td>
+                      <td className="td-actions">
+                        <button className="btn btn-danger" style={{ fontSize: '0.8rem' }} onClick={() => handleRemoveLeg(f.id)}>Remove</button>
+                      </td>
+                    </tr>
+                    {legPickerOpen && (
+                      <tr className="tr-link-picker">
+                        <td colSpan={8}>
+                          <div className="link-picker">
+                            {linkableLegs === null ? (
+                              <span className="flight-plan-status">Loading legs…</span>
+                            ) : linkableLegs.length === 0 ? (
+                              <span className="flight-plan-status">No unlinked planned legs available.</span>
+                            ) : (
+                              <>
+                                <select value={linkLegChoice} onChange={e => setLinkLegChoice(Number(e.target.value))}>
+                                  <option value="">Choose a leg…</option>
+                                  {linkableLegs.map(({ tripName, leg }) => (
+                                    <option key={leg.id} value={leg.id}>
+                                      {tripName} · Leg {leg.seq}: {leg.departure_ident} → {leg.destination_ident}
+                                      {leg.status === 'skipped' ? ' (Skipped)' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  className="btn btn-primary"
+                                  style={{ fontSize: '0.8rem' }}
+                                  disabled={!linkLegChoice || linkFlightBusy}
+                                  onClick={() => handleLinkFromFlight(f.id)}
+                                >{linkFlightBusy ? 'Linking…' : 'Link'}</button>
+                              </>
+                            )}
+                            {linkLegsError && <span className="edit-error">{linkLegsError}</span>}
+                            {linkFlightErr && <span className="edit-error">{linkFlightErr}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })
             )}
