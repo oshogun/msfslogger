@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import type {
   Flight, FlightPoint, FlightWithPoints, FlightEditPayload, Trip, TripWithFlights, TripEditPayload,
-  PlannedLeg, PlannedWaypoint, PlannedAlternate, PlannedLegWithChildren,
+  PlannedLeg, PlannedWaypoint, PlannedAlternate, PlannedLegWithChildren, PlannedLegStatus, LegMatchCandidate,
 } from './types';
 import { copyFlightPlanFile, deleteFlightPlanFile } from './flightPlans';
 
@@ -404,6 +404,10 @@ export function getFlightPointCount(id: number): number {
 }
 
 export function deleteFlight(id: number): boolean {
+  // The FK is on flights.planned_leg_id, so deleting the row would drop the
+  // link but leave the leg permanently 'flown'/'diverted' by a flight that no
+  // longer exists. Same idiom as deleteFlightPlanFile() below. design.md §16.
+  clearPlannedLegLink(id);
   const result = db.prepare('DELETE FROM flights WHERE id = ?').run(id);
   if (result.changes > 0) deleteFlightPlanFile(id);
   return result.changes > 0;
@@ -485,9 +489,45 @@ export function updateTrip(id: number, payload: TripEditPayload): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Flights the user put in this trip directly (assignFlightToTrip, or never
+ * touched by a link) are NOT restored here — they keep their dangling
+ * trip_id after the trip is gone, exactly as before this feature; that part
+ * of §16 is unchanged and stays unchanged. But a flight a LINK moved into
+ * this trip is different in kind: the link promised that unlinking restores
+ * planned_leg_prev_trip_id, and letting the ON DELETE CASCADE / SET NULL
+ * combination run unattended would break that promise silently — it clears
+ * planned_leg_id but leaves trip_id dangling at the now-deleted trip and
+ * discards planned_leg_prev_trip_id unread. So those flights are read and
+ * restored to their prior trip_id here, in the same transaction as the
+ * delete and BEFORE it runs: once the trip row is gone, the cascade has
+ * already removed the planned_legs rows that make "linked into this trip"
+ * findable at all. design.md §16 (amended).
+ */
 export function deleteTrip(id: number): boolean {
-  const result = db.prepare('DELETE FROM trips WHERE id = ?').run(id);
-  return result.changes > 0;
+  return db.transaction((): boolean => {
+    const linkedFlights = db.prepare(`
+      SELECT f.id, f.planned_leg_prev_trip_id
+        FROM flights f
+        JOIN planned_legs l ON l.id = f.planned_leg_id
+       WHERE l.trip_id = ?
+    `).all(id) as { id: number; planned_leg_prev_trip_id: number | null }[];
+
+    const restore = db.prepare(`
+      UPDATE flights
+         SET trip_id                  = ?,
+             planned_leg_id           = NULL,
+             planned_leg_link_source  = NULL,
+             planned_leg_prev_trip_id = NULL
+       WHERE id = ?
+    `);
+    for (const flight of linkedFlights) {
+      restore.run(flight.planned_leg_prev_trip_id, flight.id);
+    }
+
+    const result = db.prepare('DELETE FROM trips WHERE id = ?').run(id);
+    return result.changes > 0;
+  })();
 }
 
 export function assignFlightToTrip(flightId: number, tripId: number): boolean {
@@ -624,6 +664,16 @@ export function combineFlights(idA: number, idB: number): number | null {
     }
     deleteFlightPlanFile(first.id);
     deleteFlightPlanFile(second.id);
+
+    // Unlike the PDF attachment above, a planned-leg link is deliberately NOT
+    // carried to the combined flight: this INSERT does not carry trip_id
+    // either, so a carried-over link would put the new flight in no trip
+    // while claiming a leg that belongs to one. Combining is a repair
+    // operation; the user re-links by hand with the escape hatch.
+    // design.md §16, §20 item 12 (do not touch filler-point interpolation or
+    // ownDurationSec here).
+    clearPlannedLegLink(first.id);
+    clearPlannedLegLink(second.id);
 
     db.prepare('DELETE FROM flights WHERE id = ?').run(first.id);
     db.prepare('DELETE FROM flights WHERE id = ?').run(second.id);
@@ -898,4 +948,329 @@ export function reorderPlannedLegs(tripId: number, legIds: number[]): boolean {
     });
     return true;
   })();
+}
+
+/**
+ * Thrown by setPlannedLegStatus() when asked to change the status of a leg
+ * that a flight is still linked to (design.md §12.3, §15). A linked leg's
+ * status is not the caller's to set at all — 'flown' and 'diverted' are
+ * written by endFlight(), and the only way to reopen such a leg is to
+ * unlink it, which is the transition §15 actually defines. The 409-vs-404
+ * decision belongs to the endpoint (T-012); this class exists so the
+ * endpoint can tell that refusal apart from "leg not found" (which is a
+ * plain boolean `false`) and name the flight in its own error message.
+ */
+export class PlannedLegHasLinkedFlightError extends Error {
+  constructor(readonly legId: number, readonly flightId: number) {
+    super(`Planned leg ${legId} cannot have its status changed: linked to flight ${flightId}`);
+    this.name = 'PlannedLegHasLinkedFlightError';
+  }
+}
+
+/**
+ * Thrown by linkFlightToPlannedLeg() when the target leg already belongs to a
+ * different flight. idx_flights_planned_leg would catch this too, but that
+ * constraint error can't name the offending flight — this check runs first so
+ * the thrown error can, which is what lets T-012 turn it into a 409 that says
+ * which flight.
+ */
+export class PlannedLegAlreadyLinkedError extends Error {
+  constructor(readonly legId: number, readonly flightId: number) {
+    super(`Planned leg ${legId} is already linked to flight ${flightId}`);
+    this.name = 'PlannedLegAlreadyLinkedError';
+  }
+}
+
+// ── Active trip ───────────────────────────────────────────────────────────────
+
+/**
+ * Clear first, then set — never the reverse. With idx_trips_active in place,
+ * clearing after setting would raise SQLITE_CONSTRAINT_UNIQUE the moment
+ * another trip is already active; clearing first makes "at most one active
+ * trip" hold at every intermediate point in the transaction, not just at
+ * commit. design.md §11.2.
+ *
+ * Setting a trip that does not exist changes nothing (§11.2) — the existence
+ * check has to run BEFORE the clearing UPDATE, inside the same transaction,
+ * because the clear-then-set order above means there is no later point to
+ * discover the target is missing and undo it. The HTTP endpoint already
+ * pre-checks existence and 404s, but this function must honour its own
+ * contract for a caller that reaches it directly (T-016).
+ */
+export function setActiveTrip(tripId: number | null): void {
+  db.transaction(() => {
+    if (tripId !== null) {
+      const exists = db.prepare('SELECT 1 FROM trips WHERE id = ?').get(tripId);
+      if (!exists) return;
+    }
+    db.prepare('UPDATE trips SET is_active = 0 WHERE is_active = 1').run();
+    if (tripId !== null) {
+      db.prepare('UPDATE trips SET is_active = 1 WHERE id = ?').run(tripId);
+    }
+  })();
+}
+
+export function getActiveTripId(): number | null {
+  const row = db.prepare('SELECT id FROM trips WHERE is_active = 1').get() as { id: number } | undefined;
+  return row ? row.id : null;
+}
+
+// ── Planned-leg status ────────────────────────────────────────────────────────
+
+/**
+ * 'planned' | 'skipped' only; 'flown' and 'diverted' are system-set and this
+ * function has no runtime path that accepts them (the parameter type already
+ * forbids it at compile time). Refuses — by throwing
+ * PlannedLegHasLinkedFlightError — whenever the leg still has a linked
+ * flight, regardless of which of the two statuses was requested (design.md
+ * §12.3, §15). This is not just the skip guard widened: a still-linked leg
+ * is either 'planned' (being flown right now) or 'flown'/'diverted' (just
+ * landed) per §15, and in every one of those cases the status and the link
+ * are the system's to manage, not a PATCH's — resetting a flown/diverted
+ * leg to 'planned' while the link stays would destroy
+ * arrival_deviation_nm and produce a state §15's transition table does not
+ * define (a "landed" leg rendering as "being flown"). §15 lists exactly one
+ * way back from flown/diverted to planned: unlink, which clears the
+ * deviation because the link is going away too. A skip that quietly failed
+ * would likewise leave the caller believing the leg was skipped when it was
+ * not.
+ *
+ * Always clears arrival_deviation_nm alongside status, in the same statement
+ * as the update, for the unlinked legs that do reach here: a leg PATCHed
+ * back to 'planned' from 'flown'/'diverted' after its flight was deleted or
+ * combined must not keep reading "planned, 47 nm from plan" (design.md
+ * §15) — the same clearing already done by unlinkFlightFromPlannedLeg() and
+ * clearPlannedLegLink(), applied uniformly on this path too.
+ */
+export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped'): boolean {
+  return db.transaction((): boolean => {
+    const row = db.prepare(`
+      SELECT l.id, (SELECT f.id FROM flights f WHERE f.planned_leg_id = l.id) AS linked_flight_id
+        FROM planned_legs l
+       WHERE l.id = ?
+    `).get(legId) as { id: number; linked_flight_id: number | null } | undefined;
+    if (!row) return false;
+
+    if (row.linked_flight_id != null) {
+      throw new PlannedLegHasLinkedFlightError(legId, row.linked_flight_id);
+    }
+
+    const result = db.prepare(
+      'UPDATE planned_legs SET status = ?, arrival_deviation_nm = NULL WHERE id = ?'
+    ).run(status, legId);
+    return result.changes > 0;
+  })();
+}
+
+// ── Auto-match candidates ─────────────────────────────────────────────────────
+
+/**
+ * Candidates for the auto-matcher: EVERY leg of the active trip, with no
+ * status filtering at all — 'flown', 'diverted', 'skipped' and already-linked
+ * legs are all included. Eligibility is entirely step 5's job (design.md
+ * §13.2): the matcher is what turns a 'flown' candidate into the
+ * LEG_ALREADY_FLOWN reason code, a 'skipped' one into LEG_SKIPPED, and so on.
+ * Filtering any status out here would make that reason code unreachable in
+ * production and surface a misleading NO_LEG_IN_RADIUS instead (reviewed in
+ * phase3.md, adjudication A). This query stays one indexed read with no
+ * per-row business logic. ORDER BY seq ASC, id ASC because determinism of the
+ * matcher's AMBIGUOUS/nearbyLegIds output depends on candidates arriving in a
+ * defined order (§13.2). Returns [] when no trip is active — the JOIN on
+ * is_active = 1 simply matches nothing.
+ */
+export function getPlannedLegCandidatesForActiveTrip(): LegMatchCandidate[] {
+  type Row = {
+    plannedLegId: number;
+    tripId: number;
+    seq: number;
+    departureIdent: string;
+    departureIsAirport: number;
+    departureLat: number;
+    departureLon: number;
+    status: PlannedLegStatus;
+    linkedFlightId: number | null;
+    aircraftType: string | null;
+  };
+  const rows = db.prepare(`
+    SELECT
+      l.id                    AS plannedLegId,
+      l.trip_id               AS tripId,
+      l.seq                   AS seq,
+      l.departure_ident       AS departureIdent,
+      l.departure_is_airport  AS departureIsAirport,
+      l.departure_lat         AS departureLat,
+      l.departure_lon         AS departureLon,
+      l.status                AS status,
+      (SELECT f.id FROM flights f WHERE f.planned_leg_id = l.id) AS linkedFlightId,
+      l.aircraft_type         AS aircraftType
+    FROM planned_legs l
+    JOIN trips t ON t.id = l.trip_id AND t.is_active = 1
+    ORDER BY l.seq ASC, l.id ASC
+  `).all() as Row[];
+
+  return rows.map(row => ({
+    ...row,
+    departureIdent: row.departureIsAirport ? row.departureIdent : null,
+    departureIsAirport: !!row.departureIsAirport,
+  }));
+}
+
+// ── Flight <-> planned-leg link ───────────────────────────────────────────────
+
+/**
+ * The flight's link, and nothing else. getFlightById() would answer this too,
+ * but it returns FlightWithPoints and so loads every flight_points row to
+ * read one integer — thousands of them on a long haul at a 5 s recording
+ * interval. endFlight() (T-016) asks this question on its way out, including
+ * from onCrash() and onSimDisconnect(), which is the worst moment to allocate
+ * a track nobody reads.
+ *
+ * NULL means "no link", and it also means "no such flight": the one caller
+ * does the same thing either way — nothing — so collapsing the two is honest
+ * rather than lossy.
+ */
+export function getFlightPlannedLegId(flightId: number): number | null {
+  const row = db.prepare(
+    'SELECT planned_leg_id FROM flights WHERE id = ?'
+  ).get(flightId) as { planned_leg_id: number | null } | undefined;
+  return row?.planned_leg_id ?? null;
+}
+
+/**
+ * Captures the flight's current trip_id (whatever it is, including NULL) into
+ * planned_leg_prev_trip_id BEFORE moving the flight into the leg's trip, so
+ * unlink can restore it. If the flight is already linked to a different leg,
+ * re-targeting is a full unlink of the old link followed by a full link to
+ * the new one, in this same transaction — so planned_leg_prev_trip_id ends up
+ * holding the flight's ORIGINAL trip, never a trip the old link itself
+ * assigned. Throws PlannedLegAlreadyLinkedError if the target leg already
+ * belongs to a different flight. design.md §12.2.
+ *
+ * Linking a flight to the leg it ALREADY holds is a no-op, not a
+ * re-target: §12.2 defines re-targeting as putting a DIFFERENT leg onto an
+ * already-linked flight, and running the unlink-then-link dance anyway would
+ * silently reset a 'flown'/'diverted' leg back to 'planned' and discard its
+ * recorded arrival_deviation_nm for a request that asked for no change. This
+ * guard has to live here rather than in the endpoint: T-016 calls this
+ * function directly with source: 'auto', bypassing any endpoint-level check
+ * entirely (phase3.md, adjudication B).
+ *
+ * `source` is NOT applied on that no-op path either, which the signature
+ * invites you to expect. It records how the link came about, and a same-leg
+ * re-link did not change that. Writing it would also make this a guard that
+ * returns early except when it performs an UPDATE — a narrower version of the
+ * bug it closes.
+ */
+export function linkFlightToPlannedLeg(flightId: number, legId: number, source: 'auto' | 'manual'): void {
+  db.transaction(() => {
+    const current = db.prepare(
+      'SELECT planned_leg_id FROM flights WHERE id = ?'
+    ).get(flightId) as { planned_leg_id: number | null } | undefined;
+    if (!current) {
+      throw new Error(`Flight ${flightId} not found`);
+    }
+    if (current.planned_leg_id === legId) {
+      return;
+    }
+    if (current.planned_leg_id != null) {
+      unlinkFlightFromPlannedLeg(flightId);
+    }
+
+    // idx_flights_planned_leg enforces this too, but checking explicitly is
+    // what lets the thrown error name the flight already holding the leg.
+    const holder = db.prepare(
+      'SELECT id FROM flights WHERE planned_leg_id = ?'
+    ).get(legId) as { id: number } | undefined;
+    if (holder) {
+      throw new PlannedLegAlreadyLinkedError(legId, holder.id);
+    }
+
+    const leg = db.prepare('SELECT trip_id FROM planned_legs WHERE id = ?').get(legId) as { trip_id: number } | undefined;
+    if (!leg) {
+      throw new Error(`Planned leg ${legId} not found`);
+    }
+
+    // Read again: if we just unlinked this same flight above, its trip_id is
+    // now the restored ORIGINAL trip (or NULL) — exactly what must be
+    // captured as the new planned_leg_prev_trip_id.
+    const flight = db.prepare('SELECT trip_id FROM flights WHERE id = ?').get(flightId) as { trip_id: number | null };
+
+    db.prepare(`
+      UPDATE flights
+         SET planned_leg_prev_trip_id = ?,
+             trip_id                  = ?,
+             planned_leg_id           = ?,
+             planned_leg_link_source  = ?
+       WHERE id = ?
+    `).run(flight.trip_id, leg.trip_id, legId, source, flightId);
+  })();
+}
+
+/**
+ * Restores trip_id from planned_leg_prev_trip_id, then NULLs all three
+ * planned_leg_* columns, and resets the leg to 'planned' with
+ * arrival_deviation_nm cleared — this is how the user reopens a
+ * 'flown'/'diverted' leg (design.md §15). Returns false when the flight has
+ * no link.
+ */
+export function unlinkFlightFromPlannedLeg(flightId: number): boolean {
+  return db.transaction((): boolean => {
+    const flight = db.prepare(
+      'SELECT planned_leg_id, planned_leg_prev_trip_id FROM flights WHERE id = ?'
+    ).get(flightId) as { planned_leg_id: number | null; planned_leg_prev_trip_id: number | null } | undefined;
+    if (!flight || flight.planned_leg_id == null) return false;
+
+    db.prepare(
+      "UPDATE planned_legs SET status = 'planned', arrival_deviation_nm = NULL WHERE id = ?"
+    ).run(flight.planned_leg_id);
+
+    db.prepare(`
+      UPDATE flights
+         SET trip_id                  = ?,
+             planned_leg_id           = NULL,
+             planned_leg_link_source  = NULL,
+             planned_leg_prev_trip_id = NULL
+       WHERE id = ?
+    `).run(flight.planned_leg_prev_trip_id, flightId);
+
+    return true;
+  })();
+}
+
+/**
+ * Same as unlinkFlightFromPlannedLeg() EXCEPT trip_id is deliberately NOT
+ * restored: the flight row is about to be destroyed by the caller
+ * (deleteFlight(), or combineFlights() for both source flights), so there is
+ * no row left for a restored trip_id to mean anything on. design.md §16.
+ */
+export function clearPlannedLegLink(flightId: number): void {
+  db.transaction(() => {
+    const flight = db.prepare(
+      'SELECT planned_leg_id FROM flights WHERE id = ?'
+    ).get(flightId) as { planned_leg_id: number | null } | undefined;
+    if (!flight || flight.planned_leg_id == null) return;
+
+    db.prepare(
+      "UPDATE planned_legs SET status = 'planned', arrival_deviation_nm = NULL WHERE id = ?"
+    ).run(flight.planned_leg_id);
+
+    db.prepare(`
+      UPDATE flights
+         SET planned_leg_id           = NULL,
+             planned_leg_link_source  = NULL,
+             planned_leg_prev_trip_id = NULL
+       WHERE id = ?
+    `).run(flightId);
+  })();
+}
+
+/**
+ * Called by endFlight() (T-016) for a linked flight, after closeFlight().
+ * arrival_deviation_nm is written on both the 'flown' and 'diverted' path —
+ * the link is kept either way; a diversion never auto-unlinks. design.md §14.
+ */
+export function recordPlannedLegArrival(legId: number, status: 'flown' | 'diverted', deviationNm: number): void {
+  db.prepare(
+    'UPDATE planned_legs SET status = ?, arrival_deviation_nm = ? WHERE id = ?'
+  ).run(status, deviationNm, legId);
 }

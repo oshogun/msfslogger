@@ -238,3 +238,26 @@ export interface PlannedLegWithChildren extends PlannedLeg {
   waypoints: PlannedWaypoint[];
   alternates: PlannedAlternate[];
 }
+
+// ── Auto-match candidate ──────────────────────────────────────────────────────
+//
+// The payload getPlannedLegCandidatesForActiveTrip() (src/db.ts) hands to
+// src/legMatcher.ts's matchPlannedLeg() (T-015). CamelCase because it is a
+// computed payload flattened for the matcher, not a row (design.md §17).
+// Mirrors contracts/planned-legs.d.ts.
+
+/** One candidate leg, flattened by the caller from the DB row. No I/O in here. */
+export interface LegMatchCandidate {
+  plannedLegId: number;
+  tripId: number;
+  seq: number;
+  /** Null when departureIsAirport is false. */
+  departureIdent: string | null;
+  departureIsAirport: boolean;
+  departureLat: number;
+  departureLon: number;
+  status: PlannedLegStatus;
+  linkedFlightId: number | null;
+  /** Carried for the log and a possible future tie-break; not used in v1. */
+  aircraftType: string | null;
+}
