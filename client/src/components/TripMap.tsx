@@ -2,9 +2,16 @@ import { useEffect, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
-import type { Flight } from '../types';
+import type { Flight, PlannedLegWithChildren } from '../types';
+import { formatDistance } from '../utils/format';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
+
+// Frozen outside LEG_COLORS by design.md §18 so a planned route can never be
+// mistaken for a flown leg at a glance. Dashed, thinner, drawn beneath flown
+// tracks (rendered first in JSX — Leaflet stacks same-pane layers in the order
+// they are added).
+const PLANNED_ROUTE_COLOR = '#94a3b8';
 
 const mkIcon = (color: string) =>
   L.divIcon({
@@ -13,18 +20,81 @@ const mkIcon = (color: string) =>
     html: `<div style="width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 4px #000"></div>`,
   });
 
-function BoundsController({ flights }: { flights: Flight[] }) {
+const mkWaypointIcon = () =>
+  L.divIcon({
+    className: '',
+    iconAnchor: [4, 4],
+    html: `<div style="width:8px;height:8px;border-radius:50%;background:${PLANNED_ROUTE_COLOR};border:1px solid #fff;box-shadow:0 0 3px #000;opacity:0.9"></div>`,
+  });
+
+/**
+ * Antimeridian handling for planned routes (design.md DoD 7).
+ *
+ * A planned leg's waypoint chain is naturally ordered (seq ASC), so instead of
+ * accepting Leaflet's default — which draws the straight line between raw
+ * ±180° longitudes and visibly wraps the wrong way round the world for a
+ * dateline-crossing leg — each chain is "unwrapped": every point's longitude is
+ * shifted by a multiple of 360° so it never differs from the previous point by
+ * more than 180°. Leaflet's default CRS projects longitude linearly with no
+ * ±180 clamp, and the default tile layer (`noWrap` not set) already tiles
+ * modulo 360°, so an unwrapped value like 190° renders as the correct imagery
+ * just east of the dateline. This is the standard technique for this problem
+ * and needs no extra dependency.
+ *
+ * This is applied only to the new planned-route layer. Flown tracks (below)
+ * are unchanged — they never unwrap — which is a pre-existing limitation this
+ * task does not extend to, and is why DoD 5 (pixel-comparable when there are
+ * no planned legs) holds trivially: that code path is untouched.
+ */
+function unwrapLonChain(points: [number, number][]): [number, number][] {
+  if (points.length === 0) return points;
+  const out: [number, number][] = [points[0]];
+  let prevLon = points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    const [lat] = points[i];
+    let lon = points[i][1];
+    while (lon - prevLon > 180) lon -= 360;
+    while (lon - prevLon < -180) lon += 360;
+    out.push([lat, lon]);
+    prevLon = lon;
+  }
+  return out;
+}
+
+function procedureNote(leg: PlannedLegWithChildren): string | null {
+  const parts: string[] = [];
+  if (leg.sid_name) parts.push(`SID ${leg.sid_name}`);
+  if (leg.star_name) parts.push(`STAR ${leg.star_name}`);
+  if (leg.approach_name) parts.push(`APP ${leg.approach_name}`);
+  if (parts.length === 0) return null;
+  // design.md §6.2: makes the gap at the ends read as missing procedure data,
+  // not a drawing bug.
+  return `${parts.join(' · ')} (planned route excludes SID/STAR/approach legs)`;
+}
+
+function BoundsController({ flights, plannedLegs }: { flights: Flight[]; plannedLegs: PlannedLegWithChildren[] }) {
   const map = useMap();
   useEffect(() => {
-    const allPoints = flights.flatMap(f => (f.points || []).map(p => [p.lat, p.lon] as [number, number]));
+    const flownPoints = flights.flatMap(f => (f.points || []).map(p => [p.lat, p.lon] as [number, number]));
+    const plannedPoints = plannedLegs.flatMap(leg => {
+      const chain = leg.waypoints.slice().sort((a, b) => a.seq - b.seq).map(w => [w.lat, w.lon] as [number, number]);
+      return unwrapLonChain(chain);
+    });
+    const allPoints = [...flownPoints, ...plannedPoints];
     if (allPoints.length === 0) return;
     map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
-  }, [map, flights]);
+  }, [map, flights, plannedLegs]);
   return null;
 }
 
 interface Props {
   flights: Flight[];
+  /**
+   * Optional: when omitted, TripMap renders exactly as it did before this
+   * prop existed (design.md T-008 DoD 1). Every existing caller — including
+   * PrintTrip, which does not pass it — is unaffected.
+   */
+  plannedLegs?: PlannedLegWithChildren[];
   /** Called once tiles have finished loading. Used by the PDF export. */
   onReady?: () => void;
   /**
@@ -36,19 +106,26 @@ interface Props {
   zoomControl?: boolean;
 }
 
-export function TripMap({ flights, onReady, preferCanvas = true, zoomControl = true }: Props) {
+export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = true, zoomControl = true }: Props) {
   const hasPoints = flights.some(f => f.points && f.points.length > 0);
-  if (!hasPoints) {
+  const hasPlannedWaypoints = plannedLegs.some(l => l.waypoints && l.waypoints.length > 0);
+  if (!hasPoints && !hasPlannedWaypoints) {
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No GPS points recorded for this trip.</p>;
   }
 
   const firstPoint = flights.find(f => f.points?.length)?.points?.[0];
+  const firstPlannedWaypoint = plannedLegs.flatMap(l => l.waypoints)[0];
+  const center = firstPoint
+    ? ([firstPoint.lat, firstPoint.lon] as [number, number])
+    : firstPlannedWaypoint
+      ? ([firstPlannedWaypoint.lat, firstPlannedWaypoint.lon] as [number, number])
+      : ([0, 0] as [number, number]);
 
   return (
     <MapContainer
       style={{ height: '100%' }}
       zoom={10}
-      center={firstPoint ? [firstPoint.lat, firstPoint.lon] : [0, 0]}
+      center={center}
       preferCanvas={preferCanvas}
       zoomControl={zoomControl}
     >
@@ -57,6 +134,41 @@ export function TripMap({ flights, onReady, preferCanvas = true, zoomControl = t
         attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         maxZoom={18}
       />
+      {/*
+        Planned routes render first so they sit beneath flown tracks in the
+        same pane (design.md §18). Drawn from planned_waypoints exactly as
+        stored — never snapped, warped or interpolated toward the flown track
+        (design.md §6.2, DoD 9): a visible gap at the ends of an IFR leg with
+        procedures is the file drawn faithfully, not a bug.
+      */}
+      {plannedLegs.map((leg) => {
+        const sortedWaypoints = leg.waypoints.slice().sort((a, b) => a.seq - b.seq);
+        if (sortedWaypoints.length === 0) return null;
+        const rawChain: [number, number][] = sortedWaypoints.map(w => [w.lat, w.lon]);
+        const chain = unwrapLonChain(rawChain);
+        const note = procedureNote(leg);
+        const label =
+          `Leg ${leg.seq} (planned) — ${leg.departure_ident} → ${leg.destination_ident}` +
+          ` · approx. ${formatDistance(leg.approx_distance_nm)} nm`;
+        return (
+          <Fragment key={`planned-${leg.id}`}>
+            <Polyline
+              positions={chain}
+              pathOptions={{ color: PLANNED_ROUTE_COLOR, weight: 2, opacity: 0.9, dashArray: '6 6' }}
+            >
+              <Tooltip sticky>
+                {label}
+                {note && <><br />{note}</>}
+              </Tooltip>
+            </Polyline>
+            {sortedWaypoints.map((w, i) => (
+              <Marker key={`${leg.id}-${w.seq}`} position={chain[i]} icon={mkWaypointIcon()}>
+                <Tooltip>{`Leg ${leg.seq} · ${w.ident}`}</Tooltip>
+              </Marker>
+            ))}
+          </Fragment>
+        );
+      })}
       {flights.map((f, i) => {
         const pts = f.points || [];
         if (pts.length === 0) return null;
@@ -76,7 +188,7 @@ export function TripMap({ flights, onReady, preferCanvas = true, zoomControl = t
           </Fragment>
         );
       })}
-      <BoundsController flights={flights} />
+      <BoundsController flights={flights} plannedLegs={plannedLegs} />
       <MapReadySignal onReady={onReady} />
     </MapContainer>
   );
