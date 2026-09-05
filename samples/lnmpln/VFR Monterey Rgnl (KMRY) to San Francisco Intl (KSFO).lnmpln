@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LittleNavmap xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://www.littlenavmap.org/schema/lnmpln.xsd">
+  <Flightplan>
+    <Header>
+      <FlightplanType>VFR</FlightplanType>
+      <CruisingAlt>3500</CruisingAlt>
+      <CruisingAltF>3500.00000000</CruisingAltF>
+      <CreationDate>2026-09-04T23:59:51-03:00</CreationDate>
+      <FileVersion>1.2</FileVersion>
+      <ProgramName>Little Navmap</ProgramName>
+      <ProgramVersion>3.0.18</ProgramVersion>
+      <Documentation>https://www.littlenavmap.org/lnmpln.html</Documentation>
+    </Header>
+    <SimData>MSFS</SimData>
+    <NavData Cycle="2609">NAVIGRAPH</NavData>
+    <AircraftPerformance>
+      <Type>C172</Type>
+      <Name>Example Performance Profile</Name>
+    </AircraftPerformance>
+    <Departure>
+      <Pos Lon="-121.838753" Lat="36.587494" Alt="257.00"/>
+      <Start>PARKING 112</Start>
+      <Type>Parking</Type>
+      <Heading>112.424</Heading>
+    </Departure>
+    <Procedures>
+      <SID>
+        <Name>KMRY28L</Name>
+        <Runway>28L</Runway>
+        <Type>CUSTOMDEPART</Type>
+        <CustomDistance>3.00</CustomDistance>
+      </SID>
+      <Approach>
+        <Name>DUYET</Name>
+        <ARINC>I28L</ARINC>
+        <Runway>28L</Runway>
+        <Type>ILS</Type>
+      </Approach>
+    </Procedures>
+    <Waypoints>
+      <Waypoint>
+        <Name>Monterey Rgnl</Name>
+        <Ident>KMRY</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-121.843079" Lat="36.586952" Alt="257.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP1</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.791855" Lat="36.715771" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP2</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.661392" Lat="36.800488" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP3</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.632553" Lat="36.824677" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP4</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.635300" Lat="36.850780" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP5</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.616417" Lat="36.863689" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP6</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.721992" Lat="36.920254" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP7</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.845589" Lat="36.945503" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP8</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-121.901894" Lat="36.975677" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP9</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.019997" Lat="36.978420" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP10</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.109947" Lat="36.964706" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP11</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.249336" Lat="37.061203" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP12</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.316628" Lat="37.135139" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP13</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.399025" Lat="37.195877" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WP14</Ident>
+        <Type>USER</Type>
+        <Pos Lon="-122.401085" Lat="37.348328" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>JUMDA</Ident>
+        <Region>K2</Region>
+        <Type>WAYPOINT</Type>
+        <Pos Lon="-122.288719" Lat="37.331791" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Ident>WADVA</Ident>
+        <Region>K2</Region>
+        <Type>WAYPOINT</Type>
+        <Pos Lon="-122.219894" Lat="37.395012" Alt="3500.00"/>
+      </Waypoint>
+      <Waypoint>
+        <Name>San Francisco Intl</Name>
+        <Ident>KSFO</Ident>
+        <Type>AIRPORT</Type>
+        <Pos Lon="-122.375519" Lat="37.618023" Alt="13.00"/>
+      </Waypoint>
+    </Waypoints>
+  </Flightplan>
+</LittleNavmap>

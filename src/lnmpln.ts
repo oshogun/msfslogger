@@ -814,9 +814,34 @@ export function parseLnmpln(input: string | Buffer, sourceFilename?: string): Pa
     approachCustomOffsetDeg: toNumber(approach?.['CustomOffsetAngle']),
   };
   if (procsEl !== undefined) {
+    // Name the actual procedures rather than describing the situation in the
+    // abstract: "the ILS DUYET approach is missing" tells the reader which part
+    // of their own flight the distance leaves out, which a generic sentence
+    // about SID/STAR/approach legs does not.
+    const named = [
+      procedures.sidName ? `the ${procedures.sidName} departure` : null,
+      procedures.starName ? `the ${procedures.starName} arrival` : null,
+      // The type is worth naming when it is a real one (ILS, RNAV, VOR). CUSTOM
+      // is Little Navmap's own marker for a synthesized runway extension, and
+      // the name is then just ICAO+runway (§5.4g) — printing "the CUSTOM
+      // KLAX24R approach" would show the reader an implementation detail.
+      procedures.approachName
+        ? `the ${[procedures.approachType === 'CUSTOM' ? null : procedures.approachType, procedures.approachName]
+            .filter(Boolean)
+            .join(' ')} approach`
+        : null,
+    ].filter((s): s is string => s !== null);
+
+    const list =
+      named.length === 0 ? 'its procedures'
+      : named.length === 1 ? named[0]
+      : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
+
     warn.add(
       'PROCEDURES_PRESENT_WAYPOINTS_ABSENT',
-      'plan names SID/STAR/approach procedures, whose legs the file never contains; the route distance is short by their full length',
+      `This plan flies ${list}, but Little Navmap saves procedures by name only — ` +
+        'their waypoints are not in the file. The route distance below covers just ' +
+        'the en-route portion, so the real flight is longer.',
     );
   }
 
