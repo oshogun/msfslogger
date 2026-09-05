@@ -990,9 +990,21 @@ cleanly. That matters because it is also the case §13.2 calls the common one.
   function in `src/lnmpln.ts` (T-002), not in `src/server.ts`: it reads only
   parsed endpoints, needs no database, and belongs where `inspect-lnmpln.ts` can
   exercise it. **T-002 acceptance:**
-  `npx ts-node src/inspect-lnmpln.ts 'samples/lnmpln/VFR*.lnmpln'` must print the
-  resolved order `KSBA→KMRY, KMRY→KSTS, KSTS→KACV` from alphabetically-ordered
-  input, and must print the fall-back reason for a synthesized A→B / B→A pair.
+  `src/inspect-lnmpln.ts` must print the resolved order
+  `KSBA→KMRY, KMRY→KSTS, KSTS→KACV` from alphabetically-ordered input, and must
+  print the fall-back reason for a synthesized A→B / B→A pair. **Name the three
+  trip files explicitly; do not glob.**
+
+  > *Corrected again 2026-09-05 (Orchestrator).* This first globbed
+  > `samples/lnmpln/*.lnmpln`, then `VFR*.lnmpln`. Both are now wrong. A fifth
+  > real file, `VFR Monterey Rgnl (KMRY) to San Francisco Intl (KSFO).lnmpln`,
+  > also matches `VFR*` and gives KMRY two successors (KSTS and KSFO), so that
+  > glob now correctly reports `AMBIGUOUS_SUCCESSOR`. **A glob is the wrong
+  > shape for this assertion**: the fixture directory is expected to grow, and
+  > every new file silently changes what the test asserts. Name the three files
+  > of the trip. The ambiguity itself is not a defect — it is §9.2.1 refusing to
+  > guess, and it is now demonstrated by real data rather than a synthesized
+  > pair.
 
   > *Corrected 2026-09-04 (Orchestrator).* This line originally globbed
   > `samples/lnmpln/*.lnmpln` and was written before the IFR fixture arrived.

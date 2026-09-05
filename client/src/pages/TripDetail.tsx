@@ -320,7 +320,7 @@ export function TripDetail() {
       <div className="map-section">
         <div className="section-title">Combined Route</div>
         <div id="map">
-          <TripMap flights={trip.flights} />
+          <TripMap flights={trip.flights} plannedLegs={trip.planned_legs} />
         </div>
       </div>
 

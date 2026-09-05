@@ -31,6 +31,24 @@ Alphabetical filename order is `KSTS->KACV, KMRY->KSTS, KSBA->KMRY` — the reve
 of the route. Importing all three in that order and getting `seq` 1,2,3 in route
 order is the sharpest regression test this feature has.
 
+**The KMRY -> KSFO plan** is the richest of the five. It is the first real file
+to carry a **published** (non-`CUSTOM`) approach — `DUYET`, type `ILS`, ARINC
+`I28L` — the first with a `SID Type=CUSTOMDEPART` (`KMRY28L`, 3.0 nm runway
+extension, a form the XSD does not declare), and the first with a `<Departure>`
+element at all (`PARKING 112`, heading 112.424). Between them those retire three
+gaps that until now only synthesized fixtures covered, and `approach_arinc` /
+`sid_type` finally have real evidence behind them.
+
+It also makes the fixture set genuinely ambiguous, on purpose: with
+`KMRY -> KSTS` already present, **KMRY has two successors**, so chain-sorting the
+whole `VFR*` set correctly returns `AMBIGUOUS_SUCCESSOR` and falls back to upload
+order. That is §9.2.1 refusing to guess, demonstrated by real data.
+
+**This is why no test may glob for its inputs.** The chain-sort assertion names
+the three files of the KSBA->KACV trip explicitly. A glob would keep compiling
+and keep passing while quietly asserting something else every time a file is
+added here.
+
 **The IFR plan** (KSFO -> KLAX, FL270) is the procedures fixture. It carries a
 full `<Procedures>` block — SID `WESLA5`/28L/`SUSEY`, STAR `IRNMN2`/24R/`BURGL`,
 and a `Type=CUSTOM` approach with `CustomDistance`, `CustomAltitude` and
@@ -51,9 +69,12 @@ It does not chain with the VFR trio; a batch mixing them falls back on
 ## What the real files still do not cover
 
 `synthetic/` has to supply: multiple `<Waypoints>` blocks, **`<Alternates>` of
-any kind — no real file has one**, XML comments, a missing `Pos/@Alt`, the
-two-digit `+02` CreationDate offset form, a UTF-8 BOM, a `<Departure>` element
-(absent from all four real files), and every rejection path (`bad-*.lnmpln`).
+any kind — no real file has one, and that is now the largest remaining gap**,
+XML comments, a missing `Pos/@Alt`, the two-digit `+02` CreationDate offset
+form, a UTF-8 BOM, and every rejection path (`bad-*.lnmpln`).
+
+Retired by the KMRY->KSFO file: `<Departure>`, a published approach with an
+ARINC identifier, and `SID Type=CUSTOMDEPART`.
 See `design.md` §21 for the full table.
 
 ## The synthesized fixtures (`synthetic/`)
