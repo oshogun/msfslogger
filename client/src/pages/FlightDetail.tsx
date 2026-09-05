@@ -3,9 +3,37 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { FlightMap } from '../components/FlightMap';
 import { AltitudeChart } from '../components/AltitudeChart';
 import { StatsGrid } from '../components/StatsGrid';
+import { plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
 import { apiFetch, downloadPdf } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
-import type { Flight } from '../types';
+import type { Flight, PlannedLegWithChildren, Trip } from '../types';
+
+/**
+ * The three procedure lines design.md §18 specifies verbatim, e.g.
+ * "SID WESLA5 · 28L · SUSEY" / "STAR IRNMN2 · 24R · BURGL" / "APP KLAX24R · 24R".
+ * Where approach_type is CUSTOM the name is a synthesized label rather than a
+ * published procedure (§5.4g), so the line says so rather than presenting it
+ * as a real fix.
+ */
+function procedureLine(label: string, parts: (string | null)[]): string {
+  return `${label} ${parts.filter((p): p is string => !!p).join(' · ')}`;
+}
+
+function procedureLines(leg: PlannedLegWithChildren): string[] {
+  const lines: string[] = [];
+  if (leg.sid_name) {
+    lines.push(procedureLine('SID', [leg.sid_name, leg.sid_runway, leg.sid_transition]));
+  }
+  if (leg.star_name) {
+    lines.push(procedureLine('STAR', [leg.star_name, leg.star_runway, leg.star_transition]));
+  }
+  if (leg.approach_name) {
+    let line = procedureLine('APP', [leg.approach_name, leg.approach_runway, leg.approach_transition]);
+    if (leg.approach_type === 'CUSTOM') line += ' (custom — not a published procedure)';
+    lines.push(line);
+  }
+  return lines;
+}
 
 export function FlightDetail() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +52,14 @@ export function FlightDetail() {
   const [includePlan, setIncludePlan] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Planned-leg link (design.md §12, §18) ────────────────────────────────
+  const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
+  const [plannedTripName, setPlannedTripName] = useState<string | null>(null);
+  const [plannedLegLoading, setPlannedLegLoading] = useState(false);
+  const [plannedLegError, setPlannedLegError] = useState('');
+  const [unlinkBusy, setUnlinkBusy] = useState(false);
+  const [unlinkError, setUnlinkError] = useState('');
+
   useEffect(() => {
     if (!id) { navigate('/'); return; }
     apiFetch<Flight>(`/api/flights/${id}`)
@@ -35,6 +71,61 @@ export function FlightDetail() {
       })
       .catch(err => setLoadError((err as Error).message));
   }, [id, navigate]);
+
+  // Fetches the linked leg (and its trip's name) whenever the link changes —
+  // including right after Unlink, so the section disappears without a manual
+  // reload. GET /api/planned-legs/:legId already returns PlannedLegWithChildren
+  // (design.md §12.1); the trip's name is not on that payload, so GET
+  // /api/trips supplies it — no server change is needed or permitted here.
+  useEffect(() => {
+    const legId = flight?.planned_leg_id ?? null;
+    if (legId == null) {
+      setPlannedLeg(null);
+      setPlannedTripName(null);
+      setPlannedLegError('');
+      return;
+    }
+    let cancelled = false;
+    setPlannedLegLoading(true);
+    setPlannedLegError('');
+    Promise.all([
+      apiFetch<PlannedLegWithChildren>(`/api/planned-legs/${legId}`),
+      apiFetch<Trip[]>('/api/trips'),
+    ])
+      .then(([leg, trips]) => {
+        if (cancelled) return;
+        setPlannedLeg(leg);
+        setPlannedTripName(trips.find(t => t.id === leg.trip_id)?.name ?? null);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setPlannedLegError('Failed to load planned leg: ' + (err as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setPlannedLegLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [flight?.planned_leg_id]);
+
+  async function handleUnlinkPlannedLeg() {
+    if (!confirm('Unlink this flight from its planned leg?')) return;
+    setUnlinkBusy(true);
+    setUnlinkError('');
+    try {
+      const updated = await apiFetch<Flight>(`/api/flights/${id}/planned-leg`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plannedLegId: null }),
+      });
+      // Triggers the effect above (plannedLegId is now null), which clears
+      // plannedLeg/plannedTripName and hides the section — no reload needed.
+      setFlight(updated);
+    } catch (err) {
+      setUnlinkError('Unlink failed: ' + (err as Error).message);
+    } finally {
+      setUnlinkBusy(false);
+    }
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -158,6 +249,60 @@ export function FlightDetail() {
         </div>
       )}
 
+      {flight.planned_leg_id != null && (
+        <div className="notes-section">
+          <div className="section-title">Planned Leg</div>
+          {plannedLegLoading && <p className="flight-plan-status">Loading planned leg…</p>}
+          {plannedLegError && <p className="edit-error">{plannedLegError}</p>}
+          {plannedLeg && (
+            <>
+              <p className="notes-text">
+                <span className={`badge ${plannedLegBadge(plannedLeg.status).className}`}>
+                  {plannedLegBadge(plannedLeg.status).label}
+                </span>
+                {plannedLeg.is_snippet === 1 && <span className="badge badge-snippet" style={{ marginLeft: '0.4rem' }}>Snippet</span>}
+                {' '}
+                Leg {plannedLeg.seq} of{' '}
+                {plannedTripName ? (
+                  <Link to={`/trip/${plannedLeg.trip_id}`} className="flight-plan-link">{plannedTripName}</Link>
+                ) : (
+                  'its trip'
+                )}
+                : {plannedLeg.departure_ident} → {plannedLeg.destination_ident}
+              </p>
+              <p className="flight-plan-status">
+                Planned cruise {formatAlt(plannedLeg.cruise_alt_ft)} ft · approx.{' '}
+                {formatDistance(plannedLeg.approx_distance_nm)} nm
+              </p>
+              {/* design.md §14 (T-018 F-3): the flight itself is `flight` —
+                  no second fetch to resolve it. Null on every leg not yet
+                  flown and every leg imported before this phase (§18). */}
+              {plannedLegLandingNote(plannedLeg, flight) && (
+                <p className={`flight-plan-status${plannedLeg.status === 'diverted' ? ' td-planned-meta-diverted' : ''}`}>
+                  {plannedLegLandingNote(plannedLeg, flight)}
+                </p>
+              )}
+              <p className="flight-plan-status">
+                {flight.planned_leg_link_source === 'auto'
+                  ? 'Linked automatically, at takeoff.'
+                  : flight.planned_leg_link_source === 'manual'
+                    ? 'Linked by hand.'
+                    : 'Linked.'}
+              </p>
+              {procedureLines(plannedLeg).map((line, i) => (
+                <p key={i} className="flight-plan-status">{line}</p>
+              ))}
+              <div className="flight-actions" style={{ marginTop: '0.6rem' }}>
+                <button className="btn btn-ghost" disabled={unlinkBusy} onClick={handleUnlinkPlannedLeg}>
+                  {unlinkBusy ? 'Unlinking…' : 'Unlink'}
+                </button>
+                {unlinkError && <span className="edit-error">{unlinkError}</span>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="flight-plan-section">
         <div className="section-title">Flight Plan</div>
         {flight.flight_plan_name ? (
@@ -227,7 +372,7 @@ export function FlightDetail() {
       <div className="map-section">
         <div className="section-title">GPS Track</div>
         <div id="map">
-          <FlightMap points={flight.points || []} />
+          <FlightMap points={flight.points || []} plannedLeg={plannedLeg ?? undefined} />
         </div>
       </div>
 

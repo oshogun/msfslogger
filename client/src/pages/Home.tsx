@@ -260,7 +260,17 @@ export function Home({ status }: Props) {
                       <td colSpan={8}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <div>
-                            <div className="trip-row-name">🚗 {trip.name}</div>
+                            <div className="trip-row-name">
+                              🚗 {trip.name}
+                              {/* The active flag is otherwise only visible on the trip's own
+                                  page (TripDetail) — surfaced here too so a trip left active
+                                  for weeks is discoverable from the landing page, not just
+                                  discovered the hard way when a flight attaches to the wrong
+                                  leg (design.md §11, plan.json T-013 risk note). Reuses the
+                                  is_active already embedded in this same GET /api/trips
+                                  response — no second call. */}
+                              {trip.is_active === 1 && <span className="badge badge-active-trip">Active</span>}
+                            </div>
                             <div className="trip-row-stats">
                               {trip.flight_count} leg{trip.flight_count !== 1 ? 's' : ''} · {formatDuration(trip.total_duration_sec)} · {formatDistance(trip.total_distance_nm)} nm
                             </div>

@@ -406,8 +406,43 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .badge-snippet { color: #f59e0b; background: #2d2410; border: 1px solid #4a3a12; }
 .td-route-snippet { color: #94a3b8 !important; }
 .td-planned-meta { font-size: 0.72rem; color: #64748b; margin-top: 0.15rem; }
+/* design.md §14 (T-018 F-3): a diverted leg's landing note picks up the same
+   amber as .badge-diverted, so the row reads as notable without shouting —
+   a flown leg's note stays the plain .td-planned-meta color on purpose. */
+.td-planned-meta-diverted { color: #fbbf24; }
 .btn-icon { padding: 0.25rem 0.45rem; font-size: 0.75rem; line-height: 1; margin-right: 0.3rem; }
 .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* ── Active trip, and manual link/unlink/skip (design.md §11, §12, §15) ── */
+.active-trip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.badge-active-trip { color: #34d399; background: #0f2a20; border: 1px solid #1c4a37; }
+.badge-flown       { color: #34d399; background: #0f2a20; border: 1px solid #1c4a37; }
+.badge-diverted    { color: #fbbf24; background: #2d2410; border: 1px solid #4a3a12; }
+.badge-skipped     { color: #64748b; background: #1a1d27; border: 1px solid #2d3148; }
+
+.tr-link-picker td { padding-top: 0.5rem; padding-bottom: 0.5rem; background: #151822; }
+.link-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-style: normal;
+}
+.link-picker select {
+  background: #0f1117;
+  color: #e2e8f0;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+  max-width: 340px;
+}
 
 /* ── Atlas ── */
 #atlas-map {
