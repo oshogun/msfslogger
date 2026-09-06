@@ -529,7 +529,7 @@ export function TripDetail() {
       </div>
 
       <div className="planned-legs-import-section">
-        <div className="section-title">Import Flight Plan(s)</div>
+        <div className="section-title">Import Planned Route (.lnmpln)</div>
         <div className="flight-plan-upload">
           <input
             ref={importInputRef}

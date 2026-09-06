@@ -8,6 +8,7 @@ import { apiFetch } from '../utils/api';
 import { useExportReady } from '../utils/exportReady';
 import { strideSample, lttb, MAP_MAX_POINTS, CHART_MAX_POINTS } from '../utils/downsample';
 import { formatDateIn, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
+import { interleaveTripRows, plannedLegBadge } from '../components/PlannedLegRows';
 import type { Trip } from '../types';
 import '../print.css';
 
@@ -38,10 +39,19 @@ export function PrintTrip() {
   }, [id]);
 
   const flights = trip?.flights ?? [];
+  const plannedLegs = trip?.planned_legs ?? [];
   const legsWithPoints = flights.filter(f => (f.points?.length ?? 0) > 0);
-  // One overview map (only if any leg has points) plus one map per plotted leg.
-  const expectedMaps = (legsWithPoints.length > 0 ? 1 : 0) + legsWithPoints.length;
+  const hasPlannedWaypoints = plannedLegs.some(l => l.waypoints.length > 0);
+  // The overview map renders whenever TripMap itself would draw something —
+  // flown points or a planned route — mirroring TripMap's own hasPoints ||
+  // hasPlannedWaypoints check, so this count never disagrees with whether the
+  // map (and its MapReadySignal) actually mounts. A trip with only planned
+  // legs and no flights would otherwise be counted as one map short, and the
+  // export would hang waiting for a signal that never fires (design.md §19).
+  const showOverviewMap = legsWithPoints.length > 0 || hasPlannedWaypoints;
+  const expectedMaps = (showOverviewMap ? 1 : 0) + legsWithPoints.length;
   const signalMapReady = useExportReady(trip !== null, expectedMaps);
+  const mergedRows = interleaveTripRows(flights, plannedLegs);
 
   if (loadError) return <main className="print-root">Failed to load trip: {loadError}</main>;
   if (!trip) return <main className="print-root">Loading...</main>;
@@ -74,12 +84,13 @@ export function PrintTrip() {
           </div>
         )}
 
-        {legsWithPoints.length > 0 && (
+        {showOverviewMap && (
           <div className="map-section">
             <div className="section-title">Combined Route</div>
             <div className="print-map print-map-overview">
               <TripMap
                 flights={flights}
+                plannedLegs={plannedLegs}
                 onReady={signalMapReady}
                 preferCanvas={false}
                 zoomControl={false}
@@ -102,28 +113,56 @@ export function PrintTrip() {
               </tr>
             </thead>
             <tbody>
-              {flights.map((f, i) => (
-                <tr key={f.id}>
-                  <td className="td-stat">
-                    <span className="leg-color-swatch" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }}></span>
-                    Leg {i + 1}
-                  </td>
-                  <td className="td-aircraft">{f.aircraft || 'Unknown'}</td>
-                  <td className="td-date">{fmtDate(f.start_time)}</td>
-                  <td className="td-stat">{formatDuration(f.duration_sec)}</td>
-                  <td className="td-stat">{formatDistance(f.distance_nm)} nm</td>
-                  <td className="td-stat">
-                    {(f.departure_icao || f.arrival_icao) ? (
-                      <span className="td-route">
-                        {f.departure_icao || '???'} → {f.arrival_icao || '???'}
-                      </span>
-                    ) : (
-                      // Combined flights lose their ICAO codes, so fall back to coordinates
-                      <span>{coordStr(f.departure_lat, f.departure_lon)}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {mergedRows.map((row) => {
+                if (row.kind === 'flight') {
+                  const f = row.flight;
+                  const i = row.flightIndex;
+                  return (
+                    <tr key={f.id}>
+                      <td className="td-stat">
+                        <span className="leg-color-swatch" style={{ background: LEG_COLORS[i % LEG_COLORS.length] }}></span>
+                        Leg {i + 1}
+                      </td>
+                      <td className="td-aircraft">{f.aircraft || 'Unknown'}</td>
+                      <td className="td-date">{fmtDate(f.start_time)}</td>
+                      <td className="td-stat">{formatDuration(f.duration_sec)}</td>
+                      <td className="td-stat">{formatDistance(f.distance_nm)} nm</td>
+                      <td className="td-stat">
+                        {(f.departure_icao || f.arrival_icao) ? (
+                          <span className="td-route">
+                            {f.departure_icao || '???'} → {f.arrival_icao || '???'}
+                          </span>
+                        ) : (
+                          // Combined flights lose their ICAO codes, so fall back to coordinates
+                          <span>{coordStr(f.departure_lat, f.departure_lon)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                }
+
+                // An imported, unflown planned leg — a different thing from a
+                // PDF flight plan attached to a flight (design.md §1). Plain
+                // text rather than the dashboard's dark badge chips, which
+                // are illegible on this page's white background; no move/link/
+                // skip/delete controls, since the export is read-only.
+                const leg = row.leg;
+                const badge = plannedLegBadge(leg.status);
+                return (
+                  <tr key={`planned-${leg.id}`}>
+                    <td className="td-stat td-planned-print">
+                      {badge.label}{leg.is_snippet === 1 ? ' · Snippet' : ''}
+                    </td>
+                    <td className="td-aircraft">{leg.aircraft_type || 'Unknown'}</td>
+                    <td className="td-date">—</td>
+                    <td className="td-stat">—</td>
+                    <td className="td-stat">approx. {formatDistance(leg.approx_distance_nm)} nm</td>
+                    <td className="td-stat">
+                      <span className="td-route">{leg.departure_ident} → {leg.destination_ident}</span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

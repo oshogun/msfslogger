@@ -1,8 +1,8 @@
-import type { SimFrame, FlightState, AppState } from './types';
+import type { SimFrame, FlightState, AppState, PlannedLegWithChildren, PlannedLegLiveStatus } from './types';
 import {
   insertFlight, insertPoint, closeFlight, getFlightPlannedLegId,
   getActiveTripId, getPlannedLegCandidatesForActiveTrip, getPlannedLegById,
-  linkFlightToPlannedLeg, recordPlannedLegArrival,
+  linkFlightToPlannedLeg, recordPlannedLegArrival, getTripName,
 } from './db';
 import { findNearestAirport } from './airports';
 import { matchPlannedLeg, DEPARTURE_RADIUS_NM, ARRIVAL_RADIUS_NM } from './legMatcher';
@@ -24,6 +24,33 @@ function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Approximate cross-track distance (nm) from (lat, lon) to the segment
+ * a->b, clamped to the segment itself rather than the infinite line through
+ * it. Flat-plane (equirectangular) projection, not great-circle — adequate
+ * here because it is used only to rank which leg of the route the aircraft is
+ * nearest to, never reported as a distance itself (that's haversineNm, on the
+ * chosen waypoint).
+ *
+ * Why not simply pick whichever waypoint minimises dist(pos, waypoint) +
+ * dist(waypoint, destination)? Triangle inequality means that sum is
+ * smallest for the LAST waypoint unless the aircraft is off to the side of
+ * the direct line — and a real planned route is nearly straight (design.md
+ * §6: the KSFO->KLAX skeleton is 293.48 nm against a 293.23 nm direct great
+ * circle). That approach would report the destination as "next waypoint"
+ * from the moment of takeoff on almost every real leg, which is exactly
+ * backwards.
+ */
+function crossTrackNm(lat: number, lon: number, aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const cosLat = Math.cos(((aLat + bLat) / 2 * Math.PI) / 180);
+  const bx = (bLon - aLon) * cosLat, by = bLat - aLat;
+  const px = (lon - aLon) * cosLat, py = lat - aLat;
+  const abLenSq = bx * bx + by * by;
+  const t = abLenSq === 0 ? 0 : Math.max(0, Math.min(1, (px * bx + py * by) / abLenSq));
+  const dx = px - t * bx, dy = py - t * by;
+  return Math.sqrt(dx * dx + dy * dy) * 60; // ~60 nm per degree
 }
 
 /** `result.distanceNm` is unrounded and null before the radius is applied. */
@@ -56,9 +83,46 @@ function describeRefusal(result: LegMatchResult): string {
   return '';
 }
 
+/**
+ * Live-status cache for the flight currently FLYING, built once — at
+ * auto-link time, or refreshed on a manual link/unlink — never re-read from
+ * the database per status poll (design.md §19). `waypoints` mirrors the
+ * leg's own planned_waypoints order (departure first, destination last, per
+ * design.md §5.4c / lnmpln.ts); `remainingFromNm[i]` is the great-circle
+ * distance from `waypoints[i]` to the destination, following that same chain.
+ */
+interface PlannedLegCache {
+  flightId: number;
+  plannedLegId: number;
+  tripId: number;
+  tripName: string;
+  destinationIdent: string;
+  waypoints: { ident: string; lat: number; lon: number }[];
+  remainingFromNm: number[];
+}
+
+function buildPlannedLegCache(flightId: number, leg: PlannedLegWithChildren): PlannedLegCache {
+  const waypoints = leg.waypoints.map(w => ({ ident: w.ident, lat: w.lat, lon: w.lon }));
+  const remainingFromNm = new Array<number>(waypoints.length).fill(0);
+  for (let i = waypoints.length - 2; i >= 0; i--) {
+    remainingFromNm[i] =
+      remainingFromNm[i + 1] + haversineNm(waypoints[i].lat, waypoints[i].lon, waypoints[i + 1].lat, waypoints[i + 1].lon);
+  }
+  return {
+    flightId,
+    plannedLegId: leg.id,
+    tripId: leg.trip_id,
+    tripName: getTripName(leg.trip_id) ?? '',
+    destinationIdent: leg.destination_ident,
+    waypoints,
+    remainingFromNm,
+  };
+}
+
 export class FlightManager {
   private state: FlightState = 'IDLE';
   private currentFlightId: number | null = null;
+  private plannedLegCache: PlannedLegCache | null = null;
   private airborneStreak = 0;
   private landedStreak = 0;
   private isPaused = false;
@@ -162,6 +226,7 @@ export class FlightManager {
     const id = insertFlight(frame.aircraft, frame.lat, frame.lon, startTime, dep?.icao ?? null, dep?.name ?? null);
     if (dep) console.log(`[FlightManager] Departure airport: ${dep.icao} (${dep.name})`);
 
+    this.plannedLegCache = null;
     this.autoLinkPlannedLeg(id, frame, startTime);
 
     this.currentFlightId = id;
@@ -225,11 +290,67 @@ export class FlightManager {
     this.recordArrivalOnPlannedLeg(this.currentFlightId, frame);
 
     this.currentFlightId = null;
+    this.plannedLegCache = null;
     this.state = 'IDLE';
     this.appState.flightState = 'IDLE';
     this.appState.currentFlightId = null;
     this.airborneStreak = 0;
     this.landedStreak = 0;
+  }
+
+  /**
+   * The live-panel context for /api/status (design.md §19), or null while
+   * unlinked. Reads only the cache built at link time plus the two
+   * coordinates the caller already has — no query, so a 1 Hz poll costs
+   * nothing here. `lat`/`lon` come from the last frame, not stored, since the
+   * server already holds it and passing it keeps this method pure.
+   *
+   * "Next waypoint" is the far end of whichever route segment the current
+   * position is nearest to by cross-track distance (see crossTrackNm above),
+   * which is what actually tracks progress along a nearly-straight route.
+   * `remainingDistanceNm` is then the direct distance to that waypoint plus
+   * the rest of the chain from there to the destination — never a fraction
+   * of raw distance flown, and always via the file's own waypoint chain.
+   */
+  getPlannedLegStatus(lat: number, lon: number): PlannedLegLiveStatus | null {
+    const cache = this.plannedLegCache;
+    if (!cache) return null;
+
+    const { waypoints, remainingFromNm } = cache;
+    let bestSegment = 0;
+    let bestCrossTrackNm = Infinity;
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      const d = crossTrackNm(lat, lon, waypoints[i].lat, waypoints[i].lon, waypoints[i + 1].lat, waypoints[i + 1].lon);
+      if (d < bestCrossTrackNm) { bestCrossTrackNm = d; bestSegment = i; }
+    }
+    const nextIdx = bestSegment + 1;
+    const remainingDistanceNm = haversineNm(lat, lon, waypoints[nextIdx].lat, waypoints[nextIdx].lon) + remainingFromNm[nextIdx];
+
+    return {
+      plannedLegId: cache.plannedLegId,
+      tripId: cache.tripId,
+      tripName: cache.tripName,
+      destinationIdent: cache.destinationIdent,
+      nextWaypointIdent: waypoints[nextIdx].ident,
+      remainingDistanceNm: Math.round(remainingDistanceNm * 10) / 10,
+      distanceIsApproximate: true,
+    };
+  }
+
+  /**
+   * Called by the manual link/unlink endpoint (design.md §12.3), which talks
+   * to the database directly and never goes through FlightManager. Without
+   * this, linking or unlinking the in-progress flight by hand would leave the
+   * live-status cache pointed at whatever autoLinkPlannedLeg last set (or at
+   * nothing), silently disagreeing with the row the rest of the app now
+   * reads. A no-op for any flight that isn't the one currently flying.
+   */
+  refreshPlannedLegForFlight(flightId: number): void {
+    if (flightId !== this.currentFlightId) return;
+    const legId = getFlightPlannedLegId(flightId);
+    if (legId === null) { this.plannedLegCache = null; return; }
+    const leg = getPlannedLegById(legId);
+    this.plannedLegCache = leg ? buildPlannedLegCache(flightId, leg) : null;
   }
 
   /**
@@ -275,6 +396,7 @@ export class FlightManager {
         // because the label lookup was the thing that threw.
         const leg = getPlannedLegById(result.plannedLegId);
         linkFlightToPlannedLeg(flightId, result.plannedLegId, 'auto');
+        if (leg) this.plannedLegCache = buildPlannedLegCache(flightId, leg);
         const route = leg ? `${leg.departure_ident}→${leg.destination_ident}, ` : '';
         console.log(
           `[FlightManager] Flight #${flightId} linked to planned leg #${result.plannedLegId} ` +

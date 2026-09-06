@@ -247,6 +247,21 @@ export interface StatusFrame {
   onGround: boolean;
 }
 
+/**
+ * Mirrors src/types.ts PlannedLegLiveStatus. Present on Status only while
+ * flightState === 'FLYING' and the flight is linked to a planned leg — absent,
+ * never null, the rest of the time (design.md §19).
+ */
+export interface PlannedLegLiveStatus {
+  plannedLegId: number;
+  tripId: number;
+  tripName: string;
+  destinationIdent: string;
+  nextWaypointIdent: string;
+  remainingDistanceNm: number;
+  distanceIsApproximate: true;
+}
+
 export interface Status {
   connected: boolean;
   flightState: string;
@@ -257,6 +272,7 @@ export interface Status {
   paused: boolean;
   /** Raw MSFS Pause_EX1 bitmask: 1 full, 2 with-sound, 4 active, 8 sim. */
   pauseFlags: number;
+  plannedLeg?: PlannedLegLiveStatus;
 }
 
 export interface JourneyLeg {
@@ -283,6 +299,8 @@ export interface Journey {
   legCount: number;
   totalDistanceNm: number;
   totalDurationSec: number;
+  /** Absent, not zero, when the trip has no planned legs. design.md §19, §20. */
+  plannedRouteProgressPct?: number;
   aircraftCount: number;
   aircraft: { name: string; legs: number; distanceNm: number }[];
   maxAltitudeFt: number;

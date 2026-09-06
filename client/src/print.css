@@ -153,6 +153,11 @@ body:has(.print-root) {
 .print-root .td-date { color: var(--print-muted); }
 .print-root .td-route { color: var(--print-accent); }
 
+/* An imported, unflown planned leg — the print equivalent of the app's dashed
+   "ghost row" (see PlannedLegRows.tsx), rendered in muted italic text since
+   this page has no dark badge chips to fall back on. */
+.print-root .td-planned-print { color: var(--print-muted); font-style: italic; }
+
 /* Keep a table from splitting awkwardly across pages */
 .print-root tr { break-inside: avoid; page-break-inside: avoid; }
 .print-root .map-section,

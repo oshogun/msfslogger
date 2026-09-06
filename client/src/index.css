@@ -104,6 +104,10 @@ a:hover { text-decoration: underline; }
   margin-left: 0.2rem;
   font-weight: 400;
 }
+/* Matches the planned-route accent used on the maps (TripMap/FlightMap), so
+   plan-derived tiles read as a different kind of data from live telemetry. */
+.live-item-planned { border-color: #3b4a63; }
+.live-item-planned .live-label { color: #94a3b8; }
 
 #live-map {
   height: 340px;
@@ -465,6 +469,13 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   border-radius: 999px; padding: 0.1rem 0.4rem; font-variant-numeric: tabular-nums;
 }
 
+/* Progress bar uses the same slate accent as a planned route on the maps
+   (TripMap/FlightMap's PLANNED_ROUTE_COLOR), not the flown-leg blue, since
+   it measures against the plan rather than against a flight. */
+.atlas-progress-bar { height: 6px; background: #0f1117; border-radius: 999px; overflow: hidden; }
+.atlas-progress-bar-fill { height: 100%; background: #94a3b8; border-radius: 999px; }
+.atlas-progress-label { font-size: 0.75rem; color: #64748b; margin-top: 0.4rem; }
+
 .atlas-chain {
   background: #1a2744; border: 1px solid #1e3a5f; border-radius: 10px;
   padding: 0.8rem 1rem; margin-bottom: 1.5rem;
@@ -624,4 +635,26 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 
 @media (prefers-reduced-motion: reduce) {
   .device-switch-knob, .device-frame, .device-lamp, .device-state { transition: none; }
+}
+
+/* ── The Override ── */
+.override-page, .override-page * { cursor: none !important; }
+
+.device-state.is-resisting { color: #f87171; border-color: #5c1f1f; }
+
+.ghost-cursor {
+  position: fixed;
+  top: 0; left: 0;
+  z-index: 999;
+  width: 22px; height: 22px;
+  margin: -2px 0 0 -2px;
+  pointer-events: none;
+  background: #f1f5f9;
+  clip-path: polygon(0 0, 0 70%, 25% 55%, 45% 100%, 60% 92%, 40% 50%, 70% 50%);
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.75));
+}
+.ghost-cursor.is-auto { background: #f59e0b; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ghost-cursor { transition: none !important; }
 }

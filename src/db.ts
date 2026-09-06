@@ -478,6 +478,16 @@ export function getTripById(id: number): TripWithFlights | null {
   return { ...row, flights, planned_legs: plannedLegs };
 }
 
+/**
+ * A trip's name alone, for FlightManager's planned-leg live-status cache
+ * (design.md §19) — that cache is built once at link time and must not pull
+ * in a trip's whole flight/point history just to label it.
+ */
+export function getTripName(tripId: number): string | null {
+  const row = db.prepare('SELECT name FROM trips WHERE id = ?').get(tripId) as { name: string } | undefined;
+  return row?.name ?? null;
+}
+
 export function updateTrip(id: number, payload: TripEditPayload): boolean {
   const allowed = ['name', 'notes'] as const;
   const keys = (Object.keys(payload) as (typeof allowed[number])[]).filter(k => allowed.includes(k));
