@@ -109,6 +109,13 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   app.get('/api/status', (_req, res) => {
     const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
+    // Only while FLYING, and only when the flight is actually linked — every
+    // other case must leave the response byte-identical to before this key
+    // existed, so it is spread in rather than ever sent as a literal null.
+    // design.md §19.
+    const plannedLeg = flightState === 'FLYING' && lastFrame
+      ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
+      : null;
     res.json({
       connected,
       flightState,
@@ -128,6 +135,7 @@ export function createServer(flightManager: FlightManager): express.Express {
         verticalSpeedFpm: lastFrame.verticalSpeedFpm,
         onGround:         lastFrame.onGround,
       } : null,
+      ...(plannedLeg ? { plannedLeg } : {}),
     });
   });
 
@@ -399,7 +407,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
 
     try {
-      res.json(buildJourney(trip.flights));
+      res.json(buildJourney(trip.flights, trip.planned_legs));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -634,6 +642,10 @@ export function createServer(flightManager: FlightManager): express.Express {
       } else {
         linkFlightToPlannedLeg(id, plannedLegId as number, 'manual');
       }
+      // A manual link/unlink bypasses FlightManager entirely, so its live-status
+      // cache (design.md §19) would otherwise keep whatever autoLinkPlannedLeg
+      // last set for this flight. A no-op unless `id` is the flight in progress.
+      flightManager.refreshPlannedLegForFlight(id);
       res.json(getFlightById(id));
     } catch (err) {
       if (err instanceof PlannedLegAlreadyLinkedError) {

@@ -1,4 +1,4 @@
-import type { Flight, FlightPoint } from './types';
+import type { Flight, FlightPoint, PlannedLegWithChildren } from './types';
 
 /**
  * ICAO prefix -> country. ICAO codes are allocated by region, so the first one
@@ -120,14 +120,24 @@ export interface JourneyAirport {
  * Note: an "around the world" progress bar used to live here, comparing total
  * distance flown against the 21,639 nm equator. It was removed because distance
  * flown is not progress around a globe — a trip running north covers thousands
- * of miles while gaining almost no longitude. If this returns alongside planned
- * trips, measure progress along the planned route (or longitude swept), not
- * raw distance.
+ * of miles while gaining almost no longitude. Progress exists again below as
+ * `plannedRouteProgressPct`, but measured the way this note always said it had
+ * to be: flown distance against the sum of the trip's own planned legs'
+ * approx_distance_nm, never raw distance and never the equator. The key is
+ * absent, not zero, on a trip with no planned legs (design.md §19, §20).
  */
 export interface Journey {
   legCount: number;
   totalDistanceNm: number;
   totalDurationSec: number;
+  /**
+   * Flown distance over the sum of each planned leg's approx_distance_nm,
+   * clamped to 0..100 — flown distance regularly overshoots the planned total
+   * since procedure legs are never in the file (design.md §6). Absent when the
+   * trip has no planned legs or their total is degenerate (0 nm); never `null`
+   * or `0` in that case, so a caller cannot mistake "no plan" for "no progress".
+   */
+  plannedRouteProgressPct?: number;
   aircraftCount: number;
   aircraft: { name: string; legs: number; distanceNm: number }[];
   maxAltitudeFt: number;
@@ -145,7 +155,10 @@ export interface Journey {
 
 const TRACK_SAMPLE_POINTS = 160;
 
-export function buildJourney(flights: (Flight & { points: FlightPoint[] })[]): Journey {
+export function buildJourney(
+  flights: (Flight & { points: FlightPoint[] })[],
+  plannedLegs: PlannedLegWithChildren[] = []
+): Journey {
   const ordered = [...flights].sort(
     (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
   );
@@ -222,10 +235,16 @@ export function buildJourney(flights: (Flight & { points: FlightPoint[] })[]): J
     return best;
   }, null);
 
+  const totalPlannedDistanceNm = plannedLegs.reduce((s, l) => s + l.approx_distance_nm, 0);
+  const plannedRouteProgressPct = totalPlannedDistanceNm > 0
+    ? Math.min(100, Math.round((totalDistanceNm / totalPlannedDistanceNm) * 1000) / 10)
+    : undefined;
+
   return {
     legCount: legs.length,
     totalDistanceNm: Math.round(totalDistanceNm * 10) / 10,
     totalDurationSec,
+    ...(plannedRouteProgressPct !== undefined ? { plannedRouteProgressPct } : {}),
     aircraftCount: byAircraft.size,
     aircraft: [...byAircraft.entries()]
       .map(([name, v]) => ({ name, legs: v.legs, distanceNm: Math.round(v.distanceNm * 10) / 10 }))

@@ -36,6 +36,18 @@ export function TripAtlas({ journey }: Props) {
     <>
       <StatsGrid stats={stats} />
 
+      {journey.plannedRouteProgressPct !== undefined && (
+        <div className="atlas-section">
+          <div className="section-title">Planned Route Progress</div>
+          <div className="atlas-progress">
+            <div className="atlas-progress-bar">
+              <div className="atlas-progress-bar-fill" style={{ width: `${journey.plannedRouteProgressPct}%` }} />
+            </div>
+            <div className="atlas-progress-label">{journey.plannedRouteProgressPct.toFixed(1)}% of approx. planned distance flown</div>
+          </div>
+        </div>
+      )}
+
       {journey.countries.length > 0 && (
         <div className="atlas-section">
           <div className="section-title">

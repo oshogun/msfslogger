@@ -6,7 +6,9 @@ Automatic flight logger for Microsoft Flight Simulator 2020/2024 (and probably o
 
 The server records one data point per second while airborne, and saves completed flights to `flights.db`. Flight time is measured from the recorded track rather than the wall clock, so any interruption — **Active Pause**, a regular pause, a menu, slew mode, a frozen sim, even the agent dropping out — is excluded automatically. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, attach a PDF flight plan to each flight (stored in `flight_plans/`), and [export a flight or a whole trip as a PDF](#pdf-export).
 
-Each trip can be viewed two ways. **Overview** is the working view — stats, notes, the combined route map and an editable legs table. **Atlas** (`/trip/:id?view=atlas`) is the analytical one: every leg drawn on a single map tinted from the trip's first flight to its last, plus airports, aircraft breakdown, countries visited (derived from ICAO prefixes), and the longest unbroken chain of legs — consecutive flights where each departure is the previous arrival. Sections that say nothing about a given trip hide themselves, so a one-leg hop stays uncluttered.
+Each trip can be viewed two ways. **Overview** is the working view — stats, notes, the combined route map and an editable legs table. **Atlas** (`/trip/:id?view=atlas`) is the analytical one: every leg drawn on a single map tinted from the trip's first flight to its last, plus airports, aircraft breakdown, countries visited (derived from ICAO prefixes), the longest unbroken chain of legs, and — for a trip with an [imported route](#trip-plans-little-navmap-import) — progress flown against that route's approximate total distance. Sections that say nothing about a given trip hide themselves, so a one-leg hop stays uncluttered.
+
+A trip can also carry an [**imported route**](#trip-plans-little-navmap-import) from Little Navmap, ahead of flying it: while airborne on one of its legs, the live panel names the destination, the next waypoint, and the approximate distance remaining.
 
 When MSFS and the server are on different machines, flight data gets across via the **agent**: a small script ([`agent/`](agent/)) that runs on the Windows machine, connects to SimConnect **locally** — exactly like any other local addon, with no TCP or firewall configuration — and pushes data to the server over plain HTTP. See [`agent/README.md`](agent/README.md) to set it up.
 
@@ -171,6 +173,42 @@ Add `init: true` to the compose service as well — Chromium spawns child proces
 
 ---
 
+## Trip plans (Little Navmap import)
+
+A trip can hold an **imported route**: the sequence of legs from one or more `.lnmpln` files exported
+by [Little Navmap](https://albar965.github.io/littlenavmap.html). This is a different feature from
+the PDF **flight plan** you can attach to a flight (above) — a planned leg is a *route*, imported
+*before* you fly it, used to draw the expected path on the trip map and to (optionally) match the
+flight that follows it; a flight plan is a *document* attached to a flight *after* it lands. The two
+can coexist on the same trip without conflict, but neither substitutes for the other.
+
+Import one or more `.lnmpln` files from a trip's page (**Import Planned Route**). Each file becomes
+one planned leg, with its waypoints, cruise altitude, and any SID/STAR/approach names it records.
+Uploading several files at once tries to chain them into route order — matching each leg's
+destination to the next leg's departure — and falls back to upload order (with a warning shown) when
+that doesn't resolve uniquely, which is always true of a round trip.
+
+**Distance is always labelled `approx.`.** The file stores the en-route waypoint chain, not the
+SID/STAR/approach procedures flown at each end, so the real route is normally somewhat longer than
+the number shown — on an IFR leg with real procedures, sometimes considerably longer. This is a
+property of the file format, not a bug in the import.
+
+**Active trip.** Automatic linking only ever considers the one trip marked active (**Set as Active
+Trip** on the trip page). Marking a trip active is entirely optional — without it, flights are
+recorded exactly as they were before this feature existed.
+
+**Linking a flight to a leg.**
+
+| | How | What it does on landing |
+|---|---|---|
+| Automatic | Taking off within ~10 nm of an unflown planned leg's departure, on the active trip | Marks the leg *flown* if the arrival matches the plan, or *diverted* (with the distance off) if it doesn't — either way, the flight is kept |
+| Manual | Link/unlink a flight to any trip's unflown leg from the trip page, active or not | Same as above |
+
+Manual linking exists as a deliberate escape hatch — for a plan imported after the fact, or to
+correct an automatic match — and is not restricted to the active trip.
+
+---
+
 ## MSFS 2020 vs 2024
 
 `node-simconnect` requires the client to declare which SimConnect protocol version it speaks, and MSFS 2020 and 2024 differ. This is set in the `open(...)` call in [`agent/agent.js`](agent/agent.js):
@@ -211,6 +249,9 @@ msfslogger/
 │   ├── db.ts             # SQLite queries
 │   ├── flightManager.ts  # Flight state machine
 │   ├── flightPlans.ts    # PDF flight plan file storage
+│   ├── lnmpln.ts         # Little Navmap .lnmpln parser (imported trip plans)
+│   ├── legMatcher.ts     # Matches a just-started flight to a planned leg
+│   ├── journey.ts        # Trip atlas + planned-route progress
 │   ├── pdfExport.ts      # Headless-Chromium PDF rendering + attachment merging
 │   └── airports.ts       # ICAO airport lookup
 ├── agent/                # Runs on the Windows machine with MSFS — the supported setup

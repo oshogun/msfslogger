@@ -1,4 +1,5 @@
 import { LiveMap } from './LiveMap';
+import { formatDistance } from '../utils/format';
 import type { Status } from '../types';
 
 interface Props {
@@ -6,7 +7,7 @@ interface Props {
 }
 
 export function LivePanel({ status }: Props) {
-  const { frame, flightState, aircraft } = status;
+  const { frame, flightState, aircraft, plannedLeg } = status;
   if (flightState !== 'FLYING' || !frame) return null;
 
   const vs = Math.round(frame.verticalSpeedFpm);
@@ -46,6 +47,20 @@ export function LivePanel({ status }: Props) {
             <div className="live-label">Position</div>
             <div className="live-value" style={{ fontSize: '1rem' }}>{frame.lat.toFixed(3)}, {frame.lon.toFixed(3)}</div>
           </div>
+          {plannedLeg && (
+            <>
+              <div className="live-item live-item-planned">
+                <div className="live-label">Next Waypoint → {plannedLeg.destinationIdent}</div>
+                <div className="live-value" style={{ fontSize: '1.1rem' }}>{plannedLeg.nextWaypointIdent}</div>
+              </div>
+              <div className="live-item live-item-planned">
+                <div className="live-label">Remaining (planned route)</div>
+                <div className="live-value" style={{ fontSize: '1.1rem' }}>
+                  approx. {formatDistance(plannedLeg.remainingDistanceNm)}<span className="live-unit">nm</span>
+                </div>
+              </div>
+            </>
+          )}
         </div>
         <LiveMap status={status} />
       </div>

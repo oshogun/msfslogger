@@ -239,6 +239,23 @@ export interface PlannedLegWithChildren extends PlannedLeg {
   alternates: PlannedAlternate[];
 }
 
+/**
+ * GET /api/status's `plannedLeg` key (design.md §19). Computed, camelCase.
+ * Present only while flightState === 'FLYING' and the current flight is
+ * linked to a planned leg; the endpoint omits the key entirely otherwise, so
+ * this never appears as a null field.
+ */
+export interface PlannedLegLiveStatus {
+  plannedLegId: number;
+  tripId: number;
+  tripName: string;
+  destinationIdent: string;
+  nextWaypointIdent: string;
+  /** Great-circle, via nextWaypointIdent, to the leg's destination. */
+  remainingDistanceNm: number;
+  distanceIsApproximate: true;
+}
+
 // ── Auto-match candidate ──────────────────────────────────────────────────────
 //
 // The payload getPlannedLegCandidatesForActiveTrip() (src/db.ts) hands to
