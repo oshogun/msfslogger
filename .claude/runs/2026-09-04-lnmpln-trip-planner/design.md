@@ -149,6 +149,58 @@ only against the user.
 
 ---
 
+## Amendment D — 2026-09-07 — closing a hand-linked leg by hand
+
+Run `2026-09-07-manual-mark-flown`. Full design:
+`.claude/runs/2026-09-07-manual-mark-flown/design.md`.
+
+A planned leg only ever reached `flown` through `FlightManager.endFlight()`. A
+flight linked to its leg **by hand after it had already landed** — the escape
+hatch of §12.3, and the whole reason the escape hatch exists — never passes
+through that code, so its leg reads `Planned` for ever. The live logbook has
+one: flight 56 → leg 12 (PAJN), hand-linked, ended, still `planned`. This
+amendment gives the user a control that closes such a leg by hand, and reverses
+it.
+
+Three sections are amended in place, numbering unchanged.
+
+| Section | Change |
+|---|---|
+| **§15** | **The rule narrowed.** "`flown` and `diverted` are set by the system only" becomes "`diverted` is set by the system only; `flown` is set by the system, or by the user on a hand-linked flight that has ended". The F-1 bullet is **narrowed, not deleted**: `setPlannedLegStatus()` and its 409 are unchanged for every caller, and the new capability lives at a new path. Two transition rows added, actor `user (hand-linked, ended flight)`. |
+| §12.3 | A third endpoint: `PUT /api/flights/:id/planned-leg-status`. |
+| §14 | The touchdown rule is deliberately **not** mirrored by the hand path: a hand-mark is always `flown`, never `diverted`, however large the deviation. Unlink remains the only way to reopen a `diverted` leg. |
+
+**The decision this rested on, and the measurement that settled it.**
+`planned_leg_link_source = 'manual'` does not mean "closed by hand": §15 allows
+hand-linking a flight *while it is still in the air*, and `endFlight()` then
+closes that leg with a real touchdown measurement. The live logbook has two —
+flight 47 → leg 4 (0.4 nm, KSFO) and flight 52 → leg 10 (0.8 nm, CYVR). A gate
+keyed on `manual AND ended` therefore lets the user reopen a leg the *system*
+closed and clear a deviation the *system* measured, which is structurally the
+shape F-1 forbade.
+
+It is accepted anyway, because the reversal is provably lossless.
+`closeFlight()` writes `flights.arrival_lat/arrival_lon` from the identical
+`SimFrame` binding `recordArrivalOnPlannedLeg()` measures from
+(`src/flightManager.ts:284` and `:304`, same call, never reassigned), and the
+`haversineNm` bodies in `src/geo.ts:23-30` and `src/flightManager.ts:19-26` are
+byte-identical. Measured, not assumed: a read-only recompute over all eight
+linked pairs in the live database reproduced the stored `arrival_deviation_nm`
+**exactly on 7 of 7** closed legs, including both manual ones, and yields 0.3 nm
+for the stuck leg 12
+(`.claude/runs/2026-09-07-manual-mark-flown/prototypes/deviation-recompute.js`,
+output quoted in that run's design.md §12 E1); a second prototype confirmed
+`Object.is()` parity of the two haversine copies on 16 pairs including
+antimeridian and polar cases. So a hand-reversal destroys nothing that
+re-marking cannot restore bit for bit, and F-1's rationale — that the deviation
+may only be cleared together with the link that gives it meaning — does not
+apply inside the new gate. Outside it, F-1 stands as written.
+
+No schema migration: `planned_legs.status` already CHECKs `'flown'` and
+`arrival_deviation_nm` already exists. No payload gains a field.
+
+---
+
 ## 1. Vocabulary, and the rule that keeps two features apart
 
 This codebase already has a feature called *flight plan*: a **PDF attached to a
@@ -1248,9 +1300,20 @@ itself assigned.
 | Method & path | Request | Success | Errors |
 |---|---|---|---|
 | `PUT /api/flights/:id/planned-leg` | `{ "plannedLegId": number \| null }` | `200` the updated flight row (`getFlightById(id)`, matching `PATCH /api/flights/:id`) | `400` invalid id or body; `404` flight or leg not found; `409` that leg is already linked to flight N; `500` |
-| `PATCH /api/planned-legs/:legId` | `{ "status": "planned" \| "skipped" }` | `200` `PlannedLegWithChildren` | `400` invalid id, or a status other than those two (`flown`/`diverted` are set by the system only); `404`; `409` cannot skip a leg that has a linked flight; `500` |
+| `PATCH /api/planned-legs/:legId` | `{ "status": "planned" \| "skipped" }` | `200` `PlannedLegWithChildren` | `400` invalid id, or a status other than those two (`flown`/`diverted` are not settable at *this* path); `404`; `409` cannot change the status of a leg that has a linked flight; `500` |
+| `PUT /api/flights/:id/planned-leg-status` *(added 2026-09-07, Amendment D)* | `{ "status": "flown" \| "planned" }` | `200` `PlannedLegWithChildren` | `400` invalid id or body; `404` flight not found; `409` one per gate refusal — not linked, link not manual, flight not ended, leg status wrong for the requested direction; `500` |
 
 `null` unlinks. One endpoint, symmetric with `PUT /api/active-trip`.
+
+**Why the hand close-out is a third, flight-scoped endpoint rather than a wider
+`PATCH /api/planned-legs/:legId`** *(added 2026-09-07)*. Three of the four
+columns its gate reads live on `flights` — `planned_leg_link_source`,
+`end_time`, and (for the deviation) `arrival_lat`/`arrival_lon` — and §12.1 is
+explicit that the leg's side of the link is derived, never stored, so a
+leg-scoped route would have to walk the link backwards to find its own inputs.
+Keeping it separate also leaves the `PATCH` handler literally unchanged, which
+turns "F-1 did not regress" from an argument into a diff. Full rationale and the
+24-row gate table: `.claude/runs/2026-09-07-manual-mark-flown/design.md` §1, §5.
 
 **Manual linking is deliberately not restricted to the active trip.** Any leg of
 any trip that is not already linked can be linked by hand. This is the escape
@@ -1470,7 +1533,24 @@ The UI shows, on the leg row: the badge `Diverted`, the planned destination
 ident, the actual arrival (`flights.arrival_icao`, or the coordinates when it did
 not resolve), the deviation in nm, and an unlink control. A `diverted` leg is not
 re-matchable (§13.2 step 5). Unlinking resets it to `planned` and clears
-`arrival_deviation_nm`, which is how the user reopens it.
+`arrival_deviation_nm`, which is how the user reopens it — and that remains the
+**only** way to reopen a `diverted` leg after Amendment D.
+
+**The hand path does not mirror this rule** *(added 2026-09-07, Amendment D)*.
+`PUT /api/flights/:id/planned-leg-status` measures the same deviation from the
+same columns with the same expression, but it **always stores the status the
+user asked for**: a hand-mark 120 nm off plan is `flown`, never `diverted`.
+`ARRIVAL_RADIUS_NM` is not read by that path at all. The reason is that the two
+paths answer different questions. `endFlight()` is a machine classifying an
+arrival it observed; the hand path is a user asserting an outcome about a flight
+they remember. Deciding for the user that their flight "diverted" would be the
+app overruling the only witness. The deviation is still recorded, so the fact is
+not lost — the leg reads `flown, 120.1 nm from plan`, which is visibly odd and
+therefore self-documenting.
+
+The consequence to keep straight: an `auto`-linked leg and a hand-closed leg
+with the same 47 nm deviation read differently, `diverted` versus `flown`. That
+is deliberate, and README says so where it describes the control.
 
 Logged in one line either way:
 `[FlightManager] Flight #42 landed 47.2 nm from planned LEMD — leg #7 marked diverted`.
@@ -1479,15 +1559,25 @@ Logged in one line either way:
 
 ## 15. Planned-leg state machine
 
-Five user-visible states from one stored column plus the derived link:
+Six user-visible states from one stored column plus the derived link:
 
 | State | Stored | Meaning |
 |---|---|---|
 | `imported` | `status='planned'`, no linked flight | on the plan, not yet attempted |
 | `linked` | `status='planned'`, linked flight with `end_time IS NULL` | being flown right now |
-| `flown` | `status='flown'` | landed within `ARRIVAL_RADIUS_NM` of the planned destination |
+| `unclosed` | `status='planned'`, linked flight with `end_time IS NOT NULL` | the flight is over but the leg was never closed |
+| `flown` | `status='flown'` | landed within `ARRIVAL_RADIUS_NM` of the planned destination, **or** closed by hand from `unclosed` |
 | `diverted` | `status='diverted'` | landed elsewhere; link kept, `arrival_deviation_nm` recorded |
 | `skipped` | `status='skipped'` | the user decided not to fly it |
+
+**`unclosed` is named here in Amendment D, but it is not new.** It has existed
+since the escape hatch shipped: linking an already-landed flight to a leg by
+hand produces exactly this row, and `endFlight()` — the only writer of `flown` —
+has already run and will never run again for that flight. The live logbook has
+one (flight 56 → leg 12). The original five-state table simply had no name for
+it, which is how a leg could sit reading `Planned` for ever with no transition
+in this table explaining why. Amendment D names the state and gives it the two
+transitions it was missing.
 
 `status` is constrained by a `CHECK (status IN ('planned','flown','diverted','skipped'))`
 in the DDL. This is the one place this design adds a construct the codebase does
@@ -1499,12 +1589,16 @@ Transitions — every one, and who triggers it:
 | From | To | Trigger | Actor |
 |---|---|---|---|
 | `imported` | `linked` | auto-match at takeoff returns `MATCHED` | `FlightManager.startFlight()` (T-016) |
-| `imported` | `linked` | `PUT /api/flights/:id/planned-leg` with a leg id | user |
+| `imported` | `linked` | `PUT /api/flights/:id/planned-leg` with a leg id, flight still in the air | user |
+| `imported` | `unclosed` | `PUT /api/flights/:id/planned-leg` with a leg id, flight already ended *(named 2026-09-07, Amendment D)* | user (escape hatch) |
 | `linked` | `flown` | landing within `ARRIVAL_RADIUS_NM` | `FlightManager.endFlight()` |
 | `linked` | `diverted` | landing outside `ARRIVAL_RADIUS_NM` | `FlightManager.endFlight()` |
 | `linked` | `imported` | `PUT … { plannedLegId: null }` | user (escape hatch) |
 | `linked` | `imported` | the linked flight is deleted | `deleteFlight()` (§16) |
 | `linked` | `imported` | the linked flight is combined with another | `combineFlights()` (§16) |
+| `unclosed` | **`flown`** | `PUT /api/flights/:id/planned-leg-status {status:'flown'}`; records `arrival_deviation_nm` from `flights.arrival_lat/lon`, **never `diverted`** *(2026-09-07, Amendment D)* | **user (hand-linked, ended flight)** |
+| `flown` | **`unclosed`** | `PUT … {status:'planned'}`; clears `arrival_deviation_nm`, **keeps the link** *(2026-09-07, Amendment D)* | **user (hand-linked, ended flight)** |
+| `unclosed` | `imported` | unlink, delete or combine — as for `linked` | user / `deleteFlight()` / `combineFlights()` |
 | `flown` / `diverted` | `imported` | unlink; also clears `arrival_deviation_nm` | user |
 | `flown` / `diverted` | `imported` | the linked flight is deleted or combined | `deleteFlight()` / `combineFlights()` |
 | `imported` | `skipped` | `PATCH /api/planned-legs/:legId {status:'skipped'}` | user |
@@ -1516,24 +1610,41 @@ Two rules that fall out and must be respected:
 
 - **Only `planned` legs are auto-match candidates.** `flown`, `diverted` and
   `skipped` are all filtered in step 5, each with its own reason code.
-- **`flown` and `diverted` are set by the system only.** The `PATCH` endpoint
-  accepts `planned` and `skipped` and nothing else; a client cannot declare a leg
-  flown.
-- **A linked leg's status is not the user's to set at all** *(2026-09-05, T-018
-  finding F-1)*. `setPlannedLegStatus` refuses with a 409 naming the flight
-  whenever the leg still has one. The narrow bug was `PATCH {status:'planned'}`
-  on a linked `flown`/`diverted` leg: it returned 200, destroyed
-  `arrival_deviation_nm`, and kept the link — a state this table does not
-  define. The guard is deliberately wider than that one case, because the table
-  already says the only route out of `flown`/`diverted` is **unlink**, which
-  clears the deviation precisely because the link is going away with it.
-  Consequence worth knowing: a `skipped` leg that was then linked by hand cannot
-  be un-skipped directly; unlink it first. That combination is contradictory
-  anyway — a leg with a flight attached is not skipped — and the 409 says so.
+- **`diverted` is set by the system only. `flown` is set by the system, or by
+  the user on a hand-linked flight that has ended** *(narrowed 2026-09-07,
+  Amendment D; was "`flown` and `diverted` are set by the system only")*.
+  `PATCH /api/planned-legs/:legId` still accepts `planned` and `skipped` and
+  nothing else — that endpoint is unchanged, to the line. The one new route to
+  `flown` is `PUT /api/flights/:id/planned-leg-status`, and it is gated on
+  `planned_leg_link_source = 'manual'` **and** `end_time IS NOT NULL` **and**
+  the leg being in `unclosed` (forward) or `flown` (reverse). A client still
+  cannot declare a leg `diverted`, at any path, ever.
+- **A linked leg's status is not the user's to set through
+  `PATCH /api/planned-legs/:legId`** *(2026-09-05, T-018 finding F-1; narrowed
+  2026-09-07, Amendment D — narrowed, not deleted)*. `setPlannedLegStatus`
+  refuses with a 409 naming the flight whenever the leg still has one, and that
+  function and that endpoint are **unchanged**: every linked leg, including the
+  ones Amendment D's gate admits, still gets the 409 there. The narrow bug was
+  `PATCH {status:'planned'}` on a linked `flown`/`diverted` leg: it returned
+  200, destroyed `arrival_deviation_nm`, and kept the link — a state this table
+  did not define. What Amendment D changes is that the table now **does** define
+  that state (`unclosed`) and reaches it through a different endpoint whose gate
+  makes the destruction reversible: inside that gate the deviation is
+  recomputable bit-for-bit from `flights.arrival_lat/arrival_lon`, measured on
+  the live logbook (Amendment D), so nothing is destroyed. Outside that gate —
+  every `auto` link, every unlinked leg, every `diverted` or `skipped` leg —
+  F-1's rule stands exactly as written, and **unlink** remains the only route
+  out.
+  Consequence worth knowing, unchanged: a `skipped` leg that was then linked by
+  hand cannot be un-skipped directly, and Amendment D's gate refuses it too;
+  unlink it first. That combination is contradictory anyway — a leg with a
+  flight attached is not skipped — and the 409 says so.
 
 There is no `linked` value in the `status` column on purpose: "linked" is
 `status='planned'` plus the existence of the link, so the two facts can never
-drift apart.
+drift apart. The same is true of `unclosed`, which is `status='planned'` plus a
+link plus `end_time IS NOT NULL` — three derived facts, no fourth stored column,
+nothing that can drift.
 
 ---
 

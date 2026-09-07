@@ -59,6 +59,8 @@ export function FlightDetail() {
   const [plannedLegError, setPlannedLegError] = useState('');
   const [unlinkBusy, setUnlinkBusy] = useState(false);
   const [unlinkError, setUnlinkError] = useState('');
+  const [markBusy, setMarkBusy] = useState(false);
+  const [markError, setMarkError] = useState('');
 
   useEffect(() => {
     if (!id) { navigate('/'); return; }
@@ -124,6 +126,28 @@ export function FlightDetail() {
       setUnlinkError('Unlink failed: ' + (err as Error).message);
     } finally {
       setUnlinkBusy(false);
+    }
+  }
+
+  // Closes a hand-linked leg by hand, or reopens it (design.md §5.1, §8.4).
+  // No confirm() in either direction: the next click is the exact reverse
+  // (§8.3). The 200 is the updated leg, so setPlannedLeg() — not setFlight():
+  // no column on `flights` moves either way (§7) — re-renders the badge and the
+  // landing note with no refetch and no reload.
+  async function handleMarkPlannedLeg(target: 'flown' | 'planned') {
+    setMarkBusy(true);
+    setMarkError('');
+    try {
+      const updated = await apiFetch<PlannedLegWithChildren>(`/api/flights/${id}/planned-leg-status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: target }),
+      });
+      setPlannedLeg(updated);
+    } catch (err) {
+      setMarkError('Mark failed: ' + (err as Error).message);
+    } finally {
+      setMarkBusy(false);
     }
   }
 
@@ -293,10 +317,34 @@ export function FlightDetail() {
                 <p key={i} className="flight-plan-status">{line}</p>
               ))}
               <div className="flight-actions" style={{ marginTop: '0.6rem' }}>
+                {(() => {
+                  // design.md §8.1 — a hand-copy of the server gate in design.md §1.1. The client
+                  // cannot import src/plannedLegClose.ts; if these two ever disagree, the server
+                  // wins and the user sees a 409.
+                  const handCloseEligible =
+                    flight.planned_leg_link_source === 'manual' &&
+                    flight.end_time !== null &&
+                    (plannedLeg.status === 'planned' || plannedLeg.status === 'flown');
+
+                  const handCloseTarget: 'flown' | 'planned' =
+                    plannedLeg.status === 'flown' ? 'planned' : 'flown';
+
+                  // `flight.planned_leg_id != null` and "the leg exists" are the two
+                  // enclosing conditions above (:252, :257), so they are not restated.
+                  if (!handCloseEligible) return null;
+                  return (
+                    <button className="btn btn-ghost" disabled={markBusy} onClick={() => handleMarkPlannedLeg(handCloseTarget)}>
+                      {handCloseTarget === 'flown'
+                        ? (markBusy ? 'Marking…' : 'Mark flown')
+                        : (markBusy ? 'Reopening…' : 'Back to planned')}
+                    </button>
+                  );
+                })()}
                 <button className="btn btn-ghost" disabled={unlinkBusy} onClick={handleUnlinkPlannedLeg}>
                   {unlinkBusy ? 'Unlinking…' : 'Unlink'}
                 </button>
                 {unlinkError && <span className="edit-error">{unlinkError}</span>}
+                {markError && <span className="edit-error">{markError}</span>}
               </div>
             </>
           )}

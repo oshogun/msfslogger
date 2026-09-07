@@ -207,6 +207,15 @@ recorded exactly as they were before this feature existed.
 Manual linking exists as a deliberate escape hatch — for a plan imported after the fact, or to
 correct an automatic match — and is not restricted to the active trip.
 
+**Marking a hand-linked leg flown by hand.** A flight linked to its leg manually, after the flight
+has already ended, never passes through the landing check above, so its leg stays *planned*
+forever. On that flight's own page — not the trip page — once the flight has ended, a control marks
+the leg *flown* by hand: it records how far the flight's actual arrival was from the planned
+destination, the same way the automatic check does, but the leg is always marked *flown*, never
+*diverted*, however far off the arrival was — only the automatic check on landing can mark a leg
+diverted. The same control reverses the change, back to *planned* and clearing that distance,
+without unlinking the flight.
+
 ---
 
 ## MSFS 2020 vs 2024
@@ -251,6 +260,7 @@ msfslogger/
 │   ├── flightPlans.ts    # PDF flight plan file storage
 │   ├── lnmpln.ts         # Little Navmap .lnmpln parser (imported trip plans)
 │   ├── legMatcher.ts     # Matches a just-started flight to a planned leg
+│   ├── plannedLegClose.ts # Gate + deviation for closing a hand-linked planned leg by hand
 │   ├── journey.ts        # Trip atlas + planned-route progress
 │   ├── pdfExport.ts      # Headless-Chromium PDF rendering + attachment merging
 │   └── airports.ts       # ICAO airport lookup

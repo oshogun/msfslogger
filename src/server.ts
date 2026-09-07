@@ -2,10 +2,11 @@ import express from 'express';
 import multer, { MulterError } from 'multer';
 import path from 'path';
 import { createHash } from 'crypto';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, setPlannedLegHandOutcome, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
 import { buildJourney } from './journey';
+import { decideHandClose } from './plannedLegClose';
 import { parseLnmpln, LnmplnParseError, chainOrderForBatch, type ParsedFlightPlan } from './lnmpln';
 import type { FlightManager } from './flightManager';
 import type { Flight, FlightEditPayload, TripEditPayload, PlannedLegWithChildren } from './types';
@@ -654,6 +655,73 @@ export function createServer(flightManager: FlightManager): express.Express {
       res.json(getFlightById(id));
     } catch (err) {
       if (err instanceof PlannedLegAlreadyLinkedError) {
+        res.status(409).json({ error: err.message }); return;
+      }
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Close a hand-linked leg by hand — or reopen it. The one transition
+  // endFlight()'s touchdown rule can never reach, because the leg was linked
+  // after the flight had already landed. Flight-scoped rather than a widened
+  // PATCH /api/planned-legs/:legId: three of the four columns the gate reads
+  // live on `flights`, and this way that PATCH — including F-1's 409 on every
+  // linked leg — is left literally unchanged. design.md §5.1, §5.2, §5.6.
+  //
+  // This handler is the whole gate: decideHandClose() refuses here everything
+  // the client merely hides. Deliberately no flightManager.refreshPlannedLegForFlight()
+  // — the gate demands end_time IS NOT NULL, so the flight is never the one in
+  // progress and the call could only ever be a no-op. design.md §5.7.
+  app.put('/api/flights/:id/planned-leg-status', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    // Checked before the flight 404, matching PATCH /api/planned-legs/:legId: a
+    // malformed body is a 400 whether or not the flight exists. 'diverted' and
+    // 'skipped' are not settable here in either direction. design.md §5.4, §1.7.
+    const { status } = req.body as { status?: unknown };
+    if (status !== 'flown' && status !== 'planned') {
+      res.status(400).json({ error: "status must be 'flown' or 'planned'" }); return;
+    }
+
+    const flight = getFlightById(id);
+    if (!flight) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    // planned_leg_id set with the row gone is unreachable (the FK is
+    // ON DELETE SET NULL) but is a genuinely missing named resource, so it is a
+    // 404 here rather than one of the gate's 409s. design.md §1.5.
+    const leg = flight.planned_leg_id == null ? null : getPlannedLegById(flight.planned_leg_id);
+    if (flight.planned_leg_id != null && !leg) {
+      res.status(404).json({ error: 'Planned leg not found' }); return;
+    }
+
+    const decision = decideHandClose(status, flight, leg);
+    if (!decision.allowed) { res.status(409).json({ error: decision.message }); return; }
+
+    try {
+      // The writer re-asserts linked/manual/ended inside its transaction, so a
+      // concurrent unlink between the decision above and the UPDATE throws
+      // rather than writing. design.md §4.3.
+      const updated = setPlannedLegHandOutcome(decision.legId, decision.status, decision.deviationNm);
+      if (!updated) { res.status(404).json({ error: 'Planned leg not found' }); return; }
+
+      const saved = getPlannedLegById(decision.legId);
+
+      // The automatic path announces itself (flightManager.ts:465, "leg #7
+      // marked diverted"); without this line a leg that reads 'flown' with a
+      // deviation and no matching log would be unexplainable after the fact —
+      // the one asymmetry between the two ways a leg reaches 'flown'.
+      console.log(
+        decision.status === 'flown'
+          ? `[PlannedLeg] Flight #${id} hand-marked flown ` +
+            `${decision.deviationNm === null ? '(arrival position unknown)' : `${decision.deviationNm} nm`} ` +
+            `from planned ${saved?.destination_ident ?? '—'} — leg #${decision.legId}`
+          : `[PlannedLeg] Flight #${id} hand-reopened — leg #${decision.legId} back to planned`
+      );
+
+      res.json(saved);
+    } catch (err) {
+      if (err instanceof PlannedLegHandCloseConflictError) {
         res.status(409).json({ error: err.message }); return;
       }
       res.status(500).json({ error: String(err) });

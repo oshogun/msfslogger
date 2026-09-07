@@ -59,8 +59,10 @@ export interface Trip {
 
 /**
  * 'linked' is deliberately absent: a leg is linked when a flight row points at
- * it, so the two facts cannot drift apart. 'flown' and 'diverted' are set by
- * the system only.
+ * it, so the two facts cannot drift apart. 'diverted' is set by the system
+ * only; 'flown' is set at touchdown, or — reversibly — by hand on a still
+ * 'planned' leg whose flight was linked manually and has already ended
+ * (2026-09-07 design.md §1).
  */
 export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
 
