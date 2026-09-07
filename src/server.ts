@@ -262,6 +262,10 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found' }); return; }
     if (!getFlightById(flightId as number)) { res.status(404).json({ error: 'Flight not found' }); return; }
     assignFlightToTrip(flightId as number, tripId);
+    // Moving a flight between trips can clear its planned-leg link (db.ts), so
+    // this gets the same live-status-cache refresh the manual link endpoint
+    // does. A no-op unless this is the flight in progress.
+    flightManager.refreshPlannedLegForFlight(flightId as number);
     res.json({ ok: true });
   });
 
@@ -270,6 +274,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (isNaN(flightId)) { res.status(400).json({ error: 'Invalid flight id' }); return; }
     const removed = removeFlightFromTrip(flightId);
     if (!removed) { res.status(404).json({ error: 'Flight not found' }); return; }
+    flightManager.refreshPlannedLegForFlight(flightId);
     res.json({ ok: true });
   });
 

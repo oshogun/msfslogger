@@ -540,14 +540,47 @@ export function deleteTrip(id: number): boolean {
   })();
 }
 
+/**
+ * Putting a flight in a trip by hand is the user overruling wherever it sat
+ * before — including a planned-leg link, which owns trip_id: the link moved
+ * the flight into the leg's trip, and interleaveTripRows (the trip page, and
+ * the PDF) shows a leg through its linked flight, so a leg whose flight has
+ * wandered off to another trip disappears from its own trip page — not
+ * skippable, not reorderable, not deletable (PlannedLegHasLinkedFlightError)
+ * and permanently LEG_ALREADY_LINKED to the auto-matcher. So the link is
+ * dropped first, through the same clearPlannedLegLink() deleteFlight() uses:
+ * the leg returns to 'planned' and this call's tripId is then the last word
+ * on trip_id, with no restore from planned_leg_prev_trip_id fighting it.
+ *
+ * Assigning a linked flight to the trip its own leg already put it in asks
+ * for no change at all, so it keeps the link rather than quietly resetting a
+ * 'flown' leg. design.md §16 (amended).
+ */
 export function assignFlightToTrip(flightId: number, tripId: number): boolean {
-  const result = db.prepare('UPDATE flights SET trip_id = ? WHERE id = ?').run(tripId, flightId);
-  return result.changes > 0;
+  return db.transaction((): boolean => {
+    const linkedLeg = db.prepare(`
+      SELECT l.trip_id AS trip_id
+        FROM flights f
+        JOIN planned_legs l ON l.id = f.planned_leg_id
+       WHERE f.id = ?
+    `).get(flightId) as { trip_id: number } | undefined;
+
+    if (linkedLeg && linkedLeg.trip_id !== tripId) {
+      clearPlannedLegLink(flightId);
+    }
+
+    const result = db.prepare('UPDATE flights SET trip_id = ? WHERE id = ?').run(tripId, flightId);
+    return result.changes > 0;
+  })();
 }
 
+/** Removal always contradicts a link (NULL is no leg's trip), so it always clears one. */
 export function removeFlightFromTrip(flightId: number): boolean {
-  const result = db.prepare('UPDATE flights SET trip_id = NULL WHERE id = ?').run(flightId);
-  return result.changes > 0;
+  return db.transaction((): boolean => {
+    clearPlannedLegLink(flightId);
+    const result = db.prepare('UPDATE flights SET trip_id = NULL WHERE id = ?').run(flightId);
+    return result.changes > 0;
+  })();
 }
 
 // ── Combine flights ───────────────────────────────────────────────────────────
@@ -1249,9 +1282,12 @@ export function unlinkFlightFromPlannedLeg(flightId: number): boolean {
 
 /**
  * Same as unlinkFlightFromPlannedLeg() EXCEPT trip_id is deliberately NOT
- * restored: the flight row is about to be destroyed by the caller
- * (deleteFlight(), or combineFlights() for both source flights), so there is
- * no row left for a restored trip_id to mean anything on. design.md §16.
+ * restored — for the two kinds of caller that must not have it restored:
+ * those about to destroy the flight row (deleteFlight(), or combineFlights()
+ * for both source flights), where no row is left for a restored trip_id to
+ * mean anything on; and assignFlightToTrip()/removeFlightFromTrip(), which
+ * are themselves setting trip_id to something the user just chose and would
+ * only have to overwrite the restored value. design.md §16.
  */
 export function clearPlannedLegLink(flightId: number): void {
   db.transaction(() => {
