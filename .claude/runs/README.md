@@ -24,11 +24,26 @@ decision.
 └── tools/             one-off checkers worth keeping for the next run
 ```
 
+Read a run with `.claude/tools/ctx.sh`, never `cat`. `plan.json` and `design.md`
+have run to 60–70 KB each, and every agent that opens one pays for all of it:
+
+```
+ctx.sh map    <run-id>                index: goal, phases, task ids, design headings
+ctx.sh task   <run-id> T-004          one task record
+ctx.sh phase  <run-id> 1              a phase and its task records
+ctx.sh design <run-id> 3 5.2 must-not-change
+ctx.sh frozen <run-id>                frozen_decisions, verbatim
+```
+
 Conventions:
 
 - Artifacts are append-mostly. When reality contradicts a frozen section, amend
   it in place, keep the section numbering, and record the change in an amendment
   table with the evidence that forced it.
-- Reports cite commands and their real output, not summaries of them.
+- **Section numbers in `design.md` are an interface.** `ctx.sh design` slices on
+  them and envelopes cite them by number, so they do not get renumbered.
+- Reports cite commands and their real output, not summaries of them — the
+  deciding line, not the transcript. A report or review over ~150 lines is a
+  defect: put bulk output in a file beside it and cite the path.
 - Nothing here is imported by the application. `dist/` never depends on a run
   directory.

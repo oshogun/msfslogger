@@ -16,7 +16,24 @@
       "Bash(curl -s http://localhost:3000/api/trips)",
       "Bash(python3 -c ' *)",
       "Bash(curl -s http://localhost:3000/api/flights)",
-      "Bash(curl -s http://localhost:3000/api/status)"
+      "Bash(curl -s http://localhost:3000/api/status)",
+      "Bash(.claude/tools/ctx.sh *)",
+      "Bash(git status)",
+      "Bash(npm run build)",
+      "Bash(export NVM_DIR=*)",
+      "Bash(git diff *)",
+      "Bash(npm run backup)",
+      "Bash(nvm use *)",
+      "Bash(git log *)",
+      "Bash(npm ci)",
+      "Bash(node -v)",
+      "Bash(git show *)",
+      "Bash(npx tsc)",
+      "Bash(md5sum *)",
+      "Bash(jq *)",
+      "Bash(curl -s http://localhost:3100/*)",
+      "Bash(node -e *)"
+
     ],
     "additionalDirectories": [
       "/home/guilherme/msfslogger"
