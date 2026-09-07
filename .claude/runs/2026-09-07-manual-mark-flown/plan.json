@@ -1,0 +1,481 @@
+{
+  "run_id": "2026-09-07-manual-mark-flown",
+  "goal": "Let the user close out a planned leg by hand from the flight detail page when the flight was linked to that leg manually and has already ended — the case FlightManager.endFlight() can never reach, because the flight was over before the link existed. Marking it flown records arrival_deviation_nm measured from the flight's own arrival position to the planned destination, so the leg reads 'flown, N nm from plan' exactly as an auto-closed leg does; the same control reverses the change, clearing the deviation, without unlinking the flight. Everything outside that gate — auto-linked legs, flights still in the air, unlinked legs — keeps design.md §15's existing behaviour, including the PlannedLegHasLinkedFlightError 409 that finding F-1 introduced.",
+  "frozen_decisions": [
+    "PLACEMENT: flight detail page only — the Planned Leg section of /flight/:id. NOT the trip page leg row. No TripDetail.tsx work is planned.",
+    "DEVIATION: compute arrival_deviation_nm from the linked flight's own arrival position against the planned destination (same haversine as recordArrivalOnPlannedLeg), store it, and ALWAYS set the status the user asked for. A hand-mark beyond ARRIVAL_RADIUS_NM is still 'flown', never 'diverted'. The touchdown rule is deliberately not mirrored.",
+    "REVERSIBLE: the same control toggles a hand-marked leg back to 'planned', clearing arrival_deviation_nm, WITHOUT unlinking the flight.",
+    "No new runtime dependencies.",
+    "No test framework. Verification is npx tsc --noEmit, curl against a scratch server on a non-3000 port against a COPY of the database, better-sqlite3 queries under Node 20, and a ts-node CLI inspector.",
+    "Sub-agents do not commit, push, or switch branches."
+  ],
+  "sequencing_rationale": [
+    "Design is its own task and blocks everything, because the run turns on one contested decision — how far to narrow F-1 — and the live database has evidence on both sides of it: flight 56 → leg 12 is the stuck case the user is asking about, while flights 47 → leg 4 and 52 → leg 10 are manual links whose legs the SYSTEM closed at touchdown. A gate keyed only on 'manual' hands the user a control that can clear a real touchdown measurement. That has to be settled in prose before any of it is typed.",
+    "The Orchestrator's proposed gate looks survivable and the plan is built for it, but the Designer must confirm rather than inherit it: closeFlight() (src/db.ts:321) stores exactly the frame endFlight() measures the deviation from, so recomputing from flights.arrival_lat/lon reproduces the stored value — a read-only check over all 8 linked pairs in the live database agreed on 7/7 closed legs. If that holds, nothing a hand-reverse clears is unrecoverable, which is what makes the narrowing safe. T-001 must reproduce that result itself; if it fails, the design returns blocked instead of guessing.",
+    "The genuinely risky logic — who may close a leg, and how far off plan they landed — is a pure function of four columns, so it goes in src/plannedLegClose.ts with no ./db import and its own inspector (T-002). That is what makes it falsifiable with no sim, no browser and no test framework, which is the only kind of verification this repo has.",
+    "T-002 (new files) and T-003 (src/db.ts) run in parallel on disjoint paths. That is only safe because T-001 is required to place the composition in the endpoint, so src/db.ts never imports src/plannedLegClose.ts — the file-ownership decision is made in the design, not discovered during implementation.",
+    "T-004 lands the endpoint alone, after both, because the endpoint is where an F-1 regression would actually appear, and its acceptance is differential: the same four PATCH requests fired at a server built from `git archive HEAD` and at the new one, byte-for-byte identical.",
+    "The escape hatch is not deferred to a later phase: the reverse transition (flown → planned, link kept) is specified, implemented and tested in the same tasks as the forward one. A mark-flown the user cannot undo leaves Unlink as the only repair — and Unlink is the destructive operation this whole feature exists to avoid.",
+    "Phase 1 ships without a single line of client code, because plannedLegBadge() and plannedLegLandingNote() already speak 'flown' and 'flown, N nm from plan' for every consumer. The seam between phase 1 and phase 2 is therefore the seam between 'the record is right' and 'the user can fix it without curl' — both visible, in that order.",
+    "README ships with the UI, not after it, because README's linking table currently tells the user that landing is the only route to 'flown'.",
+    "The build is its own phase and runs last because `npm run build:client` publishes the UI to the user's already-running server the instant it completes, with no restart — while the endpoint it calls does not exist until the user restarts. That window is not a bug to fix, it is a fact to state, and it belongs at the end where it is shortest.",
+    "Every phase ends in a Reviewer that re-runs the evidence, and each phase's first task depends on the previous phase's Reviewer, so no two tasks touching src/server.ts or the client ever run concurrently."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "The API can close a hand-linked leg",
+      "ships": "Through the API (verified on a copy of the database), the stuck case in the user's own logbook — flight 56, hand-linked to leg 12, PAJN, ended, still reading 'Planned' — can be marked flown with its real 0.3 nm deviation recorded, and marked back to planned again without unlinking. Because plannedLegBadge() and plannedLegLandingNote() already render 'flown' and 'flown, N nm from plan', the trip page and the flight page read correctly the moment the row changes, with no client code at all.",
+      "tasks": [
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "The button",
+      "ships": "The user can do it without curl: a control in the Planned Leg section of /flight/:id marks the leg flown and marks it back, absent on auto-linked flights and on flights still in the air, and README describes it where manual linking is already described.",
+      "tasks": [
+        "T-006",
+        "T-007",
+        "T-008"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Ship",
+      "ships": "Built artifacts the user's next restart picks up, smoke-tested on a copy, with the build-to-restart window stated explicitly so the user is not surprised by a button that 404s until they restart.",
+      "tasks": [
+        "T-009",
+        "T-010"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the gate, the deviation rule, the API surface and the module split; amend the prior design in place",
+      "goal": "Settle the one genuinely contested decision in this run — how far design.md §15's F-1 rule ('a linked leg's status is not the user's to set at all') is narrowed — and freeze every contract the four implementation tasks then execute without a second judgement call.",
+      "phase": 1,
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-manual-mark-flown/design.md",
+        ".claude/runs/2026-09-07-manual-mark-flown/contracts/**",
+        ".claude/runs/2026-09-07-manual-mark-flown/prototypes/**",
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design.md"
+      ],
+      "acceptance_criteria": [
+        "design.md §1 'The gate' states the eligibility predicate for BOTH directions (→flown, →planned) as a single boolean expression over named columns (flights.planned_leg_link_source, flights.end_time, flights.planned_leg_id, planned_legs.status), and backs it with a table that has one row for every combination of link source {auto, manual, null} × flight {ended, in air} × leg status {planned, flown, diverted, skipped} — 24 rows, no gaps, no 'etc.' — each marked allow→flown / allow→planned / refuse-with-<http status>. T-002's inspector is written straight off this table, so a missing row is a missing test.",
+        "It resolves the system-closed manual link explicitly, by name. The live database contains two: flight 47 → leg 4 (arrival_deviation_nm 0.4, KSFO) and flight 52 → leg 10 (0.8, CYVR) are planned_leg_link_source='manual' whose legs were closed by endFlight() at touchdown, not by hand. Under the Orchestrator's proposed gate (manual AND ended) these become user-reversible and their touchdown-measured deviation clearable. The section states whether that is accepted and why, or how it is excluded. If exclusion needs a new column, or the choice is one only the user can make, the task returns status 'blocked' with that question rather than choosing.",
+        "prototypes/deviation-recompute.js exists and, run under Node 20 as `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; node .claude/runs/2026-09-07-manual-mark-flown/prototypes/deviation-recompute.js flights.db` (better-sqlite3 opened { readonly: true } — the live file is never written), prints one row per flight with a planned_leg_id comparing stored arrival_deviation_nm against Math.round(haversineNm(flights.arrival_lat, flights.arrival_lon, planned_legs.destination_lat, planned_legs.destination_lon)*10)/10, and exits non-zero if any row disagrees. design.md quotes its ACTUAL output and states what it implies for criterion 2. (Planner ran the same comparison read-only and got agreement on all 7 closed legs, and 0.3 nm for the open leg 12; the design must confirm or contradict that with its own run, not cite this parenthesis.)",
+        "design.md §'Deviation' fixes: the source columns (flights.arrival_lat / arrival_lon, never the last flight_points row — closeFlight() at src/db.ts:321 writes exactly the frame endFlight() measures from, which is why the recompute is lossless); the rounding expression, character-identical to src/flightManager.ts:463; the behaviour when arrival_lat or arrival_lon is NULL (zero such rows live today — `select count(*) from flights where end_time is not null and arrival_lat is null` returns 0 — so the path exists only for code, and the design says whether it stores NULL and still marks flown, or refuses); and it restates verbatim the frozen rule that the stored status is ALWAYS the one requested and NEVER 'diverted', however large the deviation.",
+        "design.md §'API' gives the chosen surface as a table: method, path, request body, success payload, and one row per error case (400 invalid id, 400 invalid body, 404 flight missing, 404 leg missing, one 409 per distinct refusal with its exact message text, 500), plus the reason the surface is flight-scoped or leg-scoped. It names, by line number, which part of the existing PATCH /api/planned-legs/:legId handler (src/server.ts:596-620) changes and which does not, and states that on an UNLINKED leg its three behaviours are preserved byte-for-byte: 200 for {status:'planned'|'skipped'}, 400 for {status:'flown'}, 409 (PlannedLegHasLinkedFlightError) for any linked leg outside the new gate.",
+        "design.md §'Modules' names every new or changed export with its full TypeScript signature and its file, and contracts/ holds those signatures as compiling stubs: the pure module src/plannedLegClose.ts (eligibility + deviation; imports only ./geo and its own local types), the writer in src/db.ts, and the composition in src/server.ts. It states in one sentence that src/db.ts does NOT import src/plannedLegClose.ts and that the composition happens in the endpoint — this is what lets T-002 and T-003 be written in parallel — and that neither src/types.ts nor client/src/types.ts changes, because the feature adds no field to any payload.",
+        "design.md states whether the new endpoint calls flightManager.refreshPlannedLegForFlight(id) (as PUT /api/flights/:id/planned-leg does at src/server.ts:653) and why, given the gate already requires end_time IS NOT NULL.",
+        "design.md §'UI' freezes phase 2 completely: the button-visibility predicate written ONLY in terms of fields the client already holds on Flight and PlannedLegWithChildren (the client cannot import src/, so this predicate is a deliberate duplicate of the server gate and the design states that and states the two must be diffed at review); the exact label for each direction; the confirm-dialog text or an explicit 'no confirm'; where the busy state and a 409 message render; and that client/src/components/PlannedLegRows.tsx and client/src/pages/TripDetail.tsx are not touched (the badge and the 'flown, N nm from plan' note already handle status 'flown').",
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design.md gains 'Amendment D — 2026-09-07' in the existing amendment style, and §12.3, §14 and §15 are amended IN PLACE with section numbering unchanged: §15's transition table gains the new rows (manual close-out and its reverse) naming the actor as 'user (hand-linked, ended flight)', and the F-1 bullet is narrowed rather than deleted. `git diff --stat .claude/runs/2026-09-04-lnmpln-trip-planner/design.md` shows that file changed and no other prior-run artifact.",
+        "No implementation code: no file under src/, client/ or README.md is modified. `git status --porcelain src client README.md` prints nothing."
+      ],
+      "risks": [
+        "Over-narrowing: a gate that excludes the system-closed manual links (flights 47, 52) needs a way to tell them apart, and the only honest one is a new column — which turns a no-migration feature into a migration.",
+        "Under-narrowing: a gate keyed only on link source lets a leg be reopened while its flight is still in the air, which is precisely the undefined state §15 was written to prevent."
+      ],
+      "model_hint": "opus",
+      "model_rationale": "One contested policy decision against a frozen prior design, with live data on both sides of it, plus every downstream contract. This is the highest-leverage judgement in the run.",
+      "deps": [],
+      "definition_of_done": [
+        "design.md §1 'The gate' states the eligibility predicate for BOTH directions (→flown, →planned) as a single boolean expression over named columns (flights.planned_leg_link_source, flights.end_time, flights.planned_leg_id, planned_legs.status), and backs it with a table that has one row for every combination of link source {auto, manual, null} × flight {ended, in air} × leg status {planned, flown, diverted, skipped} — 24 rows, no gaps, no 'etc.' — each marked allow→flown / allow→planned / refuse-with-<http status>. T-002's inspector is written straight off this table, so a missing row is a missing test.",
+        "It resolves the system-closed manual link explicitly, by name. The live database contains two: flight 47 → leg 4 (arrival_deviation_nm 0.4, KSFO) and flight 52 → leg 10 (0.8, CYVR) are planned_leg_link_source='manual' whose legs were closed by endFlight() at touchdown, not by hand. Under the Orchestrator's proposed gate (manual AND ended) these become user-reversible and their touchdown-measured deviation clearable. The section states whether that is accepted and why, or how it is excluded. If exclusion needs a new column, or the choice is one only the user can make, the task returns status 'blocked' with that question rather than choosing.",
+        "prototypes/deviation-recompute.js exists and, run under Node 20 as `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; node .claude/runs/2026-09-07-manual-mark-flown/prototypes/deviation-recompute.js flights.db` (better-sqlite3 opened { readonly: true } — the live file is never written), prints one row per flight with a planned_leg_id comparing stored arrival_deviation_nm against Math.round(haversineNm(flights.arrival_lat, flights.arrival_lon, planned_legs.destination_lat, planned_legs.destination_lon)*10)/10, and exits non-zero if any row disagrees. design.md quotes its ACTUAL output and states what it implies for criterion 2. (Planner ran the same comparison read-only and got agreement on all 7 closed legs, and 0.3 nm for the open leg 12; the design must confirm or contradict that with its own run, not cite this parenthesis.)",
+        "design.md §'Deviation' fixes: the source columns (flights.arrival_lat / arrival_lon, never the last flight_points row — closeFlight() at src/db.ts:321 writes exactly the frame endFlight() measures from, which is why the recompute is lossless); the rounding expression, character-identical to src/flightManager.ts:463; the behaviour when arrival_lat or arrival_lon is NULL (zero such rows live today — `select count(*) from flights where end_time is not null and arrival_lat is null` returns 0 — so the path exists only for code, and the design says whether it stores NULL and still marks flown, or refuses); and it restates verbatim the frozen rule that the stored status is ALWAYS the one requested and NEVER 'diverted', however large the deviation.",
+        "design.md §'API' gives the chosen surface as a table: method, path, request body, success payload, and one row per error case (400 invalid id, 400 invalid body, 404 flight missing, 404 leg missing, one 409 per distinct refusal with its exact message text, 500), plus the reason the surface is flight-scoped or leg-scoped. It names, by line number, which part of the existing PATCH /api/planned-legs/:legId handler (src/server.ts:596-620) changes and which does not, and states that on an UNLINKED leg its three behaviours are preserved byte-for-byte: 200 for {status:'planned'|'skipped'}, 400 for {status:'flown'}, 409 (PlannedLegHasLinkedFlightError) for any linked leg outside the new gate.",
+        "design.md §'Modules' names every new or changed export with its full TypeScript signature and its file, and contracts/ holds those signatures as compiling stubs: the pure module src/plannedLegClose.ts (eligibility + deviation; imports only ./geo and its own local types), the writer in src/db.ts, and the composition in src/server.ts. It states in one sentence that src/db.ts does NOT import src/plannedLegClose.ts and that the composition happens in the endpoint — this is what lets T-002 and T-003 be written in parallel — and that neither src/types.ts nor client/src/types.ts changes, because the feature adds no field to any payload.",
+        "design.md states whether the new endpoint calls flightManager.refreshPlannedLegForFlight(id) (as PUT /api/flights/:id/planned-leg does at src/server.ts:653) and why, given the gate already requires end_time IS NOT NULL.",
+        "design.md §'UI' freezes phase 2 completely: the button-visibility predicate written ONLY in terms of fields the client already holds on Flight and PlannedLegWithChildren (the client cannot import src/, so this predicate is a deliberate duplicate of the server gate and the design states that and states the two must be diffed at review); the exact label for each direction; the confirm-dialog text or an explicit 'no confirm'; where the busy state and a 409 message render; and that client/src/components/PlannedLegRows.tsx and client/src/pages/TripDetail.tsx are not touched (the badge and the 'flown, N nm from plan' note already handle status 'flown').",
+        ".claude/runs/2026-09-04-lnmpln-trip-planner/design.md gains 'Amendment D — 2026-09-07' in the existing amendment style, and §12.3, §14 and §15 are amended IN PLACE with section numbering unchanged: §15's transition table gains the new rows (manual close-out and its reverse) naming the actor as 'user (hand-linked, ended flight)', and the F-1 bullet is narrowed rather than deleted. `git diff --stat .claude/runs/2026-09-04-lnmpln-trip-planner/design.md` shows that file changed and no other prior-run artifact.",
+        "No implementation code: no file under src/, client/ or README.md is modified. `git status --porcelain src client README.md` prints nothing."
+      ],
+      "model": "opus"
+    },
+    {
+      "id": "T-002",
+      "role": "dispatcher",
+      "title": "src/plannedLegClose.ts — the pure gate + deviation module, and src/inspect-manual-mark.ts, its CLI inspector",
+      "goal": "Put the whole of the risky logic (who may close a leg by hand, and how far off plan they landed) in one module that imports no database and no server, and make it falsifiable from the command line without a sim, a browser or a test framework.",
+      "phase": 1,
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [
+        "src/plannedLegClose.ts",
+        "src/inspect-manual-mark.ts",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/T-002.md"
+      ],
+      "acceptance_criteria": [
+        "src/plannedLegClose.ts exports exactly the signatures frozen in design.md §'Modules' / contracts/ — no extras, no renames — and imports nothing but ./geo: `grep -nE \"from '\\./(db|server|flightManager)'\" src/plannedLegClose.ts` prints nothing.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0. Use --noEmit, not `npm run build:server`: emitting overwrites the dist/ the user's running server already loaded, mid-edit.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx ts-node src/inspect-manual-mark.ts` prints one row per row of design.md §1's 24-row gate table (expected vs actual, the design's verdict as the expected column), exits 0 when every row agrees and non-zero when any disagrees. The report pastes the complete output, not a summary.",
+        "Six named rows are present and pass, each labelled in the table: (a) the live stuck case — manual link, ended flight, leg 'planned' → allowed, deviation 0.3 nm for flight 56/leg 12's real coordinates; (b) an auto link → refused; (c) end_time NULL → refused; (d) arrival position NULL → the design's stated NULL policy, and the status is still the requested one; (e) an antimeridian pair (179E arrival vs 179W destination) measuring ~2° of longitude, not 358° — proof the deviation is haversine and not a degree delta; (f) a deviation of 120 nm → status 'flown', NEVER 'diverted' (the frozen decision).",
+        "The rounding is character-identical to src/flightManager.ts:463 (Math.round(deviationNm * 10) / 10): the inspector includes a row whose raw distance differs between the two roundings if they ever diverge (e.g. x.x5 boundary) and the report shows that row's value.",
+        "`git status --porcelain` lists only the two new src files and the report — no edit leaked into src/db.ts, src/server.ts or src/flightManager.ts."
+      ],
+      "risks": [
+        "An inspector that restates the implementation instead of the design's table proves nothing; the expected column must be transcribed from design.md §1, not computed by the module under test."
+      ],
+      "model_hint": "sonnet",
+      "model_rationale": "Two new files, no shared state, signatures already frozen — narrow and well-specified, but the scenario table needs care.",
+      "deps": [
+        "T-001"
+      ],
+      "definition_of_done": [
+        "src/plannedLegClose.ts exports exactly the signatures frozen in design.md §'Modules' / contracts/ — no extras, no renames — and imports nothing but ./geo: `grep -nE \"from '\\./(db|server|flightManager)'\" src/plannedLegClose.ts` prints nothing.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0. Use --noEmit, not `npm run build:server`: emitting overwrites the dist/ the user's running server already loaded, mid-edit.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx ts-node src/inspect-manual-mark.ts` prints one row per row of design.md §1's 24-row gate table (expected vs actual, the design's verdict as the expected column), exits 0 when every row agrees and non-zero when any disagrees. The report pastes the complete output, not a summary.",
+        "Six named rows are present and pass, each labelled in the table: (a) the live stuck case — manual link, ended flight, leg 'planned' → allowed, deviation 0.3 nm for flight 56/leg 12's real coordinates; (b) an auto link → refused; (c) end_time NULL → refused; (d) arrival position NULL → the design's stated NULL policy, and the status is still the requested one; (e) an antimeridian pair (179E arrival vs 179W destination) measuring ~2° of longitude, not 358° — proof the deviation is haversine and not a degree delta; (f) a deviation of 120 nm → status 'flown', NEVER 'diverted' (the frozen decision).",
+        "The rounding is character-identical to src/flightManager.ts:463 (Math.round(deviationNm * 10) / 10): the inspector includes a row whose raw distance differs between the two roundings if they ever diverge (e.g. x.x5 boundary) and the report shows that row's value.",
+        "`git status --porcelain` lists only the two new src files and the report — no edit leaked into src/db.ts, src/server.ts or src/flightManager.ts."
+      ],
+      "model": "sonnet"
+    },
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "src/db.ts — the writer for a hand-closed leg, with the F-1 guard left untouched",
+      "goal": "Add the persistence for 'mark this leg flown with this deviation' and its reverse, additively, so that setPlannedLegStatus() and PlannedLegHasLinkedFlightError keep behaving exactly as they do today for every caller that exists now.",
+      "phase": 1,
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [
+        "src/db.ts",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/T-003.md"
+      ],
+      "acceptance_criteria": [
+        "The new export(s) match design.md §'Modules' exactly, write status and arrival_deviation_nm in a single UPDATE inside one db.transaction(), and re-read nothing the caller did not ask for.",
+        "`git diff src/db.ts` shows NO change to any line of setPlannedLegStatus (db.ts:1088-1106), PlannedLegHasLinkedFlightError (1006-1012), recordPlannedLegArrival (1318-1322), unlinkFlightFromPlannedLeg (1259+) or clearPlannedLegLink (1284+). The report pastes the full diff.",
+        "No migration: the report shows `sed -n '101,102p' src/db.ts` proving status already CHECKs 'flown', and the diff shows the planned_legs DDL and the ALTER TABLE block unchanged.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "Against a COPY of the live database only (`S=$SCRATCH/t003; mkdir -p $S; cp flights.db flights.db-wal flights.db-shm $S/`), a Node 20 script driving the new function directly: mark leg 12 flown with deviation 0.3 → re-read shows status 'flown', arrival_deviation_nm 0.3; reverse it → re-read shows status 'planned', arrival_deviation_nm NULL; and in BOTH steps flights.planned_leg_id = 12 and planned_leg_link_source = 'manual' for flight 56 are unchanged (the reverse must not unlink — frozen decision 3). Report pastes the four row dumps.",
+        "The same script, run against a leg with no linked flight and against an auto-linked leg, produces the refusal design.md §1 specifies for the db layer (or, if the design puts the whole gate in the endpoint, the report states that and shows the db function is deliberately unguarded and unreachable from any other caller — `grep -rn '<newFnName>' src/` proves the caller set).",
+        "The live database is untouched: `md5sum flights.db` before and after the task, both printed in the report, identical.",
+        "`git status --porcelain` lists only src/db.ts and the report."
+      ],
+      "risks": [
+        "src/db.ts is 1322 lines and is the file every other task reads; an edit that drifts outside the new function is the most expensive regression available in this run."
+      ],
+      "model_hint": "sonnet",
+      "model_rationale": "Additive change to a shared file with a frozen signature; the constraint is discipline, not judgement, and the diff criteria make a lapse visible.",
+      "deps": [
+        "T-001"
+      ],
+      "definition_of_done": [
+        "The new export(s) match design.md §'Modules' exactly, write status and arrival_deviation_nm in a single UPDATE inside one db.transaction(), and re-read nothing the caller did not ask for.",
+        "`git diff src/db.ts` shows NO change to any line of setPlannedLegStatus (db.ts:1088-1106), PlannedLegHasLinkedFlightError (1006-1012), recordPlannedLegArrival (1318-1322), unlinkFlightFromPlannedLeg (1259+) or clearPlannedLegLink (1284+). The report pastes the full diff.",
+        "No migration: the report shows `sed -n '101,102p' src/db.ts` proving status already CHECKs 'flown', and the diff shows the planned_legs DDL and the ALTER TABLE block unchanged.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "Against a COPY of the live database only (`S=$SCRATCH/t003; mkdir -p $S; cp flights.db flights.db-wal flights.db-shm $S/`), a Node 20 script driving the new function directly: mark leg 12 flown with deviation 0.3 → re-read shows status 'flown', arrival_deviation_nm 0.3; reverse it → re-read shows status 'planned', arrival_deviation_nm NULL; and in BOTH steps flights.planned_leg_id = 12 and planned_leg_link_source = 'manual' for flight 56 are unchanged (the reverse must not unlink — frozen decision 3). Report pastes the four row dumps.",
+        "The same script, run against a leg with no linked flight and against an auto-linked leg, produces the refusal design.md §1 specifies for the db layer (or, if the design puts the whole gate in the endpoint, the report states that and shows the db function is deliberately unguarded and unreachable from any other caller — `grep -rn '<newFnName>' src/` proves the caller set).",
+        "The live database is untouched: `md5sum flights.db` before and after the task, both printed in the report, identical.",
+        "`git status --porcelain` lists only src/db.ts and the report."
+      ],
+      "model": "sonnet"
+    },
+    {
+      "id": "T-004",
+      "role": "dispatcher",
+      "title": "src/server.ts — the endpoint, the gate composition, and proof the old PATCH contract did not move",
+      "goal": "Wire the pure module and the writer into the HTTP surface design.md §'API' froze, and demonstrate by differential test that every request the server answered before this run still gets the same answer.",
+      "phase": 1,
+      "depends_on": [
+        "T-002",
+        "T-003"
+      ],
+      "allowed_paths": [
+        "src/server.ts",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/T-004.md"
+      ],
+      "acceptance_criteria": [
+        "The endpoint is exactly the method, path, body and payload of design.md §'API', composing src/plannedLegClose.ts for eligibility and deviation and src/db.ts for the write; `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "A scratch server answers on port 3100 with its cwd set to a scratch directory holding a COPY of the database, so that src/db.ts:9's `path.join(process.cwd(),'flights.db')` and src/server.ts:106's static root both resolve inside the scratch tree and cannot reach the live file. The report states the exact commands used to start and to stop it, and `ss -ltn | grep 3100` prints nothing at the end.",
+        "A curl matrix, one row per case, each showing the observed status code and body: (a) flight 56 → 200, leg 12 reads status 'flown', arrival_deviation_nm 0.3; (b) the reverse → 200, status 'planned', deviation null, and GET /api/flights/56 still shows planned_leg_id 12 and planned_leg_link_source 'manual'; (c) flight 48 (auto link) → 409; (d) a flight with end_time NULL (created in the copy) → 409; (e) a flight with no planned_leg_id → the code design.md §'API' specifies; (f) unknown flight id → 404; non-numeric id → 400; body without a valid status → 400.",
+        "The F-1 regression is proved differentially, not by assertion: the pre-change server is materialised with `git archive HEAD | tar -x -C $S/base` (no branch switch, no worktree, no stash), run on port 3101 against an identical copy of the same scratch database, and these four requests are sent to BOTH servers — PATCH /api/planned-legs/<unlinked leg> {status:'skipped'}, {status:'planned'}, {status:'flown'}, and PATCH on linked leg 12 — with the report showing the status code and body from each, pairwise identical.",
+        "Route registration order is respected: any new literal path segment is registered before the /:id routes and before the SPA catch-all (prior design.md §7.3); the report shows the new route reached with a 4xx/200 rather than the SPA's index.html.",
+        "`md5sum flights.db` identical before and after; both values in the report. `git status --porcelain` lists only src/server.ts and the report."
+      ],
+      "risks": [
+        "This endpoint is the whole security boundary of the feature: everything the gate refuses, it refuses here.",
+        "A 409 that does not name why (auto link vs still flying vs no link) will send the user to Unlink, which is the destructive repair this feature exists to avoid."
+      ],
+      "model_hint": "opus",
+      "model_rationale": "Cross-file composition on the run's trust boundary, with a byte-for-byte non-regression obligation against a rule a previous review had to fix once already.",
+      "deps": [
+        "T-002",
+        "T-003"
+      ],
+      "definition_of_done": [
+        "The endpoint is exactly the method, path, body and payload of design.md §'API', composing src/plannedLegClose.ts for eligibility and deviation and src/db.ts for the write; `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "A scratch server answers on port 3100 with its cwd set to a scratch directory holding a COPY of the database, so that src/db.ts:9's `path.join(process.cwd(),'flights.db')` and src/server.ts:106's static root both resolve inside the scratch tree and cannot reach the live file. The report states the exact commands used to start and to stop it, and `ss -ltn | grep 3100` prints nothing at the end.",
+        "A curl matrix, one row per case, each showing the observed status code and body: (a) flight 56 → 200, leg 12 reads status 'flown', arrival_deviation_nm 0.3; (b) the reverse → 200, status 'planned', deviation null, and GET /api/flights/56 still shows planned_leg_id 12 and planned_leg_link_source 'manual'; (c) flight 48 (auto link) → 409; (d) a flight with end_time NULL (created in the copy) → 409; (e) a flight with no planned_leg_id → the code design.md §'API' specifies; (f) unknown flight id → 404; non-numeric id → 400; body without a valid status → 400.",
+        "The F-1 regression is proved differentially, not by assertion: the pre-change server is materialised with `git archive HEAD | tar -x -C $S/base` (no branch switch, no worktree, no stash), run on port 3101 against an identical copy of the same scratch database, and these four requests are sent to BOTH servers — PATCH /api/planned-legs/<unlinked leg> {status:'skipped'}, {status:'planned'}, {status:'flown'}, and PATCH on linked leg 12 — with the report showing the status code and body from each, pairwise identical.",
+        "Route registration order is respected: any new literal path segment is registered before the /:id routes and before the SPA catch-all (prior design.md §7.3); the report shows the new route reached with a 4xx/200 rather than the SPA's index.html.",
+        "`md5sum flights.db` identical before and after; both values in the report. `git status --porcelain` lists only src/server.ts and the report."
+      ],
+      "model": "opus"
+    },
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Phase 1 gate — re-run the evidence, do not read the reports",
+      "goal": "Decide whether the API half of the feature is correct and whether F-1 survived, by reproducing every claim independently.",
+      "phase": 1,
+      "depends_on": [
+        "T-002",
+        "T-003",
+        "T-004"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-manual-mark-flown/reviews/phase1.md"
+      ],
+      "acceptance_criteria": [
+        "reviews/phase1.md opens with the verdict (approve / request_changes) and lists findings with a severity each; every 'holds' is marked [executed] or [read] as in .claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase3.md.",
+        "The 24 rows of design.md §1 are checked for coverage against src/inspect-manual-mark.ts row by row; any gate-table row with no inspector row is a finding.",
+        "The reviewer re-runs, itself, on its own scratch copies and its own ports: the inspector, the four F-1 differential requests against HEAD and against the working tree, and cases (a)-(f) of T-004's matrix. Reports are evidence of what a Dispatcher saw, not a substitute for running it.",
+        "It confirms by reading the diff that setPlannedLegStatus, PlannedLegHasLinkedFlightError, recordPlannedLegArrival and the planned_legs DDL are untouched, and that no file outside the three tasks' allowed_paths changed (`git status --porcelain`).",
+        "It states the live flights.db md5 at the start and end of the review, identical, and confirms no scratch process or port was left running (PIDs captured per step, as .claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase5.md did).",
+        "It answers one question in its own words: can any sequence of the new endpoint's calls put a leg into a state design.md §15's amended table does not define? The answer names the states it enumerated."
+      ],
+      "risks": [
+        "A review that trusts T-004's own differential run reproduces T-004's blind spot."
+      ],
+      "model_hint": "opus",
+      "model_rationale": "Adversarial re-execution against a frozen rule; the failure mode being guarded is subtle and was missed once before.",
+      "deps": [
+        "T-002",
+        "T-003",
+        "T-004"
+      ],
+      "definition_of_done": [
+        "reviews/phase1.md opens with the verdict (approve / request_changes) and lists findings with a severity each; every 'holds' is marked [executed] or [read] as in .claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase3.md.",
+        "The 24 rows of design.md §1 are checked for coverage against src/inspect-manual-mark.ts row by row; any gate-table row with no inspector row is a finding.",
+        "The reviewer re-runs, itself, on its own scratch copies and its own ports: the inspector, the four F-1 differential requests against HEAD and against the working tree, and cases (a)-(f) of T-004's matrix. Reports are evidence of what a Dispatcher saw, not a substitute for running it.",
+        "It confirms by reading the diff that setPlannedLegStatus, PlannedLegHasLinkedFlightError, recordPlannedLegArrival and the planned_legs DDL are untouched, and that no file outside the three tasks' allowed_paths changed (`git status --porcelain`).",
+        "It states the live flights.db md5 at the start and end of the review, identical, and confirms no scratch process or port was left running (PIDs captured per step, as .claude/runs/2026-09-04-lnmpln-trip-planner/reviews/phase5.md did).",
+        "It answers one question in its own words: can any sequence of the new endpoint's calls put a leg into a state design.md §15's amended table does not define? The answer names the states it enumerated."
+      ],
+      "model": "opus"
+    },
+    {
+      "id": "T-006",
+      "role": "dispatcher",
+      "title": "client/src/pages/FlightDetail.tsx — the control, both directions",
+      "goal": "Put the mark-flown / back-to-planned control in the Planned Leg section of /flight/:id, exactly where the manual link is already explained and undone, per design.md §'UI'.",
+      "phase": 2,
+      "depends_on": [
+        "T-005"
+      ],
+      "allowed_paths": [
+        "client/src/pages/FlightDetail.tsx",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/T-006.md"
+      ],
+      "acceptance_criteria": [
+        "The visibility predicate is the one design.md §'UI' froze, expressed only over fields already present on Flight and PlannedLegWithChildren; the report quotes the predicate from the design and from the JSX side by side.",
+        "The control sits in the existing flight-actions row beside Unlink (FlightDetail.tsx:296-301), reuses the page's busy/error idiom (unlinkBusy / unlinkError at :118-129), and updates state from the response without a page reload — no window.location.reload().",
+        "`cd client && export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "The client is built ONLY to a scratch outDir: `cd client && npx vite build --outDir $S/client/dist --emptyOutDir`. `npm run build:client` is forbidden in this task — it writes client/dist, which the live server on port 3000 serves as static files the instant the build finishes, publishing unreviewed UI to the user with no restart. The report prints `stat -c '%y %n' client/dist/index.html` before and after, unchanged.",
+        "Driven in headless Chromium (puppeteer is already a dependency — no new package) against a scratch server on port 3100 whose cwd holds the copied database and the scratch client build: /flight/56 shows the control; clicking it turns the badge to Flown and adds 'flown, 0.3 nm from plan' with no manual reload; clicking again returns Planned and removes the note; in both states the page still reads 'Linked by hand.' and still offers Unlink. Report includes the console log (zero page errors) and a screenshot path per state.",
+        "The control is ABSENT on /flight/48 (auto link) and on a flight with end_time NULL, both observed in the same browser session and reported.",
+        "A forced 409 (e.g. mark, then mark again from a stale page) renders the server's message inline rather than an unhandled rejection — observed, with the rendered text quoted.",
+        "`git status --porcelain` lists only client/src/pages/FlightDetail.tsx and the report; client/src/types.ts and client/src/components/PlannedLegRows.tsx are unchanged."
+      ],
+      "risks": [
+        "The client predicate is a hand-copy of the server gate with no compiler link between them; the two drifting is this feature's most likely long-term defect.",
+        "A stray `npm run build:client` publishes the button to the live app while the running server still lacks the endpoint."
+      ],
+      "model_hint": "sonnet",
+      "model_rationale": "Single-file React edit against a frozen UI contract; the risk is in the build hazard and the predicate transcription, both of which the criteria pin down.",
+      "deps": [
+        "T-005"
+      ],
+      "definition_of_done": [
+        "The visibility predicate is the one design.md §'UI' froze, expressed only over fields already present on Flight and PlannedLegWithChildren; the report quotes the predicate from the design and from the JSX side by side.",
+        "The control sits in the existing flight-actions row beside Unlink (FlightDetail.tsx:296-301), reuses the page's busy/error idiom (unlinkBusy / unlinkError at :118-129), and updates state from the response without a page reload — no window.location.reload().",
+        "`cd client && export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npx tsc --noEmit` exits 0.",
+        "The client is built ONLY to a scratch outDir: `cd client && npx vite build --outDir $S/client/dist --emptyOutDir`. `npm run build:client` is forbidden in this task — it writes client/dist, which the live server on port 3000 serves as static files the instant the build finishes, publishing unreviewed UI to the user with no restart. The report prints `stat -c '%y %n' client/dist/index.html` before and after, unchanged.",
+        "Driven in headless Chromium (puppeteer is already a dependency — no new package) against a scratch server on port 3100 whose cwd holds the copied database and the scratch client build: /flight/56 shows the control; clicking it turns the badge to Flown and adds 'flown, 0.3 nm from plan' with no manual reload; clicking again returns Planned and removes the note; in both states the page still reads 'Linked by hand.' and still offers Unlink. Report includes the console log (zero page errors) and a screenshot path per state.",
+        "The control is ABSENT on /flight/48 (auto link) and on a flight with end_time NULL, both observed in the same browser session and reported.",
+        "A forced 409 (e.g. mark, then mark again from a stale page) renders the server's message inline rather than an unhandled rejection — observed, with the rendered text quoted.",
+        "`git status --porcelain` lists only client/src/pages/FlightDetail.tsx and the report; client/src/types.ts and client/src/components/PlannedLegRows.tsx are unchanged."
+      ],
+      "model": "sonnet"
+    },
+    {
+      "id": "T-007",
+      "role": "dispatcher",
+      "title": "README.md — document the hand close-out where manual linking is already described",
+      "goal": "Keep the user-facing description accurate: README's linking table currently implies the only route to 'flown' is a landing.",
+      "phase": 2,
+      "depends_on": [
+        "T-005"
+      ],
+      "allowed_paths": [
+        "README.md",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/T-007.md"
+      ],
+      "acceptance_criteria": [
+        "The 'Linking a flight to a leg' section (README.md:200-208) states the new control: where it is (the flight's own page), when it appears (the link was made by hand and the flight has ended), that it records how far from the plan the flight actually arrived, and that it is reversible without unlinking. It does not claim the control exists on the trip page (frozen decision 1).",
+        "It states plainly that a hand-mark is always 'flown', never 'diverted', however far off the arrival was — because that is the one place the hand path deliberately differs from the automatic one, and a user comparing two legs will otherwise think the app is inconsistent.",
+        "The project-structure listing (README.md:243-256) gains src/plannedLegClose.ts with a one-line description in the existing style.",
+        "Every sentence added is traceable to a line of design.md; the report maps each new sentence to its §. No sentence describes behaviour no task implemented.",
+        "`git diff README.md` shows only those two regions changed — no reflowing of untouched paragraphs. `git status --porcelain` lists only README.md and the report."
+      ],
+      "risks": [
+        "README is the user-facing contract; a sentence written from the plan rather than from the shipped behaviour is a documented feature that does not exist."
+      ],
+      "model_hint": "haiku",
+      "model_rationale": "Narrow, fully specified prose edit into two named regions of one file.",
+      "deps": [
+        "T-005"
+      ],
+      "definition_of_done": [
+        "The 'Linking a flight to a leg' section (README.md:200-208) states the new control: where it is (the flight's own page), when it appears (the link was made by hand and the flight has ended), that it records how far from the plan the flight actually arrived, and that it is reversible without unlinking. It does not claim the control exists on the trip page (frozen decision 1).",
+        "It states plainly that a hand-mark is always 'flown', never 'diverted', however far off the arrival was — because that is the one place the hand path deliberately differs from the automatic one, and a user comparing two legs will otherwise think the app is inconsistent.",
+        "The project-structure listing (README.md:243-256) gains src/plannedLegClose.ts with a one-line description in the existing style.",
+        "Every sentence added is traceable to a line of design.md; the report maps each new sentence to its §. No sentence describes behaviour no task implemented.",
+        "`git diff README.md` shows only those two regions changed — no reflowing of untouched paragraphs. `git status --porcelain` lists only README.md and the report."
+      ],
+      "model": "haiku"
+    },
+    {
+      "id": "T-008",
+      "role": "reviewer",
+      "title": "Phase 2 gate — drive the browser, diff the two predicates",
+      "goal": "Decide whether the control the user actually sees matches the gate the server enforces, and whether README describes what shipped.",
+      "phase": 2,
+      "depends_on": [
+        "T-006",
+        "T-007"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-manual-mark-flown/reviews/phase2.md"
+      ],
+      "acceptance_criteria": [
+        "reviews/phase2.md opens with the verdict and per-finding severities, each claim marked [executed] or [read].",
+        "The reviewer drives its own headless-Chromium session against its own scratch server and scratch client build, and reproduces: the control present on /flight/56 in both directions, absent on the auto-linked and in-air flights, and the 409 rendering.",
+        "It diffs the client visibility predicate against the server gate over all 24 rows of design.md §1 and reports any row where the UI would offer a control the API refuses, or hide one the API allows. A row of the first kind is a blocking finding; a row of the second kind is at least a note.",
+        "It confirms the repo's client/dist was not rebuilt (mtime before/after, quoted) and that dist/ is untouched.",
+        "It checks each new README sentence against observed behaviour, not against design.md.",
+        "Live flights.db md5 identical at start and end; no scratch process or port left behind."
+      ],
+      "risks": [],
+      "model_hint": "opus",
+      "model_rationale": "Judgement over a duplicated invariant plus real browser evidence; the cheap version of this review is the one that misses the drift.",
+      "deps": [
+        "T-006",
+        "T-007"
+      ],
+      "definition_of_done": [
+        "reviews/phase2.md opens with the verdict and per-finding severities, each claim marked [executed] or [read].",
+        "The reviewer drives its own headless-Chromium session against its own scratch server and scratch client build, and reproduces: the control present on /flight/56 in both directions, absent on the auto-linked and in-air flights, and the 409 rendering.",
+        "It diffs the client visibility predicate against the server gate over all 24 rows of design.md §1 and reports any row where the UI would offer a control the API refuses, or hide one the API allows. A row of the first kind is a blocking finding; a row of the second kind is at least a note.",
+        "It confirms the repo's client/dist was not rebuilt (mtime before/after, quoted) and that dist/ is untouched.",
+        "It checks each new README sentence against observed behaviour, not against design.md.",
+        "Live flights.db md5 identical at start and end; no scratch process or port left behind."
+      ],
+      "model": "opus"
+    },
+    {
+      "id": "T-009",
+      "role": "devops",
+      "title": "Build and ship-readiness — and tell the user about the restart window",
+      "goal": "Produce the artifacts the user's next restart will run, prove they boot and answer, and state precisely what became live at build time and what does not until a restart.",
+      "phase": 3,
+      "depends_on": [
+        "T-008"
+      ],
+      "allowed_paths": [
+        "dist/**",
+        "client/dist/**",
+        ".claude/runs/2026-09-07-manual-mark-flown/reports/ship.md"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npm run backup` runs FIRST and succeeds; the report names the snapshot it produced. It is the supported way to snapshot while the server is live.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npm run build` exits 0 with no TypeScript errors from either half; the report pastes the tail of both halves.",
+        "`git status --porcelain` after the build shows no tracked-source change, and `git check-ignore -v dist client/dist` confirms both build outputs are ignored.",
+        "A scratch boot of the shipped artifact: from a scratch directory holding a copy of the database and a copy of client/dist, `PORT=3100 node <repo>/dist/index.js` starts, logs '[DB] Database ready', answers GET /api/flights, answers the new endpoint 200 on the stuck-leg case and 409 on the auto-linked case, and is then stopped (PID captured, `ss -ltn | grep 3100` empty).",
+        "The report states, in one explicit line, the restart window this build opens: from the moment the client build finishes, the running server on port 3000 serves the new button as a static file, while its in-memory dist/ has no such endpoint until the user restarts — so between build and restart the button exists and its API call fails. It gives the exact restart command the user needs and flags this for the Orchestrator to relay.",
+        "`md5sum flights.db` before and after, identical, both printed. The user's server on port 3000 was never stopped, restarted or signalled (`pgrep -af 'dist/index.js'` shows the same PID before and after, both printed)."
+      ],
+      "risks": [
+        "The build makes the UI live before the API is live. This is inherent to a static client and a long-running node process, and the only mitigation is telling the user."
+      ],
+      "model_hint": "sonnet",
+      "model_rationale": "Mechanical build and smoke test with one sharp hazard the criteria already name.",
+      "deps": [
+        "T-008"
+      ],
+      "definition_of_done": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npm run backup` runs FIRST and succeeds; the report names the snapshot it produced. It is the supported way to snapshot while the server is live.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; npm run build` exits 0 with no TypeScript errors from either half; the report pastes the tail of both halves.",
+        "`git status --porcelain` after the build shows no tracked-source change, and `git check-ignore -v dist client/dist` confirms both build outputs are ignored.",
+        "A scratch boot of the shipped artifact: from a scratch directory holding a copy of the database and a copy of client/dist, `PORT=3100 node <repo>/dist/index.js` starts, logs '[DB] Database ready', answers GET /api/flights, answers the new endpoint 200 on the stuck-leg case and 409 on the auto-linked case, and is then stopped (PID captured, `ss -ltn | grep 3100` empty).",
+        "The report states, in one explicit line, the restart window this build opens: from the moment the client build finishes, the running server on port 3000 serves the new button as a static file, while its in-memory dist/ has no such endpoint until the user restarts — so between build and restart the button exists and its API call fails. It gives the exact restart command the user needs and flags this for the Orchestrator to relay.",
+        "`md5sum flights.db` before and after, identical, both printed. The user's server on port 3000 was never stopped, restarted or signalled (`pgrep -af 'dist/index.js'` shows the same PID before and after, both printed)."
+      ],
+      "model": "sonnet"
+    },
+    {
+      "id": "T-010",
+      "role": "reviewer",
+      "title": "Ship gate — do the artifacts, the design and the README agree with what runs?",
+      "goal": "Final check before the Orchestrator commits: the built output corresponds to the reviewed source, and the durable record matches the shipped behaviour.",
+      "phase": 3,
+      "depends_on": [
+        "T-009"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-manual-mark-flown/reviews/ship.md"
+      ],
+      "acceptance_criteria": [
+        "reviews/ship.md opens with the verdict. It confirms the built artifacts correspond to the reviewed source: the new route string appears in dist/server.js and the new button label appears in the client bundle (`grep -r` output quoted), and no source file changed after T-008's approval (`git status --porcelain`, `git diff --stat`).",
+        "It re-reads .claude/runs/2026-09-04-lnmpln-trip-planner/design.md §12.3, §14, §15 and Amendment D and confirms each amended sentence is true of the code that shipped — naming any sentence that describes an intention rather than the implementation.",
+        "It confirms the run directory is complete per .claude/runs/README.md: intake.md, plan.json, design.md, contracts/, prototypes/, reports/, reviews/.",
+        "It re-runs the two calls that matter once more against its own scratch server — the forward mark and the reverse — and confirms the leg ends in the state it started in, so the review leaves no data changed even on the copy it used.",
+        "Live flights.db md5 identical at start and end; no scratch process or port left behind; the user's server PID unchanged."
+      ],
+      "risks": [],
+      "model_hint": "opus",
+      "model_rationale": "Last gate before a commit; cheap to run, expensive to get wrong.",
+      "deps": [
+        "T-009"
+      ],
+      "definition_of_done": [
+        "reviews/ship.md opens with the verdict. It confirms the built artifacts correspond to the reviewed source: the new route string appears in dist/server.js and the new button label appears in the client bundle (`grep -r` output quoted), and no source file changed after T-008's approval (`git status --porcelain`, `git diff --stat`).",
+        "It re-reads .claude/runs/2026-09-04-lnmpln-trip-planner/design.md §12.3, §14, §15 and Amendment D and confirms each amended sentence is true of the code that shipped — naming any sentence that describes an intention rather than the implementation.",
+        "It confirms the run directory is complete per .claude/runs/README.md: intake.md, plan.json, design.md, contracts/, prototypes/, reports/, reviews/.",
+        "It re-runs the two calls that matter once more against its own scratch server — the forward mark and the reverse — and confirms the leg ends in the state it started in, so the review leaves no data changed even on the copy it used.",
+        "Live flights.db md5 identical at start and end; no scratch process or port left behind; the user's server PID unchanged."
+      ],
+      "model": "opus"
+    }
+  ],
+  "global_risks": [
+    "The system-closed manual link. Live rows flight 47 → leg 4 (0.4 nm) and flight 52 → leg 10 (0.8 nm) are manual links whose legs endFlight() closed at touchdown. Under a 'manual AND ended' gate, the user can reopen them and clear a measurement the system took. Mitigated by the recompute being exact (7/7 in a read-only check), so nothing is lost that cannot be recreated — but T-001 owns the decision, and if it wants those excluded it needs a new column, which turns a no-migration run into a migration. RANKED FIRST because it is the only thing that can change the shape of the plan.",
+    "Predicate drift between client and server. The client cannot import src/, so the button's visibility rule is a hand-copy of the server gate. Nothing in the build links them. Mitigated by freezing one predicate in design.md §'UI' and making T-008 diff both against all 24 gate rows; unmitigated in the long run.",
+    "Regressing F-1. Widening any path that reaches setPlannedLegStatus() risks restoring exactly the bug the previous run's review had to fix: PATCH {status:'planned'} on a linked flown leg returning 200 and destroying arrival_deviation_nm. Mitigated by the differential test against `git archive HEAD` and by forbidding any diff inside that function.",
+    "The build-to-restart window. `npm run build:client` writes client/dist, which src/server.ts:106 serves statically from the LIVE process — the new button appears to the user immediately, while the endpoint behind it only exists after they restart node dist/index.js. Mitigated only by T-009 stating it and the Orchestrator relaying it.",
+    "Unexercised NULL-arrival path. Zero flights in the live database have end_time set and arrival_lat NULL, so the 'cannot measure a deviation' branch has no real data behind it and only the inspector's synthetic row will ever have run it.",
+    "Rounding divergence. If the hand path rounds differently from src/flightManager.ts:463, the same flight reads a different deviation depending on which path closed the leg. Mitigated by an inspector row that fails if the two expressions differ.",
+    "Scope creep toward the trip page. The trip page shows the same legs and the same badges, and 'why not here too' is one line of JSX away. Frozen decision 1 says no; TripDetail.tsx appears in no task's allowed_paths."
+  ],
+  "open_questions": [
+    "Is a 'diverted' leg reversible by hand? The frozen decisions cover flown ↔ planned only. T-001 must fill the cell rather than leave the endpoint's behaviour to fall out of the code.",
+    "What happens when the leg is 'skipped' AND hand-linked — a combination the previous design calls contradictory and refuses with a 409? T-001 says whether this feature changes that answer.",
+    "Flight-scoped route (PUT /api/flights/:id/planned-leg-status) or a widened PATCH /api/planned-legs/:legId? The flight-scoped shape expresses the gate's own subject and leaves the leg endpoint untouched, but T-001 owns the choice and must state the reason."
+  ],
+  "amendments": [],
+  "model_policy": "opus for the design freeze, the endpoint and every review — contested judgement, the trust boundary, and adversarial re-execution. sonnet for the scoped implementation tasks whose contracts are already frozen. haiku for the README edit, which is two named regions of one file. Any task that returns blocked is re-issued at opus."
+}

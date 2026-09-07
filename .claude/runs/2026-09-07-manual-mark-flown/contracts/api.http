@@ -1,0 +1,162 @@
+# contracts/api.http — run 2026-09-07-manual-mark-flown, T-001.
+#
+# Every request/response shape of PUT /api/flights/:id/planned-leg-status,
+# frozen. design.md §5. Reference artifact; not executed by the build.
+#
+# The bodies below use the live logbook's real ids so T-004's curl matrix and
+# T-005's re-run can be written straight off this file. Run them against a
+# SCRATCH server on port 3100 with a COPY of the database — never against the
+# user's server on 3000 (.claude/ENVIRONMENT.md).
+#
+# Every error body is {"error": "<text>"} — the shape every handler in
+# src/server.ts already uses. The texts are frozen; message drift is a review
+# finding.
+
+### 1. FORWARD — the stuck case this feature exists for.
+# flight 56: manual link, ended, leg 12 status 'planned'. §1.3 row 1.
+PUT http://localhost:3100/api/flights/56/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 200 — the updated PlannedLegWithChildren (getPlannedLegById(12)), abridged:
+# {
+#   "id": 12, "trip_id": 1, "seq": 8,
+#   "status": "flown",
+#   "destination_ident": "PAJN",
+#   "destination_lat": 58.354721, "destination_lon": -134.578491,
+#   "arrival_deviation_nm": 0.3,
+#   "linked_flight_id": 56,
+#   "waypoints": [ ... ], "alternates": [ ... ]
+# }
+#
+# Side effects: exactly one UPDATE of planned_legs(status, arrival_deviation_nm).
+# flights.planned_leg_id (12), planned_leg_link_source ('manual'), trip_id (1)
+# and planned_leg_prev_trip_id (1) are UNCHANGED.
+
+
+### 2. REVERSE — back to planned, deviation cleared, link kept. §1.3 row 2.
+PUT http://localhost:3100/api/flights/56/planned-leg-status
+Content-Type: application/json
+
+{ "status": "planned" }
+
+# 200 — same payload with:
+#   "status": "planned", "arrival_deviation_nm": null, "linked_flight_id": 56
+#
+# GET /api/flights/56 still shows planned_leg_id 12 and
+# planned_leg_link_source "manual". THE REVERSE MUST NOT UNLINK.
+
+
+### 3. Idempotence / round trip.
+# Repeating request 1 after request 2 restores arrival_deviation_nm 0.3 exactly
+# (design.md §2.2, the round-trip identity). Repeating request 1 twice in a row
+# gives 409 LEG_NOT_PLANNED on the second, because the leg is no longer
+# 'planned'. That is the 409 the UI must render inline (design.md §8.4).
+
+
+### 4. REFUSED — auto link. flight 48 -> leg 5. §1.3 row 10.
+PUT http://localhost:3100/api/flights/48/planned-leg-status
+Content-Type: application/json
+
+{ "status": "planned" }
+
+# 409
+# { "error": "Flight 48 was not linked to its planned leg by hand: only a hand-linked flight's leg can be closed by hand" }
+
+
+### 5. REFUSED — flight still in the air. §1.3 row 5.
+# Construct in the scratch copy: a flight with end_time NULL, a manual link.
+PUT http://localhost:3100/api/flights/<in-air-id>/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 409
+# { "error": "Flight <in-air-id> has not ended: its planned leg is closed at touchdown" }
+
+
+### 6. REFUSED — leg already flown, request 'flown'. §1.3 row 2, forward cell.
+PUT http://localhost:3100/api/flights/56/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 409 (when leg 12 is already 'flown')
+# { "error": "Planned leg 12 is 'flown', not 'planned': only a planned leg can be marked flown by hand" }
+
+
+### 7. REFUSED — diverted or skipped leg, either direction. §1.3 rows 3, 4.
+# { "status": "flown"   } -> 409 "Planned leg N is 'diverted', not 'planned': only a planned leg can be marked flown by hand"
+# { "status": "planned" } -> 409 "Planned leg N is 'diverted', not 'flown': only a flown leg can be returned to planned"
+# Same two texts with 'skipped' in place of 'diverted'.
+# The route out of 'diverted'/'skipped' remains Unlink (design.md §1.7, §1.8).
+
+
+### 8. REFUSED — flight has no planned leg. §1.5.
+PUT http://localhost:3100/api/flights/<unlinked-id>/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 409
+# { "error": "Flight <unlinked-id> is not linked to a planned leg" }
+
+
+### 9. 404 — unknown flight id.
+PUT http://localhost:3100/api/flights/999999/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 404
+# { "error": "Flight not found" }
+
+
+### 10. 400 — non-numeric id.
+PUT http://localhost:3100/api/flights/abc/planned-leg-status
+Content-Type: application/json
+
+{ "status": "flown" }
+
+# 400
+# { "error": "Invalid id" }
+
+
+### 11. 400 — bad or missing status. Checked BEFORE the flight 404 (§5.4 step 2).
+PUT http://localhost:3100/api/flights/56/planned-leg-status
+Content-Type: application/json
+
+{ "status": "diverted" }
+
+# 400
+# { "error": "status must be 'flown' or 'planned'" }
+#
+# Same 400 for {}, {"status":"skipped"}, {"status":null}, {"status":1}.
+# 'diverted' is NOT settable by hand at any path (design.md §1.7, §3.4).
+
+
+### 12. 409 — the race (design.md §4.3), reachable only by concurrent unlink.
+# { "error": "Planned leg 12 cannot be closed by hand: it has no linked flight" }
+# { "error": "Planned leg 12 cannot be closed by hand: its flight was not linked by hand" }
+# { "error": "Planned leg 12 cannot be closed by hand: its flight has not ended" }
+
+
+### 13. UNCHANGED — the F-1 differential. Must be byte-identical to a server
+### built from `git archive HEAD`. design.md §5.6, must-not-change M-4.
+PATCH http://localhost:3100/api/planned-legs/<unlinked-leg>
+Content-Type: application/json
+
+{ "status": "skipped" }
+# 200, the leg
+
+# { "status": "planned" } -> 200, the leg
+# { "status": "flown"   } -> 400 { "error": "status must be 'planned' or 'skipped'" }
+#
+PATCH http://localhost:3100/api/planned-legs/12
+Content-Type: application/json
+
+{ "status": "planned" }
+# 409 { "error": "Planned leg 12 cannot have its status changed: linked to flight 56" }
+# ^ still a 409 even though the NEW endpoint allows this leg. The new capability
+#   exists only at the new path.

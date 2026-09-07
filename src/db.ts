@@ -1320,3 +1320,74 @@ export function recordPlannedLegArrival(legId: number, status: 'flown' | 'divert
     'UPDATE planned_legs SET status = ?, arrival_deviation_nm = ? WHERE id = ?'
   ).run(status, deviationNm, legId);
 }
+
+/**
+ * Thrown by setPlannedLegHandOutcome() when the leg stopped qualifying
+ * between the endpoint's decision and this transaction — e.g. a concurrent
+ * PUT /api/flights/:id/planned-leg {plannedLegId: null} unlinked the flight
+ * in the window between the endpoint's read and this write. design.md §4.3.
+ *
+ * This is NOT a second copy of the gate: it re-asserts only the three
+ * persistent invariants this transaction reads anyway (still linked, still
+ * manual, still ended). The transition rule — which source status may become
+ * which target status — stays in src/plannedLegClose.ts and is deliberately
+ * NOT re-checked here.
+ */
+export class PlannedLegHandCloseConflictError extends Error {
+  constructor(readonly legId: number, readonly detail: string) {
+    super(`Planned leg ${legId} cannot be closed by hand: ${detail}`);
+    this.name = 'PlannedLegHandCloseConflictError';
+  }
+}
+
+/**
+ * The hand-driven sibling of recordPlannedLegArrival(): writes the status and
+ * the deviation a hand close-out (src/plannedLegClose.ts, decideHandClose())
+ * decided, instead of the touchdown measurement endFlight() writes. Never
+ * writes 'diverted' — the touchdown rule is not mirrored here (design.md
+ * §3.4). The link itself is never touched: after the reverse transition,
+ * flights.planned_leg_id and flights.planned_leg_link_source are exactly
+ * what they were (frozen decision 3).
+ *
+ * Both columns move in one UPDATE inside one db.transaction(), preceded by a
+ * re-read of the three invariants above — the atomic re-assertion design.md
+ * §4.3 requires. Returns false when the leg row does not exist or the UPDATE
+ * changed nothing; throws PlannedLegHandCloseConflictError when an invariant
+ * no longer holds.
+ *
+ * CALLER SET: exactly one — PUT /api/flights/:id/planned-leg-status in
+ * src/server.ts, after decideHandClose() has returned `allowed: true`. Any
+ * new caller must go through decideHandClose() first (design.md risk R-5).
+ */
+export function setPlannedLegHandOutcome(
+  legId: number,
+  status: 'planned' | 'flown',
+  deviationNm: number | null
+): boolean {
+  return db.transaction((): boolean => {
+    const row = db.prepare(`
+      SELECT l.id,
+             (SELECT f.id                      FROM flights f WHERE f.planned_leg_id = l.id) AS linked_flight_id,
+             (SELECT f.planned_leg_link_source FROM flights f WHERE f.planned_leg_id = l.id) AS link_source,
+             (SELECT f.end_time                FROM flights f WHERE f.planned_leg_id = l.id) AS end_time
+        FROM planned_legs l
+       WHERE l.id = ?
+    `).get(legId) as { id: number; linked_flight_id: number | null; link_source: string | null; end_time: string | null } | undefined;
+    if (!row) return false;
+
+    if (row.linked_flight_id == null) {
+      throw new PlannedLegHandCloseConflictError(legId, 'it has no linked flight');
+    }
+    if (row.link_source !== 'manual') {
+      throw new PlannedLegHandCloseConflictError(legId, 'its flight was not linked by hand');
+    }
+    if (row.end_time == null) {
+      throw new PlannedLegHandCloseConflictError(legId, 'its flight has not ended');
+    }
+
+    const result = db.prepare(
+      'UPDATE planned_legs SET status = ?, arrival_deviation_nm = ? WHERE id = ?'
+    ).run(status, deviationNm, legId);
+    return result.changes > 0;
+  })();
+}
