@@ -27,12 +27,26 @@ function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 }
 
 /**
+ * Signed east-positive longitude difference `to - from`, wrapped into
+ * (-180, 180]. Raw longitude subtraction is forbidden everywhere in this tree
+ * (src/geo.ts, legMatcher.ts step 3) for the same reason it is forbidden here:
+ * across the antimeridian 179°E → 179°W subtracts to -358° rather than the
+ * 2° it is, which would make a Pacific route segment read as ~360° wide and
+ * hand getPlannedLegStatus() the wrong segment — and so the wrong next
+ * waypoint and remaining distance — on /api/status.
+ */
+function lonDeltaDeg(from: number, to: number): number {
+  return ((((to - from) % 360) + 540) % 360) - 180;
+}
+
+/**
  * Approximate cross-track distance (nm) from (lat, lon) to the segment
  * a->b, clamped to the segment itself rather than the infinite line through
  * it. Flat-plane (equirectangular) projection, not great-circle — adequate
  * here because it is used only to rank which leg of the route the aircraft is
  * nearest to, never reported as a distance itself (that's haversineNm, on the
- * chosen waypoint).
+ * chosen waypoint). Longitudes go through lonDeltaDeg, so the projection is
+ * flat but still antimeridian-safe.
  *
  * Why not simply pick whichever waypoint minimises dist(pos, waypoint) +
  * dist(waypoint, destination)? Triangle inequality means that sum is
@@ -45,8 +59,8 @@ function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): nu
  */
 function crossTrackNm(lat: number, lon: number, aLat: number, aLon: number, bLat: number, bLon: number): number {
   const cosLat = Math.cos(((aLat + bLat) / 2 * Math.PI) / 180);
-  const bx = (bLon - aLon) * cosLat, by = bLat - aLat;
-  const px = (lon - aLon) * cosLat, py = lat - aLat;
+  const bx = lonDeltaDeg(aLon, bLon) * cosLat, by = bLat - aLat;
+  const px = lonDeltaDeg(aLon, lon) * cosLat, py = lat - aLat;
   const abLenSq = bx * bx + by * by;
   const t = abLenSq === 0 ? 0 : Math.max(0, Math.min(1, (px * bx + py * by) / abLenSq));
   const dx = px - t * bx, dy = py - t * by;
