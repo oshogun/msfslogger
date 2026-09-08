@@ -3,10 +3,12 @@ import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { Status } from '../types';
 
+// The ✈ glyph itself points east (90°), not north, so headings must be
+// corrected by that offset before being applied as a CSS rotation.
 function makeAircraftIcon(headingDeg: number) {
   return L.divIcon({
     className: '',
-    html: `<div style="transform:rotate(${headingDeg}deg);font-size:24px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.8))">✈</div>`,
+    html: `<div style="transform:rotate(${headingDeg - 90}deg);font-size:24px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.8))">✈</div>`,
     iconAnchor: [12, 12],
   });
 }
