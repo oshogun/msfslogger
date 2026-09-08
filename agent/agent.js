@@ -5,7 +5,14 @@ const {
   Protocol,
   SimConnectDataType,
   SimConnectPeriod,
+  SimObjectType,
 } = require('node-simconnect');
+
+// Pure, dependency-free logic (buildTrafficBatch, TRAFFIC_ENABLED,
+// trafficRadiusM parsing) lives in agent/traffic.js — design.md
+// (run 2026-09-08-ai-traffic-map) §3.8, Amendment #3. It has no require of
+// node-simconnect or anything else.
+const { buildTrafficBatch, TRAFFIC_ENABLED, trafficRadiusM } = require('./traffic.js');
 
 const SERVER_URL = process.env.SERVER_URL;
 const INGEST_TOKEN = process.env.INGEST_TOKEN;
@@ -20,6 +27,11 @@ const RECONNECT_DELAY_MS = 5000;
 const DEF_FLIGHT_DATA = 0;
 const REQ_FLIGHT_DATA = 0;
 
+// AI traffic — distinct data definition and request ids (design.md §1.2, §3.2, §3.3).
+const DEF_TRAFFIC = 1;
+const REQ_TRAFFIC = 1;
+const TRAFFIC_SWEEP_MS = 2000;
+
 const EVT_PAUSED = 1;
 const EVT_UNPAUSED = 2;
 const EVT_CRASHED = 3;
@@ -27,6 +39,13 @@ const EVT_FLIGHT_LOADED = 4;
 const EVT_PAUSE_EX1 = 5;
 
 const OBJECT_USER = 0;
+
+// AI traffic — module-level sweep state, shared across reconnects (§3.4, §3.6).
+let userObjectId = null;
+let userLat = null;
+let userLon = null;
+let lastSweepAt = 0;
+let sweepBuffer = [];
 
 /**
  * MSFS `Pause_EX1` bitmask (from the SimConnect SDK). The legacy Paused /
@@ -71,6 +90,24 @@ function sendEvent(type) {
   return postJson('/api/ingest/event', { type });
 }
 
+// AI traffic — decode one simObjectDataByType record (§3.2 read order) and
+// post an assembled batch. A failed post is swallowed inside postJson, so a
+// traffic push can never throw back into the SimConnect event handler and
+// never interferes with the frame push or the reconnect logic.
+function decodeTrafficRecord(objectID, data) {
+  const lat              = data.readFloat64();
+  const lon              = data.readFloat64();
+  const altitudeFt       = data.readFloat64();
+  const headingDeg       = data.readFloat64();
+  const groundSpeedKnots = data.readFloat64();
+  const onGround         = data.readInt32() !== 0;
+  return { id: objectID, lat, lon, altitudeFt, headingDeg, groundSpeedKnots, onGround };
+}
+
+function postTrafficBatch(objects) {
+  return postJson('/api/ingest/traffic', { objects });
+}
+
 async function tryConnect() {
   try {
     console.log('[Agent] Connecting to SimConnect...');
@@ -95,6 +132,18 @@ async function tryConnect() {
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'IS SLEW ACTIVE',             'bool',             SimConnectDataType.INT32);
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'TITLE',                      null,               SimConnectDataType.STRING256);
 
+    // AI traffic data definition (§3.2) — distinct id, registered only when
+    // enabled. Read order below must match registration order exactly, same
+    // rule as the flight-data definition above.
+    if (TRAFFIC_ENABLED) {
+      handle.addToDataDefinition(DEF_TRAFFIC, 'PLANE LATITUDE',             'degrees', SimConnectDataType.FLOAT64);
+      handle.addToDataDefinition(DEF_TRAFFIC, 'PLANE LONGITUDE',            'degrees', SimConnectDataType.FLOAT64);
+      handle.addToDataDefinition(DEF_TRAFFIC, 'PLANE ALTITUDE',             'feet',    SimConnectDataType.FLOAT64);
+      handle.addToDataDefinition(DEF_TRAFFIC, 'PLANE HEADING DEGREES TRUE', 'degrees', SimConnectDataType.FLOAT64);
+      handle.addToDataDefinition(DEF_TRAFFIC, 'GROUND VELOCITY',            'knots',   SimConnectDataType.FLOAT64);
+      handle.addToDataDefinition(DEF_TRAFFIC, 'SIM ON GROUND',              'bool',    SimConnectDataType.INT32);
+    }
+
     handle.requestDataOnSimObject(
       REQ_FLIGHT_DATA,
       DEF_FLIGHT_DATA,
@@ -113,7 +162,7 @@ async function tryConnect() {
     // fight it (they report a bare on/off that misses Active Pause).
     let usingPauseEx1 = false;
 
-    handle.on('simObjectData', ({ requestID, data }) => {
+    handle.on('simObjectData', ({ requestID, objectID, data }) => {
       if (requestID !== REQ_FLIGHT_DATA) return;
 
       const lat              = data.readFloat64();
@@ -141,7 +190,32 @@ async function tryConnect() {
       };
 
       postJson('/api/ingest/frame', frame);
+
+      // AI traffic (§3.4, §3.6) — the user's own object id/position, and the
+      // throttled re-issue of the traffic sweep, both driven off this same
+      // 1 Hz tick rather than a separate timer.
+      userObjectId = objectID;
+      userLat = lat;
+      userLon = lon;
+      if (TRAFFIC_ENABLED && Date.now() - lastSweepAt >= TRAFFIC_SWEEP_MS) {
+        lastSweepAt = Date.now();
+        sweepBuffer = [];
+        handle.requestDataOnSimObjectType(REQ_TRAFFIC, DEF_TRAFFIC, trafficRadiusM, SimObjectType.AIRCRAFT);
+      }
     });
+
+    if (TRAFFIC_ENABLED) {
+      handle.on('simObjectDataByType', ({ requestID, objectID, entryNumber, outOf, data }) => {
+        if (requestID !== REQ_TRAFFIC) return;
+        if (outOf === 0) { postTrafficBatch([]); return; } // sweep found nothing
+        if (entryNumber <= 1) sweepBuffer = []; // authoritative reset
+        sweepBuffer.push(decodeTrafficRecord(objectID, data));
+        if (entryNumber >= outOf) {
+          postTrafficBatch(buildTrafficBatch(sweepBuffer, userObjectId, userLat, userLon));
+          sweepBuffer = [];
+        }
+      });
+    }
 
     handle.on('event', ({ clientEventId, data }) => {
       switch (clientEventId) {
@@ -188,4 +262,5 @@ async function tryConnect() {
 }
 
 console.log(`[Agent] msfslogger agent starting — forwarding data to ${SERVER_URL}`);
+if (!TRAFFIC_ENABLED) console.log('[Agent] AI traffic gathering disabled (TRAFFIC_ENABLED)');
 tryConnect();

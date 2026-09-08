@@ -280,3 +280,20 @@ export interface LegMatchCandidate {
   /** Carried for the log and a possible future tie-break; not used in v1. */
   aircraftType: string | null;
 }
+
+// ── AI traffic ─────────────────────────────────────────────────────────────────
+//
+// One JSON object per AI aircraft, carried on both wires: agent -> server
+// (inside a batch, POST /api/ingest/traffic) and server -> client (inside
+// GET /api/status's `traffic` key). Mirrored byte-identically in
+// client/src/types.ts; neither file imports from the other, matching how
+// SimFrame / StatusFrame are already mirrored in this project.
+// design.md (run 2026-09-08-ai-traffic-map) §2.1.
+export interface TrafficObject {
+  id: number;
+  lat: number;
+  lon: number;
+  altitudeFt: number;
+  headingDeg: number;
+  onGround: boolean;
+}

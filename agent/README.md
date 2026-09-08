@@ -40,6 +40,29 @@ Any non-zero flag stops the flight clock on the server and suspends track record
 |---|---|---|
 | `SERVER_URL` | Yes | Base URL of the `msfslogger` server, e.g. `http://192.168.0.30:3000` |
 | `INGEST_TOKEN` | No | Shared secret. If set, must match the `INGEST_TOKEN` configured on the server — sent as the `x-ingest-token` header on every request. |
+| `TRAFFIC_ENABLED` | No | Opt-out for [AI traffic gathering](#ai-traffic). Set to `0`, `false`, `off` or `no` to disable; anything else (including unset or empty) leaves it enabled. The server has its own, independently-read copy of the same variable, documented in the main [`README.md`](../README.md#environment-variables) — setting one does not imply the other. |
+| `TRAFFIC_RADIUS_M` | No | Sweep radius in metres for AI traffic. Default `40000` (~21.6 NM), clamped to `[1000, 200000]`. An unparseable value falls back to the default and logs a warning. |
+
+## AI traffic
+
+Alongside the once-a-second flight data, the agent also sweeps SimConnect
+every **2 seconds** for other aircraft (AI or multiplayer traffic MSFS itself
+reports) within `TRAFFIC_RADIUS_M` metres of the user, and pushes them to the
+server as a batch over the same HTTP channel (`POST /api/ingest/traffic`).
+This is a second, independent SimConnect request — it shares no data
+definition or request id with the flight-data path, and a failure to reach the
+server on this path never affects the flight-data path or the reconnect
+logic. The server holds the received aircraft in memory only, keyed by
+SimConnect object id, and the live map draws one marker per aircraft; the
+whole set is discarded if it goes 10 seconds without a fresh batch, and none
+of it is ever written to `flights.db` or otherwise persisted.
+
+A busy airport can have dozens of aircraft in range at once. Parked or
+gate-held aircraft (on the ground, under 1 kt) are filtered out before they
+ever leave this machine; taxiing, lining-up and airborne aircraft are sent.
+
+Set `TRAFFIC_ENABLED=0` to turn gathering off entirely — no data definition is
+registered, no SimConnect request is made, and nothing is posted.
 
 ## MSFS 2020 vs 2024
 

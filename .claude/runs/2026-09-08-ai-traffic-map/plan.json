@@ -1,0 +1,251 @@
+{
+  "run_id": "2026-09-08-ai-traffic-map",
+  "goal": "Show other aircraft SimConnect knows about (AI traffic) as live markers on the existing live map, alongside the user's own aircraft. agent/agent.js gains a second, independent SimConnect request (requestDataOnSimObjectType / simObjectDataByType) that collects in-range aircraft and pushes them to the server as a batch over the existing HTTP ingest channel; the server holds them in memory keyed by SimConnect object id, prunes them when they go stale or leave range, and exposes them to the client on the existing REST poll; client/src/components/LiveMap.tsx renders one visually distinct marker per traffic aircraft, added, moved and removed as the polls arrive. Nothing about traffic is written to flights.db, and the existing single-aircraft SimFrame -> flightManager -> flights.db pipeline is left byte-for-byte equivalent in behaviour.",
+
+  "frozen_decisions": [
+    "User's request, verbatim: \"gather the AI traffic information from simconnect and display it on the live map.\"",
+    "No persistence. Traffic is not written to `flights.db`. It's live-view only, matching \"display... on the live map,\" not \"log.\"",
+    "Follow the existing agent-only architecture. No new server-side SimConnect connection; same-machine mode is not addressed by this run (it doesn't exist today for the user's own aircraft either).",
+    "Reuse the poll/REST model as the default; the Designer evaluates whether traffic volume/churn justifies a separate polling endpoint (`/api/traffic`) vs. folding into `/api/status`, and whether the existing 1s/3s cadence is adequate or traffic needs its own (probably coarser) interval given dozens of objects can be in range at once.",
+    "Zero regression to the existing single-aircraft flight-logging pipeline (SimFrame -> flightManager state machine -> flights.db). Traffic is additive, on a separate data definition/request id.",
+    "No new runtime dependency on server, client or agent. node-simconnect ^4.1.1 is already the agent's only dependency and gains no version change.",
+    "DevOps / Ship step is skipped for this run: no build, packaging, deploy, Docker or env-provisioning change is involved. `npm run build` and the existing start path are unchanged. If a Dispatcher believes it needs a dependency, a script or a Dockerfile change, that is an escalation, not a decision it makes."
+  ],
+
+  "sequencing_rationale": [
+    "The contract is frozen before any code, because four components (agent, ingest, in-memory store, client map) all encode the same traffic record shape and the same staleness rule, and three of them are written by different cold agents. A contract discovered by the third implementer is three rewrites.",
+    "The server and client land before the agent, deliberately inverting the data flow. The agent is the one layer that cannot be executed on this machine (Linux, no MSFS, node-simconnect not installed and not installable to any useful effect), so it must be the last thing added and the only remaining unknown when it is. By then the endpoint it posts to is already proven with synthetic batches.",
+    "Phase 2 therefore ships something real without the sim: `curl` a synthetic traffic batch at a scratch server and watch markers appear, move and expire on the live map. That is also the fixture path that makes phase 3 falsifiable — the agent's batch assembly is proved by feeding its own output to the server that phase 2 built.",
+    "Escape hatches ship before the automation they protect: the server-side batch size cap, the malformed-batch rejection and the prune timer are all in phase 2, before phase 3 turns on an agent that can push dozens of objects a second. The agent-side kill switch ships in the same task as the gathering it disables, because an opt-out that arrives after the thing it opts out of is not an opt-out.",
+    "The risky logic is isolated into two pure modules with their own CLI inspectors — `src/traffic.ts` (keying, staleness, prune, caps) and `agent/traffic.js` (batch assembly, own-aircraft and ground filtering, dedupe) — so both are falsifiable with `node` alone, with no sim, no browser and no test framework. `agent/traffic.js` in particular must not import node-simconnect, or it stops being runnable on this machine.",
+    "Traffic state lives in a new `src/traffic.ts` store, not inside `src/flightManager.ts`. flightManager is the flight-logging state machine that writes flights.db; the strongest available guarantee of criterion 4 (zero regression) is that this run does not edit that file at all, and the plan gives no task permission to.",
+    "File ownership is assigned so no two tasks ever touch the same file. Server-side traffic types live in `src/traffic.ts` (owned by T-003); the client's mirror of them lives in `client/src/types.ts` (owned by T-004); `README.md` is owned only by T-006, the last task to land, which documents the finished feature end to end rather than three tasks editing one file.",
+    "T-004 depends on T-003 rather than running beside it, even though their paths are disjoint. The client's acceptance criteria are end-to-end (seed a scratch server, count markers in a real browser), and that evidence does not exist until the endpoint does. The parallelism would have bought wall-clock and cost the only honest check the client task has."
+  ],
+
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Freeze the traffic contract",
+      "ships": "A reviewed, frozen design.md: the traffic record's exact fields and units, the ingest endpoint and batch shape with its limits, the keying/staleness/prune rule, the client-visible response shape and its backward-compatibility guarantee, the marker distinction, and a worked example plus truth tables the implementers' inspectors transcribe. After this phase nobody downstream has to invent a field name.",
+      "tasks": ["T-001", "T-002"]
+    },
+    {
+      "phase": 2,
+      "name": "Server store, ingest and map rendering — provable with synthetic traffic",
+      "ships": "With no sim and no agent, the user can POST a synthetic traffic batch to the server and see one distinct marker per aircraft on the live map next to their own, watch them move on the next batch, and watch them vanish when a batch drops them or goes stale. Malformed and oversized batches are rejected instead of accepted. With no traffic posted at all, the app behaves exactly as it does today.",
+      "tasks": ["T-003", "T-004", "T-005"]
+    },
+    {
+      "phase": 3,
+      "name": "Agent-side gathering — real traffic from the sim",
+      "ships": "The Windows agent pulls in-range AI aircraft from SimConnect on its own request id and pushes them to the server, so the live map shows real traffic during a flight. An env-var opt-out turns it off without touching code, and the README says what it does, what it costs and that none of it is logged.",
+      "tasks": ["T-006", "T-007"]
+    }
+  ],
+
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the AI-traffic data contract end to end",
+      "goal": "Write design.md for this run and freeze every decision the three implementation tasks would otherwise each invent. Resolve the intake's open questions and nothing beyond them. The design is the single source of truth for field names, units, ids, limits and timings; it is quoted, not paraphrased, by every task after it.\n\nThe intake (.claude/runs/2026-09-08-ai-traffic-map/intake.md) has the verified facts about the current pipeline — do not re-derive them, but do open agent/agent.js, src/ingest.ts, src/server.ts's /api/status handler and client/src/components/LiveMap.tsx to fit the contract to the code as written.\n\nSTRUCTURE IS PART OF THE DELIVERABLE. .claude/tools/ctx.sh slices design.md by numbered heading, so downstream tasks can only be given cheap context if the headings are exactly `## <n>. Title` and `### <n>.<m> Title`, numbered as follows:\n  1. Overview and data flow\n  2. Traffic record — the wire shape: every field, its type, its unit, whether it is optional, and what the client does when it is absent\n  3. Agent-side gathering — data definition id and request id (both distinct from DEF_FLIGHT_DATA=0 / REQ_FLIGHT_DATA=0), the SimConnect variables and their order, the radius in metres and whether it is configurable, the re-request cadence (requestDataOnSimObjectType is a one-shot request, not a periodic subscription — confirm this against node-simconnect 4.1.1 and state the consequence), which SimObjectType is asked for, how the user's own aircraft is excluded from the result, whether ground/parked aircraft are filtered, and the env-var opt-out's exact name and semantics\n  4. Ingest contract — endpoint path, HTTP method, batch payload shape, the maximum number of objects in one batch and what the server does when that is exceeded, the exact 400 responses for each way a batch can be malformed, and whether x-ingest-token applies (it must, for consistency with /api/ingest/frame)\n  5. Server state and pruning — what the record is keyed by, when an object is considered stale, when it is pruned, what happens to an object present in one batch and absent from the next, the hard cap on retained objects, and the server-side kill switch\n  6. Client-visible API — whether traffic rides on GET /api/status or a separate endpoint, and either way the exact response shape, the poll cadence, and an explicit backwards-compatibility guarantee: what /api/status returns when no traffic has ever been posted, and why that is indistinguishable from today's response to an old client\n  7. Client rendering — how a traffic marker differs from the user's own (the ✈ divIcon is currently 24px with a drop-shadow and a heading-90 rotation; say exactly what changes), marker add/update/remove lifecycle, whether the map ever auto-pans or zooms to traffic (it must not), and what happens to markers when the poll fails or the agent disconnects\n  8. Worked example — one concrete batch JSON as the agent would post it, and the exact JSON the client-visible API returns for it. Implementers copy this verbatim into their curl commands\n  9. Truth tables — the rows src/inspect-traffic.ts and agent/inspect-traffic.js transcribe by hand: staleness/prune cases (fresh, aged past the window, dropped from a later batch, re-appearing after a gap, over the cap, empty batch) and agent batch-assembly cases (user's own object, duplicate object id within one sweep, missing/NaN coordinates, ground object if filtered, opt-out enabled)\n  10. Must-not-change — the invariants of the existing pipeline this run may not touch: src/flightManager.ts is not edited, POST /api/ingest/frame's contract is unchanged, the simObjectData handler still ignores every requestID except REQ_FLIGHT_DATA, the /api/status keys that exist today keep their names/types/absence semantics, and nothing traffic-related reaches flights.db\n\nBias the contract towards the smallest thing that satisfies the goal: lat/lon/altitude/heading is enough to draw a marker. Only add a field if section 7 actually renders it.",
+      "depends_on": [],
+      "allowed_paths": [".claude/runs/2026-09-08-ai-traffic-map/design.md"],
+      "acceptance_criteria": [
+        "design.md exists at .claude/runs/2026-09-08-ai-traffic-map/design.md with top-level headings `## 1.` through `## 10.` exactly as titled in the goal — verified by `.claude/tools/ctx.sh map 2026-09-08-ai-traffic-map`, whose DESIGN SECTIONS list must show all ten.",
+        "Every section is individually retrievable: `for n in 1 2 3 4 5 6 7 8 9 10; do .claude/tools/ctx.sh design 2026-09-08-ai-traffic-map $n | head -1; done` prints ten heading lines and no empty output.",
+        "Each of the six open questions in intake.md § 'Open questions for the Designer to resolve and freeze' is answered by a named section with a concrete value, not a range or a 'TBD' — the report maps each question to the section that closes it.",
+        "Section 8's worked example is valid JSON: extracting the two fenced JSON blocks and running each through `node -e 'JSON.parse(require(\"fs\").readFileSync(0,\"utf8\"))'` exits 0 for both.",
+        "Section 9's truth tables state an expected outcome for every listed case, with no case whose expected value is 'whatever the implementation does'.",
+        "Section 3 states, with its source, whether requestDataOnSimObjectType in node-simconnect 4.1.1 is one-shot or periodic, and the re-request strategy that follows from it.",
+        "Section 6 states the response when no traffic has ever been posted, and section 10 lists the existing /api/status keys that must not change — the two are consistent with the handler at src/server.ts:111-141.",
+        "No section proposes a new npm dependency, a schema change, a flights.db write, or an edit to src/flightManager.ts."
+      ],
+      "context": [
+        ".claude/runs/2026-09-08-ai-traffic-map/intake.md",
+        "agent/agent.js",
+        "src/ingest.ts",
+        "src/server.ts (the GET /api/status handler, lines 111-141)",
+        "src/types.ts (SimFrame, AppState)",
+        "client/src/components/LiveMap.tsx",
+        "client/src/types.ts (StatusFrame, Status)",
+        "client/src/hooks/useStatus.ts"
+      ],
+      "model_hint": "opus"
+    },
+
+    {
+      "id": "T-002",
+      "role": "reviewer",
+      "title": "Review the frozen contract for implementability and regression safety",
+      "goal": "Gate phase 1. Read design.md section by section with ctx.sh and judge one thing: can three cold agents — one in agent/, one in src/, one in client/src/ — implement their layer from this document alone and produce parts that fit together on the first try? Check the contract against the real code, not against itself: field names and units must match what node-simconnect can actually deliver per section 3, and the /api/status additions must not disturb the handler at src/server.ts:111-141 or the client's Status type. Reject anything that leaves an implementer a choice to make: an unnamed field, an unstated unit, a timing given as 'a few seconds', an error case with no status code. Also confirm the design honours the frozen decisions verbatim (`.claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map`) — especially no persistence, no new dependency, no server-side SimConnect, and no edit to src/flightManager.ts.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Every section 1-10 was read via `.claude/tools/ctx.sh design 2026-09-08-ai-traffic-map <n>` and the review names, per section, either the decision it freezes or the gap it leaves.",
+        "The review re-runs T-001's own checks rather than trusting them: the ctx.sh map heading list, the JSON.parse of both section 8 blocks, and the ten-section retrieval loop, with transcripts.",
+        "Cross-layer consistency is checked explicitly and reported field by field: the record in section 2 == the fields the agent gathers in section 3 == the fields the ingest validator must accept in section 4 == the fields the API returns in section 6 == the fields the marker consumes in section 7. Any field that appears in one and not the next is request_changes.",
+        "The backwards-compatibility claim in section 6 is checked against the actual current response: `curl -s http://localhost:3000/api/status` (read-only against the user's running server — no writes, no restart) and the key list it returns is compared with section 10's must-not-change list.",
+        "Verdict is approve or request_changes with a numbered list of the exact ambiguities to close; 'looks good' with caveats is not an approve."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh map 2026-09-08-ai-traffic-map",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 1 2 3 4 5 6 7 8 9 10",
+        "src/server.ts (lines 111-141)",
+        "client/src/types.ts",
+        "agent/agent.js"
+      ],
+      "model_hint": "opus"
+    },
+
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "Server: traffic store, ingest endpoint, API exposure, CLI inspector",
+      "goal": "Implement the server half of the frozen contract — sections 2, 4, 5, 6, 8, 9 and 10 of design.md. Four pieces, one task because they are one dependency chain in one directory:\n\n1. `src/traffic.ts` (new) — a pure in-memory traffic store: upsert a batch keyed as section 5 specifies, prune stale/absent objects, enforce the hard cap, and expose a read method returning exactly the shape section 6 defines. No express, no db, no timers owned by the module itself if a timer can be injected — keep it callable from a script.\n2. `src/ingest.ts` — the new traffic route on the existing ingest router, behind the same x-ingest-token check, validating the batch per section 4 and returning the exact status codes it names. The existing /frame and /event routes and the disconnect watchdog are untouched.\n3. `src/server.ts` — expose traffic to the client per section 6. Additive only: every key the handler at lines 111-141 returns today keeps its name, type and presence semantics.\n4. `src/inspect-traffic.ts` (new) — a ts-node CLI over src/traffic.ts printing the section 9 staleness/prune truth table with a PASS/FAIL per row. Transcribe the expected column BY HAND from design.md §9; do not compute it by calling the module or by restating its rule in a second function. Follow the style and the reasoning in src/inspect-manual-mark.ts's header comment.\n\nsrc/flightManager.ts is NOT in your allowed paths and must not be edited — traffic state is deliberately outside the flight-logging state machine. Nothing you write touches flights.db. No new npm dependency.\n\nRun everything under Node 20 (`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20`). Never touch the user's server on port 3000 beyond read-only curl, and never open the live flights.db for writing — scratch server on PORT=3100 against a copy, shut down when you finish.",
+      "depends_on": ["T-002"],
+      "allowed_paths": ["src/traffic.ts", "src/ingest.ts", "src/server.ts", "src/inspect-traffic.ts", "src/types.ts"],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 && npx tsc --noEmit` exits 0.",
+        "`npx ts-node src/inspect-traffic.ts` prints one row per case in design.md §9's staleness/prune table and every row reports PASS; the expected values in the file are visibly hand-transcribed from §9 (a comment names the section) and are not derived from src/traffic.ts.",
+        "End-to-end on a scratch server (`cp flights.db flights.db-wal flights.db-shm $SCRATCH/`, `PORT=3100 node dist/index.js` or ts-node against the copy): POSTing design.md §8's example batch to the frozen endpoint returns the frozen success status, and the immediately following GET of the frozen client-visible endpoint returns exactly the §8 example response — transcript of both commands and both bodies in the report.",
+        "Prune works, shown by three transcripts against the scratch server: (a) an object present in batch 1 and absent from batch 2 is gone from the next GET per §5's rule; (b) after posting nothing for longer than §5's staleness window, the GET returns zero traffic entries; (c) an object re-posted after that gap re-appears.",
+        "The cap holds: posting a batch larger than §4's maximum produces §4's exact status code and message, and the subsequent GET shows the store never exceeded the cap.",
+        "Every malformed-batch case §4 names (non-array body, missing required field, non-numeric coordinate, wrong content type, and — if a token is configured — a wrong x-ingest-token) returns the exact status code §4 assigns it, and the server process is still alive and answering afterwards: one transcript listing case -> status, then a final successful GET.",
+        "Regression, own-aircraft path: POST a valid /api/ingest/frame to the scratch server and show connected/flightState/frame change in GET /api/status exactly as before, with no traffic posted.",
+        "Regression, response shape: with no traffic ever posted, `diff <(curl -s http://localhost:3000/api/status | jq -S 'keys') <(curl -s http://localhost:3100/api/status | jq -S 'keys')` shows no removed or renamed key, and any added key is one design.md §6 names. The live server is read only — no restart, no rebuild over it.",
+        "`git diff --name-only` lists only files in this task's allowed_paths, and `git diff package.json client/package.json agent/package.json` is empty.",
+        "The report states the live flights.db md5 before and after the task, unchanged."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 2 4 5 6 8 9 10",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        "src/ingest.ts",
+        "src/server.ts (GET /api/status, lines 111-141)",
+        "src/types.ts",
+        "src/inspect-manual-mark.ts (inspector style and the 'expected is transcribed, not derived' rule)",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+
+    {
+      "id": "T-004",
+      "role": "dispatcher",
+      "title": "Client: render traffic markers on the live map",
+      "goal": "Implement the client half of the frozen contract — sections 2, 6, 7, 8 and 10 of design.md.\n\n1. `client/src/types.ts` — mirror the traffic record and the API response exactly as §2 and §6 define them. This is where the client-side shared type lives; it is the client's copy of the contract, not an inference from a sample response.\n2. `client/src/components/LiveMap.tsx` — LiveMapController currently holds a single markerRef and rebuilds the icon on every poll. Add a `Map<objectId, L.Marker>` alongside it: create markers for new object ids, move and re-rotate existing ones, and REMOVE (map.removeLayer + delete from the Map) any id absent from the latest response. Traffic markers look as §7 specifies and must not carry the user's zIndexOffset of 1000. The map must never auto-pan or auto-zoom to traffic — panTo stays bound to the user's own frame.\n3. `client/src/hooks/useStatus.ts` — only if §6 puts traffic on a separate endpoint, in which case add `client/src/hooks/useTraffic.ts` on the cadence §6 names. If traffic rides on /api/status, useStatus may need no change at all; leaving a file untouched is the right outcome then.\n\nWhen the response carries no traffic, or the poll fails, or the field is absent entirely, the map must behave exactly as it does today — this is the regression that matters most, because /api/status is on the critical path of the live view.\n\nVerify against a real browser. puppeteer is already a dependency of this repo (used by src/pdfExport.ts) — drive a headless page at your scratch server and count DOM markers. Keep the puppeteer script in the session scratchpad; it is not a repo file. Scratch server on PORT=3100 against a copy of flights.db. The user's server on port 3000 is read-only and must not be restarted.",
+      "depends_on": ["T-003"],
+      "allowed_paths": ["client/src/components/LiveMap.tsx", "client/src/types.ts", "client/src/hooks/useStatus.ts", "client/src/hooks/useTraffic.ts"],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 && npm run build:client` exits 0 with no TypeScript errors, and the tree is left in a shippable state.",
+        "With a scratch server on 3100 seeded with one valid /api/ingest/frame and design.md §8's traffic batch, a headless puppeteer script loads the app, waits for #live-map, and reports exactly 1 + N `.leaflet-marker-icon` elements for N traffic aircraft in the batch — transcript with the count printed.",
+        "Traffic markers are distinguishable from the user's: the same puppeteer run dumps the outerHTML of the own-aircraft marker and of one traffic marker, and the two differ in the way design.md §7 specifies (size/colour/class), with the traffic marker's rotation matching its heading per the existing heading-90 convention.",
+        "Update and removal, in one puppeteer transcript: post a second batch that moves one aircraft and omits another; after one poll interval the marker count is 1 + (N-1), the moved marker's DOM position/transform has changed, and the omitted aircraft's marker is absent from the DOM (removed, not merely hidden — a count of .leaflet-marker-icon proves it).",
+        "Staleness at the client: stop posting batches, wait past design.md §5's window, and the traffic markers are gone from the DOM while the user's own marker remains — same script, later assertion.",
+        "Regression: with the scratch server serving a status response containing no traffic (fresh server, only a /api/ingest/frame posted), the map renders exactly one marker, still pans to the user's aircraft, and still fetches and draws the track polyline for currentFlightId — puppeteer transcript showing the marker count of 1 and the presence of the polyline path element.",
+        "Regression under failure: with the scratch server stopped mid-session, the page does not throw (no uncaught exception in the puppeteer console listener) and the own-aircraft marker is still on the map.",
+        "`git diff --name-only` lists only files in this task's allowed_paths; `git diff client/package.json` is empty; no puppeteer script or fixture was left in the repo (`git status --porcelain` shows no untracked files outside .claude/runs/)."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 2 6 7 8 10",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        "client/src/components/LiveMap.tsx",
+        "client/src/types.ts (StatusFrame, Status)",
+        "client/src/hooks/useStatus.ts",
+        "src/pdfExport.ts (how puppeteer is launched in this repo)",
+        "client/src/components/MapReadySignal.tsx (how the app signals a map has finished rendering)",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Review the server + client traffic path against the frozen contract",
+      "goal": "Gate phase 2. Re-run the evidence for T-003 and T-004 yourself — do not accept either report's transcripts. Read the diff of every changed file and judge it against design.md §§2, 4, 5, 6, 7, 8, 10 and against the frozen decisions. The three things most likely to be wrong: (a) the store leaks — objects that stop arriving are never pruned, or the cap is enforced on the batch but not on the accumulated store; (b) the client removes markers from its Map but not from the Leaflet layer, so the DOM grows forever; (c) /api/status changed shape in a way an old client would notice. Check each directly.",
+      "depends_on": ["T-003", "T-004"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npx tsc --noEmit` and `npm run build:client` re-run under Node 20 by the reviewer, both exit 0, transcripts included.",
+        "`npx ts-node src/inspect-traffic.ts` re-run by the reviewer, all rows PASS, and the reviewer spot-checks at least two rows against design.md §9 by reading both, confirming the expected values were transcribed rather than derived from src/traffic.ts.",
+        "The reviewer stands up its own scratch server on a port of its choosing against its own copy of flights.db and reproduces, with transcripts: the §8 worked example round trip, one prune-by-absence case, one prune-by-staleness case, one over-cap rejection, and two malformed-batch rejections.",
+        "The reviewer runs its own puppeteer check of marker add / move / remove and of the no-traffic regression case, and reports the marker counts it observed rather than the ones T-004 reported.",
+        "Memory-safety judgement stated explicitly with the code lines that support it: what bounds the size of the traffic store, and what bounds the number of Leaflet layers on the map, over an hour of flight with churn.",
+        "`git diff --stat` is reviewed in full: only files in T-003's and T-004's allowed_paths changed, src/flightManager.ts is untouched, no package.json changed, and nothing in the diff writes to flights.db.",
+        "Live-system safety confirmed: the user's server on port 3000 is still running and answering `curl -s http://localhost:3000/api/status`, and the live flights.db md5 matches the value recorded at the start of phase 2.",
+        "Verdict is approve or request_changes with specific, addressable items; a third request_changes round on this phase is escalated to the user instead of a fourth attempt."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 2 4 5 6 7 8 9 10",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        ".claude/tools/ctx.sh task 2026-09-08-ai-traffic-map T-003 T-004",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+
+    {
+      "id": "T-006",
+      "role": "dispatcher",
+      "title": "Agent: gather AI traffic from SimConnect and push it, plus docs",
+      "goal": "Implement the agent half of the frozen contract — sections 2, 3, 4, 8, 9 and 10 of design.md — and document the finished feature.\n\n1. `agent/traffic.js` (new) — the pure part, and the only part that can be executed on this machine. Batch assembly from already-decoded per-object records: dedupe by object id within a sweep, drop the user's own aircraft and anything §3 filters out, drop records with missing or non-finite coordinates, apply the §4 batch cap, and read the §3 opt-out env var. It MUST NOT require('node-simconnect') and must run under plain `node` with nothing installed.\n2. `agent/agent.js` — the SimConnect wiring. A second data definition id and request id, both distinct from DEF_FLIGHT_DATA=0 / REQ_FLIGHT_DATA=0; the §3 variables in the §3 order; `requestDataOnSimObjectType(reqId, defId, radiusMeters, SimObjectType.<per §3>)` re-issued on §3's cadence; a `simObjectDataByType` handler that decodes each object into a record and hands it to agent/traffic.js; a flush that POSTs the assembled batch through the existing postJson helper to §4's endpoint. The existing `simObjectData` handler keeps its `if (requestID !== REQ_FLIGHT_DATA) return;` guard and is otherwise unchanged, and a failing traffic push must never interfere with the frame push or the reconnect logic.\n3. `agent/inspect-traffic.js` (new) — a plain-node CLI over agent/traffic.js printing §9's batch-assembly truth table with PASS/FAIL per row, expected values transcribed by hand from §9. It must run with zero dependencies installed.\n4. `agent/README.md` and `README.md` — document what traffic gathering does, the radius, the cadence, the env-var opt-out, that dozens of objects may be in range, and that none of it is persisted. Add the new files to the README's source-tree listing (around README.md:268). README.md is yours alone in this run; keep the edit to the sections this feature actually changes.\n\nHARD CONSTRAINT: node-simconnect is not installed on this machine and you must not install it, add it, or change agent/package.json's dependencies. You cannot run agent.js here and must not pretend otherwise — `node --check`, the pure module's inspector, and a contract round trip against a scratch server are the honest evidence available, and the report must say plainly which parts only the user can confirm on the Windows machine.",
+      "depends_on": ["T-005"],
+      "allowed_paths": ["agent/agent.js", "agent/traffic.js", "agent/inspect-traffic.js", "agent/README.md", "README.md"],
+      "acceptance_criteria": [
+        "`node --check agent/agent.js`, `node --check agent/traffic.js` and `node --check agent/inspect-traffic.js` all exit 0 under Node 20.",
+        "`node agent/inspect-traffic.js` runs with no node_modules present in agent/ and prints one row per case in design.md §9's batch-assembly table, all PASS; a comment in the file names §9 as the source of the expected column.",
+        "`grep -n 'require(' agent/traffic.js` shows no require of node-simconnect or any third-party module.",
+        "Opt-out works: `<opt-out env var per §3>=<disabling value> node agent/inspect-traffic.js` shows the module producing no batch / reporting disabled, transcript included.",
+        "Contract round trip without the sim: the batch the inspector emits for §8's scenario is piped into `curl -X POST` against a scratch server on PORT=3100 (copy of flights.db), returns §4's success status, and the following GET of the client-visible endpoint shows those aircraft — proving the agent's output and the server's validator agree. Transcript of both.",
+        "Isolation from the existing pipeline, shown by `git diff agent/agent.js`: the traffic path uses a data definition id and request id distinct from 0/0, the simObjectData handler still returns early for any other requestID, and no existing line of the frame path, the event handlers, or the reconnect logic is modified. The report quotes the guard line and the two new id constants.",
+        "The traffic request is re-issued on §3's cadence and a traffic push failure cannot break the frame push — the report names the lines that make each true (the timer, and the fact that postJson swallows its own errors).",
+        "`git diff agent/package.json` is empty and no node_modules directory was created under agent/ (`ls agent/`).",
+        "README.md and agent/README.md describe the feature accurately, including the opt-out env var name, the radius, and an explicit statement that traffic is not written to flights.db; the source-tree listing includes agent/traffic.js, agent/inspect-traffic.js, src/traffic.ts and src/inspect-traffic.ts.",
+        "`git diff --name-only` lists only files in this task's allowed_paths.",
+        "The report has a section titled 'Only verifiable on the Windows machine' listing every claim that depends on a live SimConnect connection."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 2 3 4 8 9 10",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        "agent/agent.js",
+        "agent/README.md",
+        "README.md (the SimConnect protocol note around line 223 and the source tree around line 268)",
+        "src/ingest.ts (the traffic route T-003 added — the endpoint you post to)",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+
+    {
+      "id": "T-007",
+      "role": "reviewer",
+      "title": "Review the agent changes and the run's end-to-end coherence",
+      "goal": "Gate phase 3 and the run. This review carries more weight than a normal one because the code under it cannot be executed here: the only place a mistake surfaces is the user's sim, mid-flight, on the same SimConnect handle that logs their real flights. Read agent/agent.js's full diff as a careful reader of the SimConnect API, not as a runner of commands. Judge specifically: could the traffic request, its handler, or its timer perturb the existing frame path in any way — shared ids, shared buffers, a handler that reads the wrong number of fields from the buffer and desyncs, an exception escaping into the SimConnect event loop, an interval that keeps the process alive after 'quit'/'close', or a reconnect that registers the traffic timer twice? Then check the whole run for coherence: agent record shape == ingest validator == store == API == marker, and the READMEs against what the code now does.",
+      "depends_on": ["T-006"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "The three `node --check`s and `node agent/inspect-traffic.js` are re-run by the reviewer with transcripts, and at least two truth-table rows are traced by hand from design.md §9 through agent/traffic.js's code.",
+        "The reviewer reproduces the agent-output -> server round trip itself on its own scratch server and its own copy of flights.db, and reports the status codes and response body it saw.",
+        "Buffer decode is checked field by field against design.md §3's variable order: the number and types of reads in the simObjectDataByType handler match the addToDataDefinition calls exactly, in order. A mismatch here is silent corruption, so the review states the count on both sides.",
+        "Reconnect safety is judged explicitly: after a 'quit'/'close' and a successful tryConnect, is exactly one traffic interval running? The review names the lines that decide it, and request_changes if the answer is 'more than one' or 'unclear'.",
+        "Cross-layer field trace done end to end for the full run and reported as a table: SimConnect variable -> agent record field -> POST body field -> store field -> API response field -> marker property. Any name or unit that changes without a §2 mapping is request_changes.",
+        "The four success criteria in intake.md are each answered with the evidence that satisfies them, and criterion 4 (zero regression) is backed by `git diff --stat` for the whole run showing src/flightManager.ts, src/db.ts and every migration path untouched, and no package.json changed anywhere.",
+        "README.md and agent/README.md are checked against the code as written — every env var, default, radius and cadence they state is verified against the source, and a wrong number in the README is request_changes, not a nit.",
+        "Live-system safety: the user's server on port 3000 still answers `curl -s http://localhost:3000/api/status`, the live flights.db md5 is unchanged for the whole run, and `git status --porcelain` shows no stray scratch files outside .claude/runs/.",
+        "The review closes with the residual risk list for the user's first flight with this on: what to watch for, and how to turn it off (the opt-out env var, quoted from the README)."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-08-ai-traffic-map 2 3 4 8 9 10",
+        ".claude/tools/ctx.sh frozen 2026-09-08-ai-traffic-map",
+        ".claude/tools/ctx.sh task 2026-09-08-ai-traffic-map T-006",
+        ".claude/runs/2026-09-08-ai-traffic-map/intake.md (success criteria)",
+        "agent/agent.js",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    }
+  ]
+}

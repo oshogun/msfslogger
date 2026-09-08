@@ -238,6 +238,21 @@ export interface ActiveTrip {
   name: string | null;
 }
 
+/**
+ * Mirrors src/types.ts TrafficObject byte-identically (neither file imports
+ * from the other, same as StatusFrame / SimFrame). design.md (run
+ * 2026-09-08-ai-traffic-map) §2.1. All six fields are always present on this
+ * wire — onGround is only optional on the agent's ingest wire, never here.
+ */
+export interface TrafficObject {
+  id: number;
+  lat: number;
+  lon: number;
+  altitudeFt: number;
+  headingDeg: number;
+  onGround: boolean;
+}
+
 export interface StatusFrame {
   lat: number;
   lon: number;
@@ -275,6 +290,8 @@ export interface Status {
   /** Raw MSFS Pause_EX1 bitmask: 1 full, 2 with-sound, 4 active, 8 sim. */
   pauseFlags: number;
   plannedLeg?: PlannedLegLiveStatus;
+  /** Present iff non-empty, mirroring plannedLeg. design.md §6.2, §6.4. */
+  traffic?: TrafficObject[];
 }
 
 export interface JourneyLeg {

@@ -25,6 +25,7 @@ If the server runs on the **same machine** as MSFS, you don't need the agent —
 | `PORT` | `3000` | Port the HTTP server listens on |
 | `INGEST_TOKEN` | *(none)* | Optional shared secret for the agent ingest endpoints (`/api/ingest/*`). If set, the agent must send it back as the `x-ingest-token` header. If unset, the endpoints are unauthenticated — fine on a trusted home LAN, not recommended otherwise. |
 | `EXPORT_BASE_URL` | `http://127.0.0.1:$PORT` | Where the [PDF export](#pdf-export) loads pages from. Only needs setting in dev, to point at the Vite server (`http://127.0.0.1:5173`) instead of the last built `client/dist`. |
+| `TRAFFIC_ENABLED` | enabled | Server-side kill switch for [AI traffic on the live map](#ai-traffic-on-the-live-map). Set to `0`, `false`, `off` or `no` to make `/api/ingest/traffic` discard every batch it receives (`204`, no validation, nothing stored). The agent has its own, independently-read copy of the same variable — see [`agent/README.md`](agent/README.md). |
 
 ---
 
@@ -231,6 +232,31 @@ The agent targets **MSFS 2020** (`Protocol.KittyHawk`) by default. For MSFS 2024
 
 ---
 
+## AI traffic on the live map
+
+While the agent is connected, it also sweeps SimConnect every **2 seconds**
+for other aircraft (AI or multiplayer traffic MSFS itself reports) within
+**40 km (~21.6 NM)** of the user, and pushes them to the server alongside the
+regular flight-data frames. The live map draws one small marker per aircraft —
+amber if it's airborne, grey if it's on the ground — next to the user's own,
+larger marker. Parked/gate-held aircraft are filtered out on the agent side;
+taxiing and rolling ones are shown. A busy terminal area can easily have
+dozens of aircraft in range at once; the server keeps at most the 100 closest
+to the user and drops the rest.
+
+**None of this is written to `flights.db`.** Traffic lives in memory on the
+server only, for as long as it keeps arriving — a set that goes 10 seconds
+without a fresh batch is cleared, and a server restart loses it entirely. It
+never appears in a flight's log, track, or PDF export.
+
+To turn it off, set `TRAFFIC_ENABLED=0` (also accepts `false`, `off`, `no`) on
+the **agent** (skips gathering entirely) and/or the **server** (drops any
+batch it receives) — see [`agent/README.md`](agent/README.md) for the full
+list of agent-side traffic environment variables, including the sweep radius
+override.
+
+---
+
 ## Backups
 
 ```bash
@@ -263,9 +289,13 @@ msfslogger/
 │   ├── plannedLegClose.ts # Gate + deviation for closing a hand-linked planned leg by hand
 │   ├── journey.ts        # Trip atlas + planned-route progress
 │   ├── pdfExport.ts      # Headless-Chromium PDF rendering + attachment merging
-│   └── airports.ts       # ICAO airport lookup
+│   ├── airports.ts       # ICAO airport lookup
+│   ├── trafficStore.ts   # In-memory AI-traffic store (never written to flights.db)
+│   └── inspect-traffic.ts # CLI: transcribed truth-table check of the traffic store/ingest path
 ├── agent/                # Runs on the Windows machine with MSFS — the supported setup
 │   ├── agent.js          # Connects to SimConnect locally, pushes data to the server
+│   ├── traffic.js        # Pure AI-traffic batch assembly, no SimConnect dependency
+│   ├── inspect-traffic.js # CLI: transcribed truth-table check of agent/traffic.js
 │   └── README.md
 ├── client/               # React frontend (Vite + TypeScript)
 │   └── src/

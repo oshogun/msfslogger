@@ -11,6 +11,7 @@ import { parseLnmpln, LnmplnParseError, chainOrderForBatch, type ParsedFlightPla
 import type { FlightManager } from './flightManager';
 import type { Flight, FlightEditPayload, TripEditPayload, PlannedLegWithChildren } from './types';
 import { createIngestRouter } from './ingest';
+import { TrafficStore } from './trafficStore';
 
 const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FLIGHT_PLAN_BYTES } });
@@ -106,7 +107,12 @@ export function createServer(flightManager: FlightManager): express.Express {
   app.use(express.json());
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
-  app.use('/api/ingest', createIngestRouter(flightManager));
+  // One instance per server (not a module-level singleton), so a scratch
+  // server starts empty. Never persisted, never written to flights.db.
+  // design.md (run 2026-09-08-ai-traffic-map) §5.1.
+  const trafficStore = new TrafficStore();
+
+  app.use('/api/ingest', createIngestRouter(flightManager, trafficStore));
 
   app.get('/api/status', (_req, res) => {
     const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
@@ -117,6 +123,10 @@ export function createServer(flightManager: FlightManager): express.Express {
     const plannedLeg = flightState === 'FLYING' && lastFrame
       ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
       : null;
+    // Present iff non-empty (design.md §6.2, §6.4) — never null, never [],
+    // absent instead, so an unchanged AppState serialises byte-identically to
+    // before this key existed. Same conditional-spread idiom as plannedLeg.
+    const traffic = trafficStore.read();
     res.json({
       connected,
       flightState,
@@ -137,6 +147,7 @@ export function createServer(flightManager: FlightManager): express.Express {
         onGround:         lastFrame.onGround,
       } : null,
       ...(plannedLeg ? { plannedLeg } : {}),
+      ...(traffic.length ? { traffic } : {}),
     });
   });
 
