@@ -10,6 +10,7 @@ RUN npm run build
 FROM node:20-alpine AS server-builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 COPY package*.json ./
 RUN npm ci
 COPY tsconfig.json ./
@@ -20,6 +21,9 @@ RUN npm run build:server
 FROM node:20-alpine AS production
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=server-builder /app/dist ./dist
