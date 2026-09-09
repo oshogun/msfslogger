@@ -14,7 +14,7 @@ This is the supported way to connect a remote server to MSFS. The alternative �
    ```powershell
    npm install
    ```
-4. Set the server URL (the LAN address of the machine running `msfslogger`) and start the agent. By default it targets MSFS 2020 — see [MSFS 2020 vs 2024](#msfs-2020-vs-2024) below to point it at MSFS 2024 or FSX instead:
+4. Set the server URL (the LAN address of the machine running `msfslogger`) and start the agent. By default it targets MSFS 2020 — see [MSFS 2020 vs 2024 vs FSX](#msfs-2020-vs-2024-vs-fsx) below to point it at MSFS 2024 or FSX instead:
    ```powershell
    $env:SERVER_URL = "http://192.168.0.30:3000"
    npm start
@@ -70,7 +70,7 @@ ever leave this machine; taxiing, lining-up and airborne aircraft are sent.
 Set `TRAFFIC_ENABLED=0` to turn gathering off entirely — no data definition is
 registered, no SimConnect request is made, and nothing is posted.
 
-## MSFS 2020 vs 2024
+## MSFS 2020 vs 2024 vs FSX
 
 The agent picks which SimConnect protocol revision to open with via a `--sim`/`-s` command-line flag. Accepted values (case-insensitive): `2020`, `2024`, `fsx`. Omitting the flag defaults to **MSFS 2020** (`Protocol.KittyHawk`), matching the main server's default.
 

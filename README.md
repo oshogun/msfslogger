@@ -1,6 +1,6 @@
 # msfslogger
 
-Automatic flight logger for Microsoft Flight Simulator 2020/2024 (and probably other sims that use SimConnect). Records GPS tracks, altitude profiles, and flight stats to a local SQLite database and displays them through a React web interface.
+Automatic flight logger for Microsoft Flight Simulator 2020/2024 and FSX. Records GPS tracks, altitude profiles, and flight stats to a local SQLite database and displays them through a React web interface.
 
 ## How it works
 
@@ -34,7 +34,7 @@ If the server runs on the **same machine** as MSFS, you don't need the agent —
 ### Prerequisites
 
 - Node.js 20+ (see note below — newer Node versions can break the build)
-- Microsoft Flight Simulator 2020 or 2024 running on Windows (the same machine or network-reachable)
+- Microsoft Flight Simulator 2020, 2024, or FSX running on Windows (the same machine or network-reachable)
 
 **Node version note:** `better-sqlite3` is a native addon and only ships prebuilt binaries for supported Node ABI versions. Very new/unreleased Node versions (e.g. Node 26) may have no prebuilt binary available, and compiling it from source can fail against a too-new V8 API. Use a current LTS release (Node 20 or 22) to avoid this. This repo pins `20` in `.nvmrc` — run `nvm use` (after `nvm install` if needed) before installing dependencies.
 
@@ -160,9 +160,11 @@ Some consequences worth knowing:
 
 ### Docker caveat
 
-**PDF export does not work in the provided Docker image as-is.** The production stage is `node:20-alpine`, and Puppeteer's bundled Chromium is a glibc build that cannot run on Alpine's musl — the image also ships no fonts, so text would render as boxes. Everything else in the app works normally; only the export endpoints fail.
-
-To make it work, either switch the production stage to a Debian base (`node:20-slim` + `apt-get install chromium fonts-liberation`), or install Alpine's own build and point Puppeteer at it:
+PDF export works in the provided Docker image. The production stage is
+`node:20-alpine`; Puppeteer's own bundled Chromium is a glibc build that
+cannot run on Alpine's musl, and the base image ships no fonts, so the
+Dockerfile skips Puppeteer's download, installs Alpine's native Chromium
+build instead, and points Puppeteer at it:
 
 ```dockerfile
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto
@@ -170,7 +172,8 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ```
 
-Add `init: true` to the compose service as well — Chromium spawns child processes that PID 1 would otherwise leave as zombies.
+`docker-compose.yml` also sets `init: true` — Chromium spawns child processes
+that PID 1 would otherwise leave as zombies.
 
 ---
 
@@ -219,9 +222,9 @@ without unlinking the flight.
 
 ---
 
-## MSFS 2020 vs 2024
+## MSFS 2020 vs 2024 vs FSX
 
-`node-simconnect` requires the client to declare which SimConnect protocol version it speaks, and MSFS 2020, MSFS 2024 and FSX differ. The agent picks this via a `--sim`/`-s` command-line flag, documented in [`agent/README.md`](agent/README.md#msfs-2020-vs-2024):
+`node-simconnect` requires the client to declare which SimConnect protocol version it speaks, and MSFS 2020, MSFS 2024 and FSX differ. The agent picks this via a `--sim`/`-s` command-line flag, documented in [`agent/README.md`](agent/README.md#msfs-2020-vs-2024-vs-fsx):
 
 | MSFS version | `--sim` value | `Protocol` value |
 |---|---|---|
@@ -259,6 +262,24 @@ the **agent** (skips gathering entirely) and/or the **server** (drops any
 batch it receives) — see [`agent/README.md`](agent/README.md) for the full
 list of agent-side traffic environment variables, including the sweep radius
 override.
+
+---
+
+## Combining flights
+
+A pause long enough for MSFS or the agent to drop out mid-flight gets logged
+as two separate flights instead of one. From the flight log's **Home** page,
+check exactly two flights and click **Combine Selected** to merge them into
+one: the two legs are ordered by start time regardless of which order you
+selected them in, their recorded durations are summed (so the gap between
+them is never counted as flown time), and a short synthetic track is
+interpolated between the last point of the first leg and the first point of
+the second so the map and altitude chart don't show a jump. Both original
+flights are deleted once the merge succeeds — this cannot be undone. A flight
+with no recorded points can't be selected for combining.
+
+The same checkboxes also drive **New Trip** and **Add to Trip**, for grouping
+selected flights into a trip.
 
 ---
 
