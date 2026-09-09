@@ -1,0 +1,378 @@
+{
+  "run_id": "2026-09-09-kml-export",
+  "goal": "Add KML export to msfslogger in three scopes: one flight, an arbitrary user-picked set of flights, and a whole trip. Server side, a new pure module src/kmlExport.ts turns flight rows plus their flight_points into a KML 2.2 document (no ./db import, no Puppeteer, no new dependency), and src/server.ts gains GET /api/flights/:id/export.kml, GET /api/trips/:id/export.kml and a new POST endpoint that takes a JSON list of flight ids — all registered above the SPA catch-all. Client side, an 'Export KML' button appears beside 'Export PDF' on FlightDetail and TripDetail, and an 'Export KML' action joins Home's multi-select toolbar, all driven through one generalised download helper in client/src/utils/api.ts. The generator is covered by Vitest and by a ts-node inspector; nothing about the existing PDF export, page layouts or Home selection behaviour changes beyond the added entry points.",
+  "frozen_decisions": [
+    "USER, verbatim: \"Add kml exports, for individual flights, a set of flights or the whole trip.\"",
+    "PROJECT STANDING (.claude/ENVIRONMENT.md, CLAUDE.md): never stop, restart, rebuild over or reconfigure the user's server on port 3000, and never write to the live flights.db. Every server-based check runs on another port against a copy of the database, and is shut down when the task ends.",
+    "PROJECT STANDING (.claude/ENVIRONMENT.md): every node/npm/npx/ts-node command is prefixed with `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20` — the default node on this machine is v26 and better-sqlite3 will not load under it.",
+    "PLANNER, to keep parallel tasks' file ownership disjoint (Designer may not overturn silently; if the design needs either of these, it must say so explicitly in design.md §9 so the Orchestrator can re-scope the affected task): src/types.ts is NOT edited by this run — every new type (generator inputs, options, request payload) lives in src/kmlExport.ts and is imported from there; src/db.ts is NOT edited by this run — the flight-set export composes existing getFlightById() per id rather than adding a bulk query.",
+    "PLANNER: no new runtime or dev dependency. fast-xml-parser ^5.11.1 is already a dependency (used by src/lnmpln.ts); its XMLValidator is the well-formedness oracle in tests and in the inspector. Packaging, Dockerfile and puppeteer setup are therefore untouched."
+  ],
+  "sequencing_rationale": [
+    "Design first, and gated by a reviewer, because the flight-set endpoint has no URL-shape precedent in this codebase (intake: closest is POST /api/flights/combine, which takes exactly two ids) and because the KML document structure — LineString vs gx:Track, one file with folders vs otherwise, what metadata rides in each Placemark, feet-to-metres and altitudeMode — is a contract that three later tasks all encode. Getting it wrong after implementation costs a rework of the module, the routes, the tests and the client.",
+    "The escape hatch ships before the automation it protects: phase 2 delivers URLs a user can paste or curl (and a ts-node inspector that needs no server at all) before phase 3 puts buttons on them. If the client wiring is delayed or reverted, the feature is still usable.",
+    "The risky part is isolated as a pure module with its own CLI inspector, per the project's established pattern (src/geo.ts, src/lnmpln.ts): rows in, KML string out, no ./db import. That makes the format falsifiable in Vitest and against real flights without a server, which matters because no KML viewer exists in this environment and 'opens in Google Earth' cannot be checked directly.",
+    "File ownership is assigned so that the only two tasks that can run at once in phase 2 — routes (src/server.ts) and unit tests (tests/kmlExport.test.ts) — cannot collide, and so that src/types.ts and src/db.ts, which both would otherwise be contested, are simply out of scope.",
+    "All four client surfaces are one task, not four: client/src/utils/api.ts must grow a POST-capable download helper (today downloadPdf is GET+query-params only, api.ts:20-50) and all three pages call it, so splitting them would put three dispatchers in the same file.",
+    "Every phase ends in a reviewer, and the first task of each phase depends on the previous phase's reviewer, so the server task and the client task can never be in flight at the same time as each other's dependencies.",
+    "Docs and the end-to-end build sweep are last, because the README must describe endpoints and buttons that already exist, and because a build sweep before the client lands proves nothing.",
+    "Scratch verification is fiddly in this repo and every task that needs it is given the recipe verbatim: src/db.ts:9 fixes the database path from process.cwd() at module load and src/server.ts:108,788 resolve client/dist the same way, so a scratch instance is a scratch *working directory* holding a DB copy with dist/client/node_modules symlinked in — there is no path or env-var override to pass. src/inspect-legmatch.ts:404-414 already documents the equivalent chdir-before-require trick for inspectors, and src/inspect-kml.ts follows it."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Freeze the KML and API contract",
+      "ships": "A reviewed design.md the user (and every later task) can point at: the exact three route shapes with status codes and headers, the exact KML document structure, the generator's function signatures, and the named edge-case behaviour. Nothing is implemented, but no downstream task has to guess.",
+      "tasks": [
+        "T-001",
+        "T-002"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Server-side export: generator, routes, tests",
+      "ships": "The user can download KML for any flight, any trip and any set of flights by pasting a URL or running curl, and can dump a KML for a real flight straight from the CLI with the inspector — with the generator covered by Vitest.",
+      "tasks": [
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Client entry points",
+      "ships": "An 'Export KML' button beside 'Export PDF' on the flight page and the trip page, and an 'Export KML' action on the Home multi-select toolbar that exports exactly the flights currently ticked.",
+      "tasks": [
+        "T-007",
+        "T-008"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Document and verify end to end",
+      "ships": "README describes the feature accurately, and a from-clean build plus a scratch-server end-to-end pass proves the shipped tree works with no packaging change.",
+      "tasks": [
+        "T-009",
+        "T-010",
+        "T-011"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Design and freeze the KML export contract",
+      "goal": "Write .claude/runs/2026-09-09-kml-export/design.md freezing every decision the implementation tasks would otherwise have to invent. Use exactly this section numbering, because later tasks cite it by number: §1 Goal and non-goals. §2 Route contracts — §2.1 GET /api/flights/:id/export.kml, §2.2 GET /api/trips/:id/export.kml, §2.3 the flight-set endpoint (method, path, request body schema, id-count cap, duplicate/unknown/out-of-order id handling, and why this shape over the alternatives — the intake's suggested direction is POST with a JSON body of ids following POST /api/flights/combine at src/server.ts:163-201, but you own the call), §2.4 status codes and error body shape for every failure mode. §3 Response headers and filename conventions — Content-Type, Content-Length, Content-Disposition, the filename pattern for each of the three scopes (mirror flightExportFilename()/slugify()/dateStamp() at src/server.ts:53-65; note that the set export has no natural name), and the header-injection sanitising rule sendPdf() already applies (src/server.ts:67-73). §4 KML document structure — §4.1 LineString vs gx:Track (and if gx:Track, the gx namespace declaration and <when> element format), §4.2 how the three scopes map onto Document/Folder/Placemark, §4.3 what metadata goes in each Placemark name and description and where it comes from (Flight fields: departure_icao, arrival_icao, aircraft, start_time, end_time, duration_sec, distance_nm, max_altitude_ft — see src/types.ts:27-53), §4.4 styles (line colour/width; whether flights in a set/trip are colour-cycled), §4.5 coordinate encoding — lon,lat,alt order, altitude_ft to metres conversion, decimal precision, altitudeMode, and whether tessellate/extrude are set, §4.6 XML escaping rule for every interpolated string, §4.7 whether long tracks are decimated and at what threshold (flights in this DB can carry thousands of flight_points rows). §5 Module API — the exported function signatures of src/kmlExport.ts and the structural input types it declares (it must compile without importing ./db; FlightWithPoints/FlightPoint from src/types.ts are type-only and may be imported, or mirrored structurally — state which), plus the src/inspect-kml.ts CLI argument surface. §6 Edge cases — flight with zero points, flight with one point, null departure_icao/arrival_icao/aircraft (combined flights have no ICAOs), null end_time (in-progress flight), unknown or non-numeric ids, empty id array, id list over the cap. §7 Client contract — the generalised signature of the download helper in client/src/utils/api.ts (it must keep every existing downloadPdf call site compiling, or state the exact call-site edits), the button copy and disabled/pending states on FlightDetail, TripDetail and the Home toolbar, and what the Home toolbar does with 0 selected. §8 Verification plan — the concrete commands each later task runs. §9 Open questions and anything this design needed from src/types.ts or src/db.ts that the planner's frozen constraint forbids. Read the intake first; it already surveyed the codebase, so do not re-survey — only open files it did not cover.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-09-kml-export/design.md"
+      ],
+      "acceptance_criteria": [
+        "`.claude/tools/ctx.sh map 2026-09-09-kml-export` lists design headings §1 through §9 with the sub-sections named in the goal; no section is a placeholder or TODO.",
+        "`.claude/tools/ctx.sh design 2026-09-09-kml-export 2.3` states the method, full path, and a JSON request-body schema with a concrete example, plus the id-count cap as a number and the behaviour for duplicate, unknown and non-numeric ids.",
+        "`.claude/tools/ctx.sh design 2026-09-09-kml-export 4` contains a complete, literal example KML document for the multi-flight case, short enough to read, with real coordinate values — an implementer can copy its shape without further decisions.",
+        "`.claude/tools/ctx.sh design 2026-09-09-kml-export 5` gives TypeScript function signatures that compile as written against src/types.ts, and states explicitly that src/kmlExport.ts imports nothing from ./db.",
+        "§8 names, verbatim, the commands used in the acceptance criteria of T-003, T-004, T-005, T-007 and T-010, including the Node 20 nvm prefix and the scratch-port/scratch-DB rule.",
+        "The design records a decision (not a deferral) for every §4 sub-section, and §9 lists only genuinely user-facing or scope questions — anything the designer could decide is decided.",
+        "No file outside .claude/runs/2026-09-09-kml-export/design.md is modified: `git status --porcelain` shows only that file (plus this run's existing artifacts)."
+      ],
+      "context": [
+        ".claude/runs/2026-09-09-kml-export/intake.md",
+        "src/server.ts:53-73 (slugify/dateStamp/flightExportFilename/sendPdf), src/server.ts:163-201 (POST /api/flights/combine), src/server.ts:742-789 (PDF routes and the load-bearing catch-all ordering)",
+        "src/types.ts:27-53 (Flight), :55-95 (Trip, TripWithFlights, FlightPoint, FlightWithPoints)",
+        "src/db.ts:394-399 (getFlightById), :450-479 (getTripById)",
+        "client/src/utils/api.ts:20-50 (downloadPdf)",
+        "client/src/pages/Home.tsx:196-221 (multi-select toolbar)",
+        "src/lnmpln.ts (existing fast-xml-parser usage and pure-module shape)",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-002",
+      "role": "reviewer",
+      "title": "Review the frozen contract before any code is written",
+      "goal": "Check design.md against the intake and against the actual code it claims to mirror. This is the only cheap moment to catch a wrong contract: three downstream tasks encode it. Verify the route shapes do not collide with existing routes, the filename and header conventions match what sendPdf/flightExportFilename actually do, the module signatures compile against the real types in src/types.ts, and that §4's example KML is internally consistent (namespace declared for every prefix used, coordinate order and units stated and matching the example, escaping rule covers every interpolated field). Approve or request_changes with specific section numbers.",
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Every route path in §2 is checked against `grep -n \"app\\.\\(get\\|post\\|put\\|delete\\)(\" src/server.ts` and reported as non-colliding, including the SPA catch-all at src/server.ts:786-789.",
+        "The §4 example KML is pasted into a file under the session scratchpad and validated: `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; node -e \"const {XMLValidator}=require('fast-xml-parser');console.log(JSON.stringify(XMLValidator.validate(require('fs').readFileSync(process.argv[1],'utf8'))))\" <file>` returns true; the report quotes the output.",
+        "The §5 signatures are checked to compile: a scratch .ts file declaring them against the real src/types.ts passes `npx tsc --noEmit --strict` under Node 20, or the mismatch is named with the exact type error.",
+        "The report states, per frozen constraint, whether the design requires any edit to src/types.ts or src/db.ts; if it does, that is a request_changes or an explicit escalation to the Orchestrator, not a silent pass.",
+        "Verdict is approve or request_changes with a numbered list keyed to design sections; no repo file is modified (`git status --porcelain` unchanged from the start of the task)."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2 3 4 5 6 7 8 9",
+        ".claude/tools/ctx.sh frozen 2026-09-09-kml-export",
+        ".claude/runs/2026-09-09-kml-export/intake.md",
+        "src/server.ts, src/types.ts"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "Pure KML generator plus CLI inspector",
+      "goal": "Create src/kmlExport.ts implementing the generator exactly as frozen in design §4, §5 and §6 — rows in, KML string out, no import of ./db, no I/O, no Express. It owns every new type this run introduces (generator inputs, options, and the flight-set request payload type that src/server.ts will import), per the planner's frozen constraint that src/types.ts is not edited. Then create src/inspect-kml.ts, a ts-node CLI in the style of the existing src/inspect-*.ts tools, that selects the database to read the way src/inspect-legmatch.ts:404-414 already does — src/db.ts:9 freezes DB_PATH from process.cwd() at module load, so a --db flag alone does nothing; chdir to the scratch directory before requiring ./db (that file's comment explains why), pulls a flight / a trip / a comma-separated id list, and prints the KML to stdout — so the format is falsifiable against real data with no server running. The inspector may import ./db; the generator may not.",
+      "depends_on": [
+        "T-002"
+      ],
+      "allowed_paths": [
+        "src/kmlExport.ts",
+        "src/inspect-kml.ts"
+      ],
+      "acceptance_criteria": [
+        "`grep -nE \"from '\\./(db|server|index)'\" src/kmlExport.ts` prints nothing — the generator has no runtime dependency on the database or the server (a `import type` from './types' is permitted only if design §5 says so).",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; npx tsc --noEmit` exits 0; the report quotes the command and its exit status.",
+        "Working on a scratch copy only: `cp flights.db flights.db-wal flights.db-shm \"$SCRATCH/\" 2>/dev/null` is run before any inspector call, every inspector invocation points at \"$SCRATCH/flights.db\", and the report states `md5sum flights.db` before and after, identical.",
+        "The inspector never reads the live flights.db: `grep -n \"cwd\\|chdir\\|DB_PATH\\|--db\" src/inspect-kml.ts` shows the scratch-selection mechanism, and running it with no --db (or equivalent) either refuses or is demonstrated to open only the path given — the report shows which.",
+        "`npx ts-node src/inspect-kml.ts --db \"$SCRATCH/app/flights.db\" --flight <a real id with points>` prints a KML document whose first element declares the KML 2.2 namespace, and whose coordinate count equals that flight's row count from `select count(*) from flight_points where flight_id=?` on the scratch DB — the report shows both numbers.",
+        "`npx ts-node src/inspect-kml.ts --db \"$SCRATCH/app/flights.db\" --trip <a real trip id>` and `--flights <id>,<id>,<id>` each print one KML document containing one labelled container per flight, in the order design §4.2 specifies; the report shows the container names.",
+        "Each of the three inspector outputs, piped to `node -e \"const {XMLValidator}=require('fast-xml-parser');const s=require('fs').readFileSync(0,'utf8');console.log(JSON.stringify(XMLValidator.validate(s)))\"`, prints `true`.",
+        "Edge cases from design §6 are exercised through the inspector or a scratch driver script and reported: zero-point flight, one-point flight, and a flight with null departure_icao/arrival_icao (a combined flight) each produce valid XML with no literal 'null' or 'undefined' text in the output — show the grep.",
+        "A flight whose aircraft or notes contains any of & < > \" ' is exported (or such a value is injected via a scratch driver) and the output still validates, with the character escaped as design §4.6 requires.",
+        "`npx ts-node src/inspect-kml.ts` with no arguments, and with an unknown id, each print a one-line usage or reason and exit non-zero — no stack trace; the report shows the output and `echo $?`.",
+        "No new dependency: `git diff --stat package.json package-lock.json` is empty."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 4 5 6",
+        ".claude/tools/ctx.sh frozen 2026-09-09-kml-export",
+        "src/types.ts:27-53 and :80-95 (Flight, FlightPoint, FlightWithPoints)",
+        "src/geo.ts, src/lnmpln.ts (pure-module conventions; existing fast-xml-parser usage)",
+        "src/inspect-lnmpln.ts, src/inspect-legmatch.ts (inspector CLI conventions)",
+        "src/db.ts:394-399 (getFlightById), :450-479 (getTripById) — for the inspector only",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-004",
+      "role": "dispatcher",
+      "title": "Express routes for the three KML export scopes",
+      "goal": "Add the three routes to src/server.ts exactly as frozen in design §2 and §3: GET /api/flights/:id/export.kml, GET /api/trips/:id/export.kml, and the flight-set endpoint from §2.3. Register them in the existing export block above the SPA catch-all (src/server.ts:742-789) and extend the 'Registered before the SPA catch-all so they aren't swallowed by it' comment to cover them — the ordering is load-bearing. Reuse the existing slugify/dateStamp/flightExportFilename helpers (src/server.ts:53-65) and add a sendKml() alongside sendPdf() applying the same Content-Disposition sanitising (src/server.ts:67-73). Data comes from the existing getFlightById() and getTripById(); the set endpoint composes getFlightById() per id — do not edit src/db.ts or src/types.ts. All KML string building goes through src/kmlExport.ts; no XML is assembled in server.ts.",
+      "depends_on": [
+        "T-003"
+      ],
+      "allowed_paths": [
+        "src/server.ts"
+      ],
+      "acceptance_criteria": [
+        "`grep -n \"export.kml\\|app.get('\\*'\" src/server.ts` shows all three KML routes at line numbers strictly less than the catch-all's, and the neighbouring comment names the ordering requirement.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; npx tsc --noEmit && npm run build:server` exits 0.",
+        "A scratch server is started with the recipe in this task's context (scratch working directory + DB copy + symlinked dist/client/node_modules, `PORT=3100 node dist/index.js`) and shut down at the end of the task; the report shows the start command, the shutdown, and that nothing was run against port 3000 or the repo's flights.db.",
+        "`curl -si localhost:3100/api/flights/<id>/export.kml` returns 200 with the Content-Type, Content-Length and Content-Disposition filename design §3 specifies; the report quotes the header block verbatim.",
+        "`curl -si localhost:3100/api/trips/<id>/export.kml` returns 200 and its body contains one labelled container per flight in the trip, count equal to that trip's flight count; the report shows both numbers.",
+        "The set endpoint is called with the exact request shape from design §2.3 (report the full curl command) and returns 200 with a body containing one container per requested id.",
+        "Every response body above, piped through `node -e \"const {XMLValidator}=require('fast-xml-parser');console.log(JSON.stringify(XMLValidator.validate(require('fs').readFileSync(0,'utf8'))))\"`, prints `true`.",
+        "Failure modes each return the status and JSON body from design §2.4, one line, no stack trace, and the report shows each response: non-numeric id, unknown flight id, unknown trip id, missing/empty id array, non-array body, an id list over the §2.3 cap, and (for the set endpoint) a list mixing valid and unknown ids.",
+        "Regression: on the same scratch server, `curl -s -o /dev/null -w '%{http_code}\\n' localhost:3100/api/flights/<id>/export.pdf localhost:3100/api/trips/<id>/export.pdf` still returns 200 for both, and `curl -s localhost:3100/flights/<id> | head -c 200` still returns the SPA index.html — the catch-all is intact.",
+        "Live environment untouched: `md5sum flights.db` identical before and after, and `curl -s -o /dev/null -w '%{http_code}' localhost:3000/api/status` still 200 with the same PID serving it.",
+        "`git diff --name-only` lists src/server.ts and nothing else."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2 3 5 6",
+        ".claude/tools/ctx.sh frozen 2026-09-09-kml-export",
+        "src/server.ts:53-73, :163-201, :742-789",
+        "src/kmlExport.ts (as delivered by T-003)",
+        "src/db.ts:394-399, :450-479",
+        ".claude/ENVIRONMENT.md",
+        "Scratch server recipe (there is NO DB_PATH env var — src/db.ts:9 computes the path from process.cwd() at module load, and src/server.ts:108,788 resolve client/dist from cwd too, so the server must be RUN FROM a scratch directory, not pointed at one): `S=\"$SCRATCH/app\"; mkdir -p \"$S\"; cp flights.db flights.db-wal flights.db-shm \"$S/\" 2>/dev/null; for x in dist client node_modules flight_plans airports.json; do ln -sfn \"$PWD/$x\" \"$S/$x\"; done; (cd \"$S\" && PORT=3100 node dist/index.js &)` — and kill it when the task ends. Note dist/ and client/dist/ are symlinks back into the repo (read-only use), while flights.db in $S is a copy."
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-005",
+      "role": "dispatcher",
+      "title": "Vitest unit tests for src/kmlExport.ts",
+      "goal": "Add tests/kmlExport.test.ts covering the generator against the frozen format in design §4 and the edge cases in §6, following the conventions of the existing suite (tests/lnmpln.test.ts, tests/legMatcher.test.ts, tests/helpers/index.ts): hermetic, no network, no flights.db, no server, fixtures built in-memory. Assert on the KML structure by parsing the output with fast-xml-parser rather than on whole-string equality, and use XMLValidator for well-formedness. Do not edit src/kmlExport.ts — if a test reveals a generator bug, report it and let the Orchestrator route a fix back to T-003's owner.",
+      "depends_on": [
+        "T-003"
+      ],
+      "allowed_paths": [
+        "tests/kmlExport.test.ts"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; npm test` exits 0; the report quotes the summary line and the number of tests added.",
+        "`npm run test:types` exits 0.",
+        "Cases present, one test each, named so the intent is readable: single flight happy path; multi-flight set with per-flight containers sorted by start_time then id — NOT the order ids were requested in, per design §4.2/§2.3 (pass ids out of start_time order in the fixture and assert the output re-sorts them); whole trip in start_time order; zero-point flight; one-point flight; null departure_icao/arrival_icao/aircraft/end_time; a name or note containing & < > \" ' (escaping, per §4.6); coordinate encoding — lon,lat,altitude order with the feet-to-metres conversion and precision from §4.5 asserted on an exact known value.",
+        "Every generated document in the suite is asserted well-formed via `XMLValidator.validate(...) === true` from fast-xml-parser.",
+        "Hermetic: `grep -nE \"from '\\.\\./src/db'|require\\('better-sqlite3'\\)|fetch\\(|readFileSync|http\" tests/kmlExport.test.ts` prints nothing beyond an allowed fast-xml-parser import.",
+        "Mutation check proving the tests bite: temporarily swap the lat/lon order in src/kmlExport.ts, run `npm test`, report the failing test names, then `git checkout -- src/kmlExport.ts` and re-run to green — the report shows both runs and the final `git status --porcelain` listing only tests/kmlExport.test.ts.",
+        "`git diff --name-only` lists tests/kmlExport.test.ts and nothing else."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 4 5 6 8",
+        "src/kmlExport.ts (as delivered by T-003)",
+        "tests/lnmpln.test.ts, tests/legMatcher.test.ts, tests/helpers/index.ts, tests/setup.ts",
+        ".claude/runs/2026-09-09-vitest-unit-tests/design.md via `.claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 1`",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-006",
+      "role": "reviewer",
+      "title": "Review the server-side export",
+      "goal": "Re-run the evidence for T-003, T-004 and T-005 rather than trusting the reports: build, tests, a scratch server on port 3100 against a copy of the DB, and the inspector. Check the output against design §2, §3, §4 and §6 clause by clause, and specifically check the three things most likely to be quietly wrong: route registration order relative to the SPA catch-all, XML escaping of every interpolated field, and Content-Disposition sanitising on the filename. Confirm src/types.ts, src/db.ts, package.json and package-lock.json are untouched.",
+      "depends_on": [
+        "T-004",
+        "T-005"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npm test`, `npm run test:types`, `npx tsc --noEmit` and `npm run build:server` re-run under Node 20 by the reviewer, with exit statuses quoted.",
+        "A scratch server on port 3100 against a copy of the DB is started by the reviewer, all three endpoints and at least three failure modes are curled, and every body is passed through XMLValidator; the server is shut down and the report says so.",
+        "`git diff --name-only` for the phase lists exactly src/kmlExport.ts, src/inspect-kml.ts, src/server.ts, tests/kmlExport.test.ts.",
+        "`md5sum flights.db` before and after the review is identical, and port 3000 is confirmed still serving the same PID.",
+        "Verdict is approve or request_changes with the failing acceptance criterion quoted and the command that failed."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh phase 2026-09-09-kml-export 2",
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2 3 4 6",
+        ".claude/ENVIRONMENT.md",
+        "Scratch server recipe (there is NO DB_PATH env var — src/db.ts:9 computes the path from process.cwd() at module load, and src/server.ts:108,788 resolve client/dist from cwd too, so the server must be RUN FROM a scratch directory, not pointed at one): `S=\"$SCRATCH/app\"; mkdir -p \"$S\"; cp flights.db flights.db-wal flights.db-shm \"$S/\" 2>/dev/null; for x in dist client node_modules flight_plans airports.json; do ln -sfn \"$PWD/$x\" \"$S/$x\"; done; (cd \"$S\" && PORT=3100 node dist/index.js &)` — and kill it when the task ends. Note dist/ and client/dist/ are symlinks back into the repo (read-only use), while flights.db in $S is a copy."
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-007",
+      "role": "dispatcher",
+      "title": "Export KML buttons on flight, trip and the Home multi-select toolbar",
+      "goal": "Wire the three client entry points per design §7. In client/src/utils/api.ts, generalise the existing downloadPdf() (api.ts:20-50) into a download helper that can also issue the flight-set request shape frozen in §2.3 (POST with a JSON body, if that is what was frozen) while keeping the fetch → Blob → synthetic <a download> flow and the Content-Disposition filename extraction; every existing downloadPdf call site must keep working — either by keeping downloadPdf as a thin wrapper or by updating its three call sites within this task's allowed paths. Add an 'Export KML' button beside the existing 'Export PDF' button in client/src/pages/FlightDetail.tsx (:211-219, :437-438) and client/src/pages/TripDetail.tsx (:125-133, :734-750), with the same pending/error state pattern the PDF button already uses. Add an 'Export KML' action to the multi-select toolbar in client/src/pages/Home.tsx (:196-221) that exports exactly the flights in selectedIds. Change nothing else about these pages: no layout reshuffles, no change to selection behaviour, no touching the include-flight-plans checkboxes (they are PDF-only).",
+      "depends_on": [
+        "T-006"
+      ],
+      "allowed_paths": [
+        "client/src/utils/api.ts",
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/Home.tsx"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; npm run build` exits 0 (this runs the client's tsc + vite build and the server tsc); the report quotes the exit status.",
+        "`grep -rn \"Export KML\" client/src/pages/` shows one occurrence in each of FlightDetail.tsx, TripDetail.tsx and Home.tsx.",
+        "`grep -rl \"Export KML\" client/dist/assets/*.js` matches at least one built bundle — the string reached the shipped output, not just the source.",
+        "No duplicated download plumbing: `grep -n \"createObjectURL\" client/src -r` shows it only in client/src/utils/api.ts.",
+        "The request the Home toolbar builds is replayed by hand with curl against a scratch server started per the recipe in this task's context, using the identical method, path, headers and body, and returns 200 with a KML body that XMLValidator accepts; the report shows the curl command next to the source lines it mirrors.",
+        "Empty-selection behaviour matches design §7 and is shown in the source: the report quotes the lines that disable or hide the action when selectedIds.size is 0.",
+        "Existing PDF export is untouched in behaviour: `git diff client/src/pages/FlightDetail.tsx client/src/pages/TripDetail.tsx` shows no change to handleExportPdf's URL, the include-plans checkboxes, or the PDF button's copy — only additions beside them.",
+        "`git diff --name-only` lists only the four allowed paths (plus client/dist build output if it is tracked).",
+        "Live environment untouched: scratch server shut down, `md5sum flights.db` unchanged, port 3000 untouched."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2.3 3 7",
+        "client/src/utils/api.ts:20-50",
+        "client/src/pages/FlightDetail.tsx:211-219,437-438",
+        "client/src/pages/TripDetail.tsx:125-133,734-750",
+        "client/src/pages/Home.tsx:16,110-133,196-221",
+        ".claude/ENVIRONMENT.md",
+        "Scratch server recipe (there is NO DB_PATH env var — src/db.ts:9 computes the path from process.cwd() at module load, and src/server.ts:108,788 resolve client/dist from cwd too, so the server must be RUN FROM a scratch directory, not pointed at one): `S=\"$SCRATCH/app\"; mkdir -p \"$S\"; cp flights.db flights.db-wal flights.db-shm \"$S/\" 2>/dev/null; for x in dist client node_modules flight_plans airports.json; do ln -sfn \"$PWD/$x\" \"$S/$x\"; done; (cd \"$S\" && PORT=3100 node dist/index.js &)` — and kill it when the task ends. Note dist/ and client/dist/ are symlinks back into the repo (read-only use), while flights.db in $S is a copy."
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-008",
+      "role": "reviewer",
+      "title": "Review the client wiring",
+      "goal": "Re-run the build and the evidence for T-007. Confirm the three entry points exist and reach the built bundle, that the shared helper did not break any downloadPdf call site, that the Home action sends exactly the ids in selectedIds and no more, and that nothing outside the four allowed paths changed. Read the diff for accidental layout or selection-behaviour changes on the three pages.",
+      "depends_on": [
+        "T-007"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npm run build` and `npm test` re-run by the reviewer under Node 20 with exit statuses quoted.",
+        "The reviewer independently replays the Home toolbar's request against a scratch server on port 3100 and reports the status code and XMLValidator result.",
+        "`git diff --stat` for the phase is quoted and limited to the four allowed client paths; any hunk that is not an addition beside an existing control is called out.",
+        "Verdict is approve or request_changes with the specific file, line and failing criterion."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh task 2026-09-09-kml-export T-007",
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 7",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-009",
+      "role": "dispatcher",
+      "title": "Document KML export in the README",
+      "goal": "Update README.md so it describes KML export as accurately as it describes PDF export: the three scopes, the three endpoints with their exact paths and the set endpoint's request shape, the three UI entry points, and what a viewer gets (track geometry plus which metadata). Place it beside the existing PDF export documentation and match the README's existing voice and section depth. Do not restructure or rewrite unrelated sections, and do not change the PDF export documentation.",
+      "depends_on": [
+        "T-008"
+      ],
+      "allowed_paths": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "`grep -n -i \"kml\" README.md` shows the new documentation and nothing stale.",
+        "Every endpoint path documented is verified to exist by `grep -n \"export.kml\" src/server.ts`; the report puts the README lines and the server lines side by side.",
+        "The documented set-endpoint request body matches design §2.3 verbatim in method, path and field names.",
+        "`git diff README.md` contains no deletion outside the new section's insertion point — the PDF export documentation is byte-identical.",
+        "`git diff --name-only` lists README.md and nothing else."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2 3 7",
+        "README.md (existing PDF export section)",
+        "src/server.ts (the shipped route definitions)"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-010",
+      "role": "devops",
+      "title": "Clean build and end-to-end scratch verification",
+      "goal": "Prove the merged tree is shippable and that nothing about packaging changed. Build from clean, run the full test suite and both typechecks, then run the built server on a scratch port against a copy of the database and exercise every export path — the three KML endpoints, both PDF endpoints, and an SPA route — confirming the KML bodies are well-formed and the PDF path is unregressed. Confirm no dependency, Dockerfile or build-script change was needed. Edit no source file; if something fails, report it and stop rather than fixing it here.",
+      "depends_on": [
+        "T-008"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "From clean (`rm -rf dist client/dist` first): `export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; npm run build` exits 0 and the tree is left in a shippable state (the user's next restart of port 3000 must pick up a working dist/) — the report says so explicitly.",
+        "`npm test` and `npm run test:types` exit 0; the report quotes both summary lines.",
+        "A scratch server is started with the recipe in this task's context — a scratch working directory holding a copy made with `cp flights.db flights.db-wal flights.db-shm \"$S/\"`, dist/client/node_modules symlinked in, `PORT=3100 node dist/index.js` — and shut down at the end; the report shows the start, the shutdown, and that port 3000 and the repo's flights.db were never written to.",
+        "All three KML endpoints return 200 with correct headers and bodies that XMLValidator accepts; the report gives each response's byte size and container count.",
+        "Both PDF endpoints still return 200 with Content-Type application/pdf, and an SPA route still returns index.html — the catch-all and Puppeteer path are unregressed.",
+        "`git diff --stat package.json package-lock.json Dockerfile* client/package.json` is empty — no new dependency and no packaging change; the report states this as the reason no image or deploy change is needed.",
+        "`md5sum flights.db` identical before and after; the live server's PID on port 3000 unchanged.",
+        "`git status --porcelain` shows no source file modified by this task."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 2 3 8",
+        ".claude/ENVIRONMENT.md",
+        "package.json scripts (build:client, build:server, build, test, test:types)",
+        "Scratch server recipe (there is NO DB_PATH env var — src/db.ts:9 computes the path from process.cwd() at module load, and src/server.ts:108,788 resolve client/dist from cwd too, so the server must be RUN FROM a scratch directory, not pointed at one): `S=\"$SCRATCH/app\"; mkdir -p \"$S\"; cp flights.db flights.db-wal flights.db-shm \"$S/\" 2>/dev/null; for x in dist client node_modules flight_plans airports.json; do ln -sfn \"$PWD/$x\" \"$S/$x\"; done; (cd \"$S\" && PORT=3100 node dist/index.js &)` — and kill it when the task ends. Note dist/ and client/dist/ are symlinks back into the repo (read-only use), while flights.db in $S is a copy."
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-011",
+      "role": "reviewer",
+      "title": "Final review of the run",
+      "goal": "Review the README change and the devops evidence, then read the full run diff as one change: does the shipped feature match the intake's five success criteria and the frozen design, is anything documented that does not exist, and is anything shipped that is not documented. Re-run the build, the tests and one end-to-end KML fetch rather than trusting T-010's report. List residual risks for the Orchestrator's report to the user.",
+      "depends_on": [
+        "T-009",
+        "T-010"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npm run build`, `npm test`, `npm run test:types` re-run with exit statuses quoted, and at least one KML endpoint fetched from a scratch server on port 3100 and validated.",
+        "The run's full `git diff --stat` is quoted and every changed file maps to a task's allowed_paths; any file outside them is a request_changes.",
+        "Each of the five success criteria in .claude/runs/2026-09-09-kml-export/intake.md is marked met or not met, each with the command or diff line that shows it — criterion 4 (opens in Google Earth) is explicitly reported as verified only by structural/XML validation, since no viewer exists in this environment.",
+        "`md5sum flights.db` unchanged and port 3000 untouched.",
+        "Verdict is approve or request_changes, plus a ranked residual-risk list."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh map 2026-09-09-kml-export",
+        ".claude/runs/2026-09-09-kml-export/intake.md",
+        ".claude/tools/ctx.sh design 2026-09-09-kml-export 1 2 3 4",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    }
+  ]
+}

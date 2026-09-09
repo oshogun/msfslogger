@@ -4,7 +4,7 @@ import { FlightMap } from '../components/FlightMap';
 import { AltitudeChart } from '../components/AltitudeChart';
 import { StatsGrid } from '../components/StatsGrid';
 import { plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
-import { apiFetch, downloadPdf } from '../utils/api';
+import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
 import type { Flight, PlannedLegWithChildren, Trip } from '../types';
 
@@ -48,6 +48,7 @@ export function FlightDetail() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [exportingKml, setExportingKml] = useState(false);
   const [exportError, setExportError] = useState('');
   const [includePlan, setIncludePlan] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -217,6 +218,18 @@ export function FlightDetail() {
       setExportError('Export failed: ' + (err as Error).message);
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleExportKml() {
+    setExportingKml(true);
+    setExportError('');
+    try {
+      await downloadKml(`/api/flights/${id}/export.kml`, `flight-${id}.kml`);
+    } catch (err) {
+      setExportError('Export failed: ' + (err as Error).message);
+    } finally {
+      setExportingKml(false);
     }
   }
 
@@ -436,6 +449,9 @@ export function FlightDetail() {
         <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
         <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
           {exporting ? 'Generating PDF…' : 'Export PDF'}
+        </button>
+        <button className="btn btn-ghost" onClick={handleExportKml} disabled={exportingKml}>
+          {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </button>
         {/* Only meaningful when there is actually a plan to include */}
         {flight.flight_plan_name && (

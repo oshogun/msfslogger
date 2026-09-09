@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LivePanel } from '../components/LivePanel';
-import { apiFetch } from '../utils/api';
+import { apiFetch, downloadFlightSetKml } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed } from '../utils/format';
 import type { Flight, Trip, Status } from '../types';
 
@@ -18,6 +18,7 @@ export function Home({ status }: Props) {
   const [showTripPicker, setShowTripPicker] = useState(false);
   const [pickerTripId, setPickerTripId] = useState<number | ''>('');
   const [error, setError] = useState<string | null>(null);
+  const [exportingKml, setExportingKml] = useState(false);
 
   const loadFlights = useCallback(async () => {
     const [flightsResult, tripsResult] = await Promise.allSettled([
@@ -121,6 +122,19 @@ export function Home({ status }: Props) {
     }
   }
 
+  async function handleExportKml() {
+    if (selectedIds.size === 0) return;
+    if (selectedIds.size > 100) { alert('Select at most 100 flights to export.'); return; }
+    setExportingKml(true);
+    try {
+      await downloadFlightSetKml([...selectedIds]);
+    } catch (err) {
+      alert('Export failed: ' + (err as Error).message);
+    } finally {
+      setExportingKml(false);
+    }
+  }
+
   async function handleAddToTrip() {
     const tripId = Number(pickerTripId);
     if (!tripId) return;
@@ -218,6 +232,9 @@ export function Home({ status }: Props) {
               </>
             )}
             <button className="btn btn-primary" disabled={n !== 2} onClick={handleCombine}>Combine Selected</button>
+            <button className="btn btn-ghost" disabled={exportingKml} onClick={handleExportKml}>
+              {exportingKml ? 'Exporting KML…' : 'Export KML'}
+            </button>
           </div>
         )}
 

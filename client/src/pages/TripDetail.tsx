@@ -4,7 +4,7 @@ import { TripMap } from '../components/TripMap';
 import { TripAtlas } from '../components/TripAtlas';
 import { StatsGrid } from '../components/StatsGrid';
 import { interleaveTripRows, GhostLegRow, plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
-import { apiFetch, downloadPdf } from '../utils/api';
+import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
 import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip } from '../types';
 
@@ -26,6 +26,7 @@ export function TripDetail() {
   const [journeyError, setJourneyError] = useState<string | null>(null);
 
   const [exporting, setExporting] = useState(false);
+  const [exportingKml, setExportingKml] = useState(false);
   const [exportError, setExportError] = useState('');
   const [includePlans, setIncludePlans] = useState(true);
 
@@ -131,6 +132,18 @@ export function TripDetail() {
       setExportError('Export failed: ' + (err as Error).message);
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleExportKml() {
+    setExportingKml(true);
+    setExportError('');
+    try {
+      await downloadKml(`/api/trips/${id}/export.kml`, `trip-${id}.kml`);
+    } catch (err) {
+      setExportError('Export failed: ' + (err as Error).message);
+    } finally {
+      setExportingKml(false);
     }
   }
 
@@ -733,6 +746,9 @@ export function TripDetail() {
         <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
         <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
           {exporting ? 'Generating PDF…' : 'Export PDF'}
+        </button>
+        <button className="btn btn-ghost" onClick={handleExportKml} disabled={exportingKml}>
+          {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </button>
         {/* Only meaningful when at least one leg has a plan attached */}
         {planCount > 0 && (

@@ -5,6 +5,11 @@ import { createHash } from 'crypto';
 import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, setPlannedLegHandOutcome, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
+import {
+  buildFlightKml, buildFlightSetKml, buildTripKml,
+  MAX_FLIGHT_SET_IDS,
+  type KmlFlightSetRequest,
+} from './kmlExport';
 import { buildJourney } from './journey';
 import { decideHandClose } from './plannedLegClose';
 import { parseLnmpln, LnmplnParseError, chainOrderForBatch, type ParsedFlightPlan } from './lnmpln';
@@ -56,12 +61,12 @@ function dateStamp(iso: string | null): string {
   return isNaN(d.getTime()) ? 'unknown' : d.toISOString().slice(0, 10);
 }
 
-function flightExportFilename(flight: Flight): string {
+function flightExportFilename(flight: Flight, ext: 'pdf' | 'kml' = 'pdf'): string {
   // Flights produced by combineFlights() have no ICAO codes, so fall back to the id alone
   const route = (flight.departure_icao || flight.arrival_icao)
     ? `-${slugify(`${flight.departure_icao ?? 'unknown'}-${flight.arrival_icao ?? 'unknown'}`)}`
     : '';
-  return `flight-${flight.id}${route}-${dateStamp(flight.start_time)}.pdf`;
+  return `flight-${flight.id}${route}-${dateStamp(flight.start_time)}.${ext}`;
 }
 
 function sendPdf(res: express.Response, pdf: Buffer, filename: string): void {
@@ -70,6 +75,16 @@ function sendPdf(res: express.Response, pdf: Buffer, filename: string): void {
   res.setHeader('Content-Length', String(pdf.length));
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
   res.end(pdf);
+}
+
+/** Same header-sanitising rule as sendPdf() — design.md (run 2026-09-09-kml-export) §3.5. */
+function sendKml(res: express.Response, kml: string, filename: string): void {
+  const safeName = filename.replace(/["\\\r\n/]/g, '_');
+  const buf = Buffer.from(kml, 'utf8');
+  res.setHeader('Content-Type', 'application/vnd.google-earth.kml+xml; charset=utf-8');
+  res.setHeader('Content-Length', String(buf.length));
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  res.end(buf);
 }
 
 /**
@@ -740,7 +755,9 @@ export function createServer(flightManager: FlightManager): express.Express {
   });
 
   // ── PDF export ────────────────────────────────────────────────────────────
-  // Registered before the SPA catch-all so they aren't swallowed by it.
+  // Registered before the SPA catch-all so they aren't swallowed by it. The
+  // KML export routes below (GET .../export.kml x2 and POST
+  // /api/flights/export.kml) are registered for the same reason.
 
   app.get('/api/flights/:id/export.pdf', async (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -779,6 +796,88 @@ export function createServer(flightManager: FlightManager): express.Express {
       sendPdf(res, pdf, `trip-${slugify(trip.name) || trip.id}-${dateStamp(trip.created_at)}.pdf`);
     } catch (err) {
       console.error('[PDF] Trip export failed:', err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ── KML export ────────────────────────────────────────────────────────────
+  // Also registered before the SPA catch-all, for the same reason as the PDF
+  // routes above.
+
+  app.get('/api/flights/:id/export.kml', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    const flight = getFlightById(id);
+    if (!flight) { res.status(404).json({ error: 'Flight not found' }); return; }
+
+    try {
+      const kml = buildFlightKml(flight);
+      sendKml(res, kml, flightExportFilename(flight, 'kml'));
+    } catch (err) {
+      console.error('[KML] Flight export failed:', err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  app.get('/api/trips/:id/export.kml', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
+
+    const trip = getTripById(id);
+    if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
+
+    try {
+      const kml = buildTripKml(trip.name, trip.flights);
+      sendKml(res, kml, `trip-${slugify(trip.name) || trip.id}-${dateStamp(trip.created_at)}.kml`);
+    } catch (err) {
+      console.error('[KML] Trip export failed:', err);
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // The flight-set scope: an arbitrary list of ids in the body, not a single
+  // resource in the path, so it cannot live at GET /api/flights/:id/export.kml
+  // — design.md (run 2026-09-09-kml-export) §2.3 explains why this is a POST.
+  app.post('/api/flights/export.kml', (req, res) => {
+    const { ids } = (req.body ?? {}) as KmlFlightSetRequest;
+
+    // Checks run in this order — shape, then emptiness, then cap, then
+    // per-element integer check — design.md (run 2026-09-09-kml-export) §2.4.
+    if (!Array.isArray(ids)) {
+      res.status(400).json({ error: 'ids must be an array of integers' });
+      return;
+    }
+    if (ids.length === 0) {
+      res.status(400).json({ error: 'ids must contain at least one flight id' });
+      return;
+    }
+    if (ids.length > MAX_FLIGHT_SET_IDS) {
+      res.status(400).json({ error: `Too many flights: ${ids.length} requested, maximum is ${MAX_FLIGHT_SET_IDS}` });
+      return;
+    }
+    if (!ids.every(Number.isInteger)) {
+      res.status(400).json({ error: 'ids must be an array of integers' });
+      return;
+    }
+
+    // First occurrence wins; the duplicate is dropped before any lookup, so it
+    // is not counted against the cap and does not affect the filename's n.
+    const distinctIds = [...new Set(ids)];
+
+    const flights: NonNullable<ReturnType<typeof getFlightById>>[] = [];
+    for (const id of distinctIds) {
+      const flight = getFlightById(id);
+      if (!flight) { res.status(404).json({ error: `Flight ${id} not found` }); return; }
+      flights.push(flight);
+    }
+
+    try {
+      const kml = buildFlightSetKml(flights);
+      const earliest = flights.reduce((min, f) => (f.start_time < min ? f.start_time : min), flights[0].start_time);
+      sendKml(res, kml, `flights-${flights.length}-${dateStamp(earliest)}.kml`);
+    } catch (err) {
+      console.error('[KML] Flight set export failed:', err);
       res.status(500).json({ error: String(err) });
     }
   });

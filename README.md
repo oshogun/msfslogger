@@ -189,6 +189,50 @@ that PID 1 would otherwise leave as zombies.
 
 ---
 
+## KML export
+
+The **Export KML** button — on a flight page, a trip page, and in the Home
+page's multi-select toolbar — produces a data export of the flown track(s) for
+opening in Google Earth or another GIS tool, rather than a rendered document
+like the PDF export above.
+
+| Endpoint | Produces |
+|---|---|
+| `GET /api/flights/:id/export.kml` | One flight's track |
+| `GET /api/trips/:id/export.kml` | Every flight in the trip, one folder per flight, in `start_time` order |
+| `POST /api/flights/export.kml` | An arbitrary set of flights (used by the Home page multi-select toolbar) |
+
+The third endpoint is a `POST` because the flight set is chosen in the browser
+and doesn't fit in a URL the way a single id does; it takes the ids in a JSON
+body instead of a query string:
+
+```bash
+curl -si -X POST localhost:3000/api/flights/export.kml \
+  -H 'Content-Type: application/json' \
+  -d '{"ids":[63,59,57]}'
+```
+
+`ids` is required: 1–100 integers. Duplicates are silently de-duplicated, and
+the request order doesn't matter — the output is always sorted by `start_time`
+regardless of what order the ids were sent in.
+
+### What you get
+
+Each flight becomes a `Placemark` holding its recorded GPS track as a plain KML
+`LineString` (longitude, latitude, altitude in metres, one point per second as
+recorded, decimated above 5,000 points so a pathologically long track still
+opens). Clicking the placemark shows a table with the aircraft, departure and
+arrival ICAO, start and end time (UTC), duration, distance, and max altitude,
+plus the number of track points in that export. Notes, attached flight plans,
+and planned-leg links aren't included — export a PDF for those.
+
+A single-flight export is one `Placemark` directly in the KML `Document`; a
+trip or flight-set export wraps each flight in its own `Folder` first, so a
+multi-leg trip gets one show/hide checkbox per leg in Google Earth's layer
+tree, with the legs colour-cycled the same way they are on the app's own map.
+
+---
+
 ## Trip plans (Little Navmap import)
 
 A trip can hold an **imported route**: the sequence of legs from one or more `.lnmpln` files exported
