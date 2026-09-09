@@ -32,7 +32,7 @@ This is the supported way to connect a remote server to MSFS. The alternative â€
    ```
    and the server's `/api/status` / web UI should show `connected: true`.
 
-Leave this running in the background whenever you want flights logged. It reconnects automatically if MSFS restarts, and retries the server if it's briefly unreachable.
+Leave this running in the background whenever you want flights logged. It reconnects automatically if MSFS restarts (backing off from 5s up to a 60s cap so a prolonged outage doesn't hammer SimConnect), and retries the server if it's briefly unreachable.
 
 ## Pause handling
 
