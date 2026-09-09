@@ -14,10 +14,16 @@ This is the supported way to connect a remote server to MSFS. The alternative â€
    ```powershell
    npm install
    ```
-4. Set the server URL (the LAN address of the machine running `msfslogger`) and start the agent:
+4. Set the server URL (the LAN address of the machine running `msfslogger`) and start the agent. By default it targets MSFS 2020 â€” see [MSFS 2020 vs 2024](#msfs-2020-vs-2024) below to point it at MSFS 2024 or FSX instead:
    ```powershell
    $env:SERVER_URL = "http://192.168.0.30:3000"
    npm start
+   ```
+   To pass the `--sim` flag through `npm start`, add an extra `--` before it (npm forwards everything after it to `node agent.js`), or just run `node agent.js` directly:
+   ```powershell
+   npm start -- --sim 2024
+   # or
+   node agent.js --sim 2024
    ```
 5. Launch MSFS. Once you're in a flight (or even just at the main menu), the agent's log should show:
    ```
@@ -66,7 +72,14 @@ registered, no SimConnect request is made, and nothing is posted.
 
 ## MSFS 2020 vs 2024
 
-The agent targets **MSFS 2020** (`Protocol.KittyHawk`) by default, matching the main server. If you're running MSFS 2024, edit `agent.js` and change `Protocol.KittyHawk` to `Protocol.SunRise`.
+The agent picks which SimConnect protocol revision to open with via a `--sim`/`-s` command-line flag. Accepted values (case-insensitive): `2020`, `2024`, `fsx`. Omitting the flag defaults to **MSFS 2020** (`Protocol.KittyHawk`), matching the main server's default.
+
+```powershell
+node agent.js --sim 2024   # MSFS 2024 (Protocol.SunRise)
+node agent.js --sim fsx    # FSX / FSX: Steam Edition (Protocol.FSX_SP2)
+```
+
+Both `--sim 2024` and `--sim=2024` are accepted, as is the short form `-s 2024`. An unrecognized value prints an error listing the accepted values and exits without attempting to connect.
 
 ## Running at startup (optional)
 

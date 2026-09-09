@@ -22,6 +22,39 @@ if (!SERVER_URL) {
   process.exit(1);
 }
 
+// --sim/-s CLI flag — which MSFS/FSX SimConnect protocol revision to open
+// with. Accepts space-separated ('--sim 2024') or equals-separated
+// ('--sim=2024') forms, plus the '-s' short alias; case-insensitive.
+// Omitting the flag keeps today's default (2020/Protocol.KittyHawk).
+const SIM_PROTOCOLS = {
+  '2020': { protocol: Protocol.KittyHawk, name: 'Protocol.KittyHawk' },
+  '2024': { protocol: Protocol.SunRise,   name: 'Protocol.SunRise' },
+  'fsx':  { protocol: Protocol.FSX_SP2,   name: 'Protocol.FSX_SP2' },
+};
+
+function parseSimArg(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--sim' || arg === '-s') return argv[i + 1];
+    if (arg.startsWith('--sim=')) return arg.slice('--sim='.length);
+    if (arg.startsWith('-s=')) return arg.slice('-s='.length);
+  }
+  return undefined;
+}
+
+function resolveSimProtocol(argv) {
+  const raw = parseSimArg(argv);
+  if (raw === undefined) return SIM_PROTOCOLS['2020'];
+  const match = SIM_PROTOCOLS[raw.toLowerCase()];
+  if (!match) {
+    console.error(`[Agent] Unrecognized --sim value "${raw}" — accepted values: 2020, 2024, fsx`);
+    process.exit(1);
+  }
+  return match;
+}
+
+const SIM_PROTOCOL = resolveSimProtocol(process.argv.slice(2));
+
 const RECONNECT_DELAY_MS = 5000;
 
 const DEF_FLIGHT_DATA = 0;
@@ -110,12 +143,12 @@ function postTrafficBatch(objects) {
 
 async function tryConnect() {
   try {
-    console.log('[Agent] Connecting to SimConnect...');
-    // Protocol.KittyHawk targets MSFS 2020. Use Protocol.SunRise for MSFS 2024.
-    // No `options` passed to open() — this connects locally, the same way any
-    // other SimConnect client on this machine does. No SimConnect.xml or
-    // firewall configuration needed.
-    const { recvOpen, handle } = await open('msfslogger-agent', Protocol.KittyHawk);
+    console.log(`[Agent] Connecting to SimConnect (${SIM_PROTOCOL.name})...`);
+    // Protocol is chosen by the --sim/-s CLI flag, resolved above (default
+    // MSFS 2020/Protocol.KittyHawk). No `options` passed to open() — this
+    // connects locally, the same way any other SimConnect client on this
+    // machine does. No SimConnect.xml or firewall configuration needed.
+    const { recvOpen, handle } = await open('msfslogger-agent', SIM_PROTOCOL.protocol);
     console.log(`[Agent] Connected to SimConnect — ${recvOpen.applicationName} ${recvOpen.applicationVersionMajor}.${recvOpen.applicationVersionMinor}`);
 
     await sendEvent('connected');

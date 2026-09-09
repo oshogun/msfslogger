@@ -221,14 +221,19 @@ without unlinking the flight.
 
 ## MSFS 2020 vs 2024
 
-`node-simconnect` requires the client to declare which SimConnect protocol version it speaks, and MSFS 2020 and 2024 differ. This is set in the `open(...)` call in [`agent/agent.js`](agent/agent.js):
+`node-simconnect` requires the client to declare which SimConnect protocol version it speaks, and MSFS 2020, MSFS 2024 and FSX differ. The agent picks this via a `--sim`/`-s` command-line flag, documented in [`agent/README.md`](agent/README.md#msfs-2020-vs-2024):
 
-| MSFS version | `Protocol` value |
-|---|---|
-| MSFS 2020 | `Protocol.KittyHawk` |
-| MSFS 2024 | `Protocol.SunRise` |
+| MSFS version | `--sim` value | `Protocol` value |
+|---|---|---|
+| MSFS 2020 | `2020` (default) | `Protocol.KittyHawk` |
+| MSFS 2024 | `2024` | `Protocol.SunRise` |
+| FSX | `fsx` | `Protocol.FSX_SP2` |
 
-The agent targets **MSFS 2020** (`Protocol.KittyHawk`) by default. For MSFS 2024, change that line to `Protocol.SunRise`. A mismatched protocol version makes the connection handshake fail.
+```powershell
+node agent.js --sim 2024
+```
+
+Omitting the flag defaults to MSFS 2020. A mismatched protocol version makes the connection handshake fail.
 
 ---
 
