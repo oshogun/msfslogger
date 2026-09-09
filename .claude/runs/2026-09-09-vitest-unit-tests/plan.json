@@ -1,0 +1,422 @@
+{
+  "run_id": "2026-09-09-vitest-unit-tests",
+  "goal": "Introduce Vitest as this project's first unit test framework and land a first suite over the four modules the user named: src/flightManager.ts (state transitions, pause detection, track-derived duration — the \"nasty test suite\"), src/airports.ts (ICAO/CSV parsing and nearest-airport lookup), src/legMatcher.ts (planned-leg auto-matching, all ten reason codes) and planned-route matching (src/plannedLegClose.ts, plus the route-relevant surface of src/lnmpln.ts and src/flightPlans.ts). The suite must be deterministic, hermetic and fast: no network, no live flights.db, no writes outside the repo's committed samples/ (read-only) and tmp. `npm test` runs it; `npm run build` and `npx tsc` keep working unchanged, and the Docker server build stage — which copies only package*.json, tsconfig.json and src/ — keeps working too. src/trafficStore.ts, src/db.ts and src/ingest.ts are explicitly out of scope for this run.",
+  "frozen_decisions": [
+    "Override the project's existing \"no test framework\" policy: yes, add one.",
+    "Runner: Vitest (chosen over node:test for DX — watch mode, mocking, snapshots — despite adding a new dependency).",
+    "Scope: broader first pass covering flight manager + ICAO parsing + leg/route matching (not flight-manager-only).",
+    "Explicitly OUT of scope for this run: traffic filtering (src/trafficStore.ts), SQLite persistence (src/db.ts), ingest validation (src/ingest.ts). Good candidates for a follow-up run, not this one."
+  ],
+  "sequencing_rationale": [
+    "COMMAND PREFIX — every command in every acceptance criterion below runs under Node 20, i.e. is prefixed with: export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null. The default node on this machine is v26 and better-sqlite3 has no binary for its ABI (.claude/ENVIRONMENT.md). Criteria name the bare command for readability; the prefix is never optional.",
+    "DESIGN CONTRACT — the Designer runs before Phase 1 and must produce design.md with exactly these numbered sections, because every task below cites them by number: §1 Runner and version (the vitest version pin and why, the Node 20 install procedure, and the rule that installing must not rebuild better-sqlite3 against another ABI). §2 File layout and naming (where test files live and the glob that finds them; how `tsc` / `npm run build:server` are kept from compiling them into dist/; whether and how test files are typechecked; and the hard constraint that the Docker server stage copies only package*.json, tsconfig.json and src/ — so tsconfig.json must stay self-contained and must not `extends`/`references` a file the Dockerfile does not copy). §3 vitest.config.ts (environment, include/exclude, setupFiles, isolation, timeouts, reporters, and the coverage decision — recommend none in this first pass; the project resists tooling). §4 Test-helpers module (its path and its exported builders: makeFrame(SimFrame), makeCandidate(LegMatchCandidate), makeHandCloseFlight/makeHandCloseLeg, makePlannedLegWithChildren — with the default values for each field spelled out, since every downstream task depends on those defaults being stable). §5 Faking time (the fake-timer configuration that covers both Date.now() and new Date().toISOString(), which src/flightManager.ts uses; the advance-then-feed-a-frame pattern; the rule that no test may depend on real wall-clock time). §6 Faking the module boundaries (the vi.mock shape for './db' — which of the ten functions FlightManager imports are stubbed, what each returns by default, how insertFlight issues ids, and how a test makes one of them throw; and the same for './airports'). §7 Testability seams in source (exactly what src/airports.ts must newly export so the CSV/ICAO parsing is reachable without initAirports()'s network+fs path, and how findNearestAirport is seeded in a test; plus the rule that NO other src/ file changes in this run). §8 Relationship to src/inspect-*.ts (they are kept, not deleted — CLAUDE.md documents them as the verification story; their scenario tables are ported into tests, not moved out). §9 npm scripts (`test`, the `test:watch` decision, and what `npm run build` must still do). §10 Determinism and hermeticism rules (no network, no live flights.db, no writes outside tmp; reading committed fixtures under samples/ read-only is allowed and expected).",
+    "PHASE SEAMS — Phase 1 is groundwork the design decides: the runner exists, and the harness that fakes time, the sim frame and the db boundary is written once and proven once. Everything after it is test-writing that imports that harness read-only, which is what makes Phase 2's dispatchers safe to run in parallel. Phase 2 covers the pure and near-pure modules (legMatcher, plannedLegClose, airports, lnmpln) — cheap, high-yield, and it exercises the helpers in anger before the expensive task. Phase 3 is the flight manager on its own, gated behind Phase 2's review, because it is the one stateful class in scope, the only consumer of fake timers and the db mock together, and the one place where a vacuously-green suite is the expensive failure. Phase 4 ships: package.json wiring, the test:watch call, README, and the proof that build and Docker's server stage are undisturbed.",
+    "PARALLELISM — T-004, T-005 and T-006 have disjoint allowed_paths and no dependency on each other; run them as three concurrent Dispatchers. Every other task is sequential. Test-file paths are listed under both candidate roots (tests/ and src/) because §2 has not been written yet and freezes which one is real; the two candidate paths for a given module belong to exactly one task either way, so the sets stay disjoint whichever §2 chooses.",
+    "package.json is edited twice — by T-001 (devDependency + `test` script) and by T-010 (the test:watch call, final wiring). They are in different phases separated by reviewer gates T-003 and T-009, so they can never run concurrently; that gate is the reason the double ownership is safe.",
+    "MODEL RISK — T-008 (flight manager) is opus: it is a stateful class behind two mocked module boundaries and a fake clock, and the wrong call there is a suite that passes without asserting anything. T-009 reviews it with opus for the same reason, and its acceptance criteria are mutation checks on a scratch copy of the tree rather than a reading of the diff. Everything else is sonnet: ordinary implementation and review against a frozen design.",
+    "DOCS THE ORCHESTRATOR OWNS, NOT A SUB-AGENT — CLAUDE.md:104 (\"There is no test framework and the project does not want one\") and .claude/ENVIRONMENT.md §\"Verification without a test framework\" both become false the moment this run lands, and every future agent reads them. They are workflow configuration, so no task below has them in allowed_paths. Update them yourself after T-011 approves, as a tier-1 doc change. README.md does not mention the policy today and is in T-010's paths.",
+    "ESCAPE HATCH FIRST — T-001 installs and proves the runner before any test is written, so a broken toolchain surfaces as one failed devops task rather than as four dispatchers reporting tests they could not run. And T-001's own install criterion is that better-sqlite3 still loads afterwards: the realistic way this run damages the user's setup is an npm install under the wrong Node rebuilding the native addon, breaking their server on its next restart."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "The runner exists and the fake-sim harness is proven",
+      "ships": "`npm test` runs and reports green, and there is a single shared test-helpers module that builds a SimFrame, a leg candidate and a stubbed ./db — so every later suite is written against one harness instead of five hand-rolled ones.",
+      "tasks": [
+        "T-001",
+        "T-002",
+        "T-003"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "The pure decision modules are covered",
+      "ships": "Leg matching, the hand-close gate, ICAO/CSV parsing and .lnmpln route parsing all have real assertions behind `npm test` — the logic that silently mislinks a trip is now falsifiable in one command instead of by reading three CLI inspectors.",
+      "tasks": [
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "The flight manager suite",
+      "ships": "State transitions, pause detection and track-derived duration — the logic that decides whether a logbook entry is right — are pinned by tests that provably fail when the constants or guards that produce them are changed.",
+      "tasks": [
+        "T-008",
+        "T-009"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Ship",
+      "ships": "`npm test` is a first-class script alongside build and start, README says how to run it, and `npm run build` plus the Docker server stage are demonstrably undisturbed.",
+      "tasks": [
+        "T-010",
+        "T-011"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "devops",
+      "title": "Install Vitest under Node 20, write vitest.config.ts, wire `npm test`, prove it runs",
+      "goal": "Add vitest as a devDependency at the version pinned in design §1, create the config file described in design §3, make the file-layout and tsconfig changes frozen in design §2, add the `test` script from design §9, and land one smoke test that proves the runner executes TypeScript from this repo (it should import something real and trivial — e.g. haversineNm from src/geo.ts — not `expect(1).toBe(1)`). Do not write any module test suites; those are T-004..T-008. The single most important constraint: the install runs under Node 20 and must leave better-sqlite3 loadable, because the user's live server on port 3000 loads it on its next restart.",
+      "depends_on": [],
+      "allowed_paths": [
+        "package.json",
+        "package-lock.json",
+        "vitest.config.ts",
+        "tsconfig.json",
+        "tsconfig.test.json",
+        ".gitignore",
+        "tests/smoke.test.ts",
+        "src/smoke.test.ts",
+        "tests/setup.ts"
+      ],
+      "acceptance_criteria": [
+        "`node -e \"require('better-sqlite3')\"` exits 0 after the install, and `npm ls better-sqlite3` reports the same version as before the change. State both, before and after, in the report.",
+        "`npx vitest --version` prints the version pinned in design §1, and package.json lists vitest in devDependencies (not dependencies) at that exact pin.",
+        "`npm test` runs vitest in non-watch, single-run mode and exits 0. Confirm it does not hang waiting for input: `timeout 120 npm test` exits 0, not 124.",
+        "The smoke test imports at least one real symbol from src/ and asserts a value derived from it; `grep -c 'expect' <smoke test file>` is at least 2.",
+        "`npx tsc` exits 0 and `ls dist/*.test.js dist/**/*.test.js` finds nothing — no test file is compiled into dist/.",
+        "`npm run build` exits 0 (client build included).",
+        "The Docker server stage still builds: copy only package.json, package-lock.json, tsconfig.json and src/ into a scratch dir, `npm ci` there, run `npm run build:server`, and confirm exit 0. This is the exact file set Dockerfile lines 14-18 copy, so it is what proves tsconfig.json stayed self-contained per design §2.",
+        "`git status --porcelain` lists only files inside this task's allowed_paths (plus node_modules, which is gitignored). No stray coverage/ or .vitest/ directory is left untracked — if the design configured coverage output, .gitignore covers it.",
+        "md5sum of flights.db is unchanged across the whole task; state it before and after."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 1 2 3 9",
+        "package.json",
+        "tsconfig.json",
+        "Dockerfile"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-002",
+      "role": "dispatcher",
+      "title": "Shared test-helpers module: frame builder, candidate builder, db/airports mock factory, clock helper",
+      "goal": "Write the single test-helpers module specified in design §4, §5 and §6 — the builders (makeFrame, makeCandidate, makeHandCloseFlight, makeHandCloseLeg, makePlannedLegWithChildren), the fake-clock helper, and the factory that produces the ./db and ./airports mock objects — with the exact default field values design §4 freezes. This module is written once and then imported read-only by T-004, T-005, T-006 and T-008, so its defaults are a contract: a later task that needs a different value overrides it at the call site, it does not edit this file. Ship a small self-test alongside it proving each builder returns an object that satisfies the real type and that overrides are applied.",
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [
+        "tests/helpers/**",
+        "src/test-helpers/**",
+        "tests/helpers.test.ts",
+        "src/test-helpers.test.ts"
+      ],
+      "acceptance_criteria": [
+        "Every builder named in design §4 exists and is exported; `grep -c 'export function make' <helpers file>` matches the count of builders in §4.",
+        "makeFrame() with no arguments returns an object assignable to SimFrame from src/types.ts (all ten fields present, correct types) and makeFrame({ onGround: true }) returns that same object with onGround true and every other field at its §4 default. Asserted in the self-test.",
+        "makeCandidate() with no arguments returns an object assignable to LegMatchCandidate from src/types.ts (src/types.ts:269-282) whose status is 'planned' and linkedFlightId is null — i.e. an eligible candidate by src/legMatcher.ts refusalFor().",
+        "The ./db mock factory returns stubs for all ten functions src/flightManager.ts imports from './db' (insertFlight, insertPoint, closeFlight, getFlightPlannedLegId, getActiveTripId, getPlannedLegCandidatesForActiveTrip, getPlannedLegById, linkFlightToPlannedLeg, recordPlannedLegArrival, getTripName) and records its calls; the self-test asserts the recorded arguments of at least one of them.",
+        "No file under this task's paths imports better-sqlite3, http, https, or opens flights.db: `grep -rn \"better-sqlite3\\|flights.db\\|require('https')\\|from 'https'\" <helpers paths>` finds nothing.",
+        "`npx vitest run <helpers self-test>` exits 0 and reports 0 failed, 0 skipped.",
+        "`npx tsc` exits 0 and `npm test` still exits 0."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 4 5 6 10",
+        "src/types.ts",
+        "src/flightManager.ts",
+        "src/plannedLegClose.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-003",
+      "role": "reviewer",
+      "title": "Review phase 1 — runner, config and harness",
+      "goal": "Re-run the evidence for T-001 and T-002 rather than trusting their reports. The two things that matter most: (a) the install did not disturb better-sqlite3 or flights.db, and (b) the helpers' defaults match design §4 field for field, because four later tasks are about to be written against them and a wrong default is cheap now and expensive after Phase 3.",
+      "depends_on": [
+        "T-001",
+        "T-002"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Re-ran `npm test`, `npx tsc`, `npm run build` and `node -e \"require('better-sqlite3')\"` yourself; all exit 0.",
+        "Re-ran the scratch-dir Docker server-stage simulation from T-001's criteria; exit 0.",
+        "Compared every default value in the helpers module against design §4 line by line and reported any divergence as request_changes.",
+        "Confirmed `git status --porcelain` shows nothing outside T-001's and T-002's allowed_paths, and md5sum of flights.db matches the value in .claude/runs/2026-09-09-vitest-unit-tests/ notes.",
+        "Confirmed no file added in this phase references flights.db, a network host, or writes outside tmp."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 1 2 3 4 9 10"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-004",
+      "role": "dispatcher",
+      "title": "Tests for src/legMatcher.ts, src/plannedLegClose.ts and src/flightPlans.ts (pure decision modules)",
+      "goal": "Cover the two pure decision modules and the one pure helper in src/flightPlans.ts. For legMatcher: port the 24 scenarios already tabulated in src/inspect-legmatch.ts into real assertions (design §8 — the inspector stays, it is not deleted or moved), and make sure the ported set covers every one of the ten LegMatchReason codes plus the step ordering that src/legMatcher.ts's comments call normative. For plannedLegClose: the refusal order is normative (design.md of run 2026-09-07-manual-mark-flown §1.2, restated in the module header) and the message strings are frozen — assert them verbatim. For flightPlans: only isPdfBuffer and flightPlanPath are pure; test those and nothing that touches fs. Use the T-002 helpers; do not edit them.",
+      "depends_on": [
+        "T-003"
+      ],
+      "allowed_paths": [
+        "tests/legMatcher.test.ts",
+        "src/legMatcher.test.ts",
+        "tests/plannedLegClose.test.ts",
+        "src/plannedLegClose.test.ts",
+        "tests/flightPlans.test.ts",
+        "src/flightPlans.test.ts"
+      ],
+      "acceptance_criteria": [
+        "All ten values of LegMatchReason ('MATCHED', 'NO_ACTIVE_TRIP', 'NO_PLANNED_LEGS', 'NO_LEG_IN_RADIUS', 'AMBIGUOUS', 'LEG_ALREADY_FLOWN', 'LEG_ALREADY_LINKED', 'LEG_SKIPPED', 'SNIPPET_NO_DEPARTURE_AIRPORT', 'FLIGHT_ALREADY_LINKED') appear as an asserted result.reason in at least one test. Demonstrate with a grep of the test file listing all ten.",
+        "Step precedence is pinned by at least these four tests: a flight already linked returns FLIGHT_ALREADY_LINKED even when a perfect match sits below it; a candidate from another trip is filtered out even when passed in (returns NO_PLANNED_LEGS); a leg that is both flown and linked reports LEG_ALREADY_FLOWN, not LEG_ALREADY_LINKED; and among two ineligible near legs the NEARER one names the obstacle.",
+        "The radius boundary is pinned: a candidate at exactly DEPARTURE_RADIUS_NM matches, one just beyond returns NO_LEG_IN_RADIUS with distanceNm set to the nearest candidate's distance, and `radiusNm: 0` is honoured rather than falling back to the default (the `??` vs `||` distinction at src/legMatcher.ts:183).",
+        "The antimeridian case is pinned: a takeoff at 179.97°W against a leg departing 179.95°E matches, and the asserted distanceNm is under 10 nm — not ~360°-derived.",
+        "AMBIGUOUS returns nearbyLegIds containing only the ELIGIBLE ids, while MATCHED and the ineligible-blocker path return every id within the radius; both list shapes are asserted, ascending.",
+        "decideHandClose is tested for all five HandCloseRefusal codes plus both allowed paths ('flown' with a deviation, 'planned' with deviationNm null), with the refusal `message` strings asserted verbatim character for character.",
+        "decideHandClose refusal ORDER is pinned by at least one input that trips two conditions at once (e.g. not linked AND not ended) and asserts the earlier code wins.",
+        "handCloseDeviationNm returns null when either arrival coordinate is null, and is asserted to use Math.round(x*10)/10 — include the x.x5 rounding-boundary case that src/inspect-manual-mark.ts already demonstrates, so a later switch to toFixed(1) fails a test.",
+        "isPdfBuffer is tested for: a buffer starting '%PDF-', a buffer shorter than 5 bytes, an empty buffer, and a buffer with '%PDF-' at a non-zero offset (must be false).",
+        "`npx vitest run` over just these files exits 0, reports 0 failed and 0 skipped, and finishes in under 5 seconds (report the measured time).",
+        "No test in these files imports './db', better-sqlite3, fs, http or https; demonstrate with a grep.",
+        "`npx tsc` exits 0 and `npm test` exits 0."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 2 4 8 10",
+        "src/legMatcher.ts",
+        "src/plannedLegClose.ts",
+        "src/flightPlans.ts",
+        "src/inspect-legmatch.ts",
+        "src/inspect-manual-mark.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-005",
+      "role": "dispatcher",
+      "title": "Tests for src/airports.ts ICAO parsing, plus the minimal export seam that makes it reachable",
+      "goal": "The ICAO/CSV parsing the user asked to cover — parseCSVLine, parseCSV and findNearestAirport — is currently unreachable from a test: parseCSV and parseCSVLine are module-private, and findNearestAirport reads a module-level array that only initAirports() fills, via the filesystem or an HTTPS download. Make exactly the export/seeding change design §7 freezes (and nothing more — §7 also states no other src/ file changes this run), then test the parsing against inline CSV strings. Do not call initAirports() from a test, do not touch airports.json, do not make a network request.",
+      "depends_on": [
+        "T-003"
+      ],
+      "allowed_paths": [
+        "src/airports.ts",
+        "tests/airports.test.ts",
+        "src/airports.test.ts"
+      ],
+      "acceptance_criteria": [
+        "The diff to src/airports.ts is confined to what design §7 specifies. Behaviour of initAirports() and findNearestAirport() as called by src/index.ts and src/flightManager.ts is byte-for-byte unchanged: show the diff in the report and confirm no line inside a function body changed except as §7 requires.",
+        "parseCSVLine is tested for: a plain row; a quoted field containing a comma; a quoted field containing no comma; an empty trailing field; and a row with a single field and no comma at all.",
+        "parseCSV is tested to REJECT each of these rows, one test each: type not in {large_airport, medium_airport, small_airport}; non-numeric latitude; non-numeric longitude; an ICAO of length 3; an ICAO of length 5; an ICAO containing a non-alphanumeric character.",
+        "parseCSV is tested to prefer column 12 (gps_code) over column 1 (ident) when both are present and valid, to fall back to column 1 when column 12 is empty, to uppercase and trim the result, and to fall back to the icao for `name` when column 3 is empty.",
+        "parseCSV skips the header row and skips blank lines, including a trailing newline at end of input — asserted on a fixture string that has both.",
+        "findNearestAirport is tested for: an empty airport list returns null; a seeded list where the nearest is beyond the default maxNm of 10 returns null; a seeded list where the nearest is inside 10 nm returns that airport's icao and name; a custom maxNm widens the result; and of two airports the genuinely nearer one wins.",
+        "No test in this file performs a network request or touches airports.json: `grep -n \"http\\|airports.json\\|initAirports\" <test file>` finds nothing (or only a comment explaining why initAirports is not called).",
+        "`npx vitest run` over this file exits 0, 0 failed, 0 skipped.",
+        "`npx tsc` exits 0, `npm run build` exits 0, and `npm test` exits 0.",
+        "The live server is untouched and md5sum of flights.db is unchanged; state it."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 2 4 7 10",
+        "src/airports.ts",
+        "src/index.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-006",
+      "role": "dispatcher",
+      "title": "Tests for the route-matching surface of src/lnmpln.ts against the committed samples/lnmpln fixtures",
+      "goal": "Cover parseLnmpln and chainOrderForBatch, scoped to what feeds route matching — endpoints, waypoints, whether the departure is an airport, and leg ordering — not every warning code in the 982-line parser. The fixtures already exist and are committed under samples/lnmpln/ (5 real Little Navmap exports, ~30 synthetic ones including the bad-*.lnmpln family); read them, do not invent a parallel fixture set and do not write into samples/. src/inspect-lnmpln.ts already asserts expected values for many of these files — reuse them rather than re-deriving (design §8: the inspector stays).",
+      "depends_on": [
+        "T-003"
+      ],
+      "allowed_paths": [
+        "tests/lnmpln.test.ts",
+        "src/lnmpln.test.ts"
+      ],
+      "acceptance_criteria": [
+        "Every bad-*.lnmpln fixture in samples/lnmpln/synthetic/ is exercised by a test asserting that parseLnmpln throws LnmplnParseError with a specific LnmplnRejectCode — one assertion per fixture, no catch-all. Report the fixture count found by `ls samples/lnmpln/synthetic/bad-*.lnmpln | wc -l` and confirm the test count matches it.",
+        "Each of the 5 real exports under samples/lnmpln/ parses without throwing, and for each the test asserts the departure ident, the destination ident and the waypoint count.",
+        "The route-matching surface is pinned for at least: a snippet whose departure is not an airport (samples/lnmpln/synthetic/snippet-non-airport-endpoints.lnmpln) is parsed with the departure flagged as not-an-airport — the property src/legMatcher.ts turns into SNIPPET_NO_DEPARTURE_AIRPORT; a file with two waypoint blocks and two alternate blocks; and a file whose waypoints carry a Pos without an alt.",
+        "Waypoint order is asserted to be departure-first, destination-last on at least one real export — the invariant src/flightManager.ts buildPlannedLegCache() depends on.",
+        "chainOrderForBatch is tested on the chain-roundtrip-1/-2 fixture pair for the ordered case, plus at least one case per BatchChainReason value; enumerate the reason values covered in the report.",
+        "parseLnmpln is called with a string in some tests and a Buffer in others, and the BOM fixture (samples/lnmpln/synthetic/bom.lnmpln) is asserted to parse identically to its non-BOM equivalent.",
+        "No test writes any file: `grep -n \"writeFile\\|mkdir\\|unlink\\|copyFile\\|appendFile\" <test file>` finds nothing, and `git status --porcelain samples/` is empty after the run.",
+        "`npx vitest run` over this file exits 0, 0 failed, 0 skipped, and finishes in under 10 seconds (report the measured time).",
+        "Fixture paths resolve from the repo root regardless of the process cwd vitest is launched from — demonstrate by running `npx vitest run <file>` once from the repo root and once with a different cwd, both exit 0.",
+        "`npx tsc` exits 0 and `npm test` exits 0."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 2 4 8 10",
+        "src/lnmpln.ts",
+        "src/inspect-lnmpln.ts",
+        "samples/lnmpln/"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-007",
+      "role": "reviewer",
+      "title": "Review phase 2 — legMatcher, plannedLegClose, flightPlans, airports, lnmpln",
+      "goal": "Re-run the three dispatchers' evidence. Two things carry real risk here and deserve more than a diff read: the source edit to src/airports.ts (it is in the live server's startup path, and design §7 bounds it), and whether the ported inspector scenarios became real assertions or decorative ones. Spot-check by mutation rather than by reading.",
+      "depends_on": [
+        "T-004",
+        "T-005",
+        "T-006"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Re-ran `npm test`, `npx tsc` and `npm run build` yourself; all exit 0. Report the suite's total wall-clock time.",
+        "Read the full diff of src/airports.ts against design §7 and confirmed nothing outside §7's scope changed — in particular that findNearestAirport's algorithm and initAirports' cache/download behaviour are untouched.",
+        "Mutation spot-check on a scratch copy of the tree (cp -r to the scratchpad, never in place): change DEPARTURE_RADIUS_NM from 10 to 40 in the copy and confirm at least one legMatcher test fails; change the LEG_ALREADY_FLOWN / LEG_SKIPPED check order in refusalFor() and confirm at least one test fails; change handCloseDeviationNm's Math.round(x*10)/10 to Number(x.toFixed(1)) and confirm at least one test fails. Name the failing test for each.",
+        "Verified the ten LegMatchReason codes and the five HandCloseRefusal codes really are asserted, by grepping the test files rather than trusting the report.",
+        "Confirmed no test file reads flights.db, opens a network connection, or writes outside tmp; and `git status --porcelain` shows only files inside T-004/T-005/T-006 allowed_paths.",
+        "md5sum of flights.db unchanged."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 4 7 8 10"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-008",
+      "role": "dispatcher",
+      "title": "The flight manager suite: state transitions, pause detection, track-derived duration",
+      "goal": "The centrepiece of the run. Test src/flightManager.ts's FlightManager class end to end at its own boundary: feed it SimFrames through onFrame/setPaused/onCrash/onSimDisconnect under a fake clock (design §5) with './db' and './airports' mocked (design §6), and assert on the recorded calls to insertFlight/insertPoint/closeFlight/linkFlightToPlannedLeg/recordPlannedLegArrival and on the public appState and getPlannedLegStatus(). Do NOT modify src/flightManager.ts — design §7 forbids source changes outside src/airports.ts, and the class is already testable through mocks and fake timers. Every assertion about a duration must come from advancing the fake clock, never from a real wait. The named behaviours below are the user's stated reason for this run; treat the acceptance list as the specification.",
+      "depends_on": [
+        "T-007"
+      ],
+      "allowed_paths": [
+        "tests/flightManager.test.ts",
+        "src/flightManager.test.ts",
+        "tests/flightManager.state.test.ts",
+        "src/flightManager.state.test.ts",
+        "tests/flightManager.duration.test.ts",
+        "src/flightManager.duration.test.ts"
+      ],
+      "acceptance_criteria": [
+        "STATE — IDLE to FLYING requires exactly AIRBORNE_DEBOUNCE_FRAMES (3) consecutive qualifying frames: two qualifying frames produce no insertFlight call; the third does. A non-qualifying frame between them resets the streak and a following two qualifying frames still produce no flight.",
+        "STATE — a frame with simRunning === 3 (slew) never starts a flight, however many are fed; a frame with onGround true never starts one; a frame with airspeedKnots === 30 never starts one (the guard is strictly greater than 30) while 31 does.",
+        "STATE — FLYING to IDLE requires exactly LANDED_DEBOUNCE_FRAMES (10) consecutive frames with onGround && groundSpeedKnots < 5: nine produce no closeFlight, the tenth does; one frame with groundSpeedKnots === 5 resets the streak.",
+        "STATE — simRunning === 0 ends a FLYING flight immediately with one closeFlight call, and is a silent no-op when IDLE (no closeFlight, no throw).",
+        "STATE — onCrash() and onSimDisconnect() each end a FLYING flight using the last frame's coordinates (asserted on closeFlight's lat/lon arguments), and are no-ops when IDLE or when no frame has ever arrived.",
+        "STATE — after endFlight, appState.flightState is 'IDLE' and appState.currentFlightId is null; after startFlight they are 'FLYING' and the id insertFlight returned.",
+        "PAUSE — setPaused(true, flags) sets appState.paused true and appState.pauseFlags to flags; setPaused(false) sets paused false and pauseFlags to 0 regardless of the flags argument.",
+        "PAUSE — frames delivered while paused record no points: after a pause spanning several RECORD_INTERVAL_MS windows, insertPoint's call count is unchanged.",
+        "PAUSE — the gap that SPANS a pause is excluded from duration even when it is shorter than MAX_COUNTED_GAP_MS. Concretely: a pause of 10 s (well under 60 s) must not appear in the duration_sec passed to closeFlight — this is the `interrupted` flag path at src/flightManager.ts:493, and it is the assertion that distinguishes pause handling from plain gap handling.",
+        "PAUSE — slew (simRunning === 3) while FLYING records no point and marks the following gap interrupted, exactly as a pause does; asserted the same way.",
+        "DURATION — insertPoint is called at most once per RECORD_INTERVAL_MS (5000): advancing 4999 ms after a point records nothing, advancing 5000 ms records one.",
+        "DURATION — duration_sec passed to closeFlight equals the sum of the counted inter-point gaps plus the tail interval, computed by hand in the test from the clock advances, not read back from the implementation. Give at least one multi-point flight where the expected number is written as a literal.",
+        "DURATION — the MAX_COUNTED_GAP_MS boundary is pinned exactly: a gap of exactly 60000 ms IS counted, a gap of 60001 ms is NOT.",
+        "DURATION — the tail interval between the last recorded point and endFlight is counted when the flight was not interrupted and the tail is <= MAX_COUNTED_GAP_MS, and excluded when either condition fails; both branches asserted.",
+        "DURATION — a flight whose wall-clock span exceeds its counted time still reports a duration_sec equal only to the counted time (the excluded-seconds path), asserted on a flight containing one over-long gap.",
+        "ACCUMULATORS — closeFlight receives distance rounded to Math.round(d*10)/10, max altitude and max airspeed as the running maxima across recorded points only (a higher value seen in a frame that was NOT recorded must not raise them), and point_count equal to the number of insertPoint calls.",
+        "PLANNED LEG — getPlannedLegStatus() returns null while unlinked. After an auto-link, it returns the next waypoint chosen by cross-track distance (a position beside the first segment of a 4-waypoint route names waypoint[1], a position beside the last segment names the destination) and remainingDistanceNm equal to the direct distance to that waypoint plus the chain to the destination, rounded to one decimal.",
+        "PLANNED LEG — getPlannedLegStatus() picks the correct segment for a route crossing the antimeridian (waypoints at 179.5°E and 179.5°W), i.e. lonDeltaDeg is exercised and the answer is not the ~360°-wide one.",
+        "PLANNED LEG — auto-link: a MATCHED result calls linkFlightToPlannedLeg(flightId, legId, 'auto') exactly once and populates the status cache; a refusal calls it zero times and leaves getPlannedLegStatus() null; and a THROW from getActiveTripId, getPlannedLegCandidatesForActiveTrip, getPlannedLegById or linkFlightToPlannedLeg leaves the flight recorded (insertFlight already called, no rethrow out of onFrame) and unlinked. Assert all four throw sites.",
+        "PLANNED LEG — arrival: landing within ARRIVAL_RADIUS_NM records 'flown', landing beyond it records 'diverted', both with deviation rounded to Math.round(d*10)/10, and neither unlinks the flight; a throw from recordPlannedLegArrival does not propagate out of endFlight.",
+        "PLANNED LEG — refreshPlannedLegForFlight(id) is a no-op for an id that is not the current flight, clears the cache when getFlightPlannedLegId returns null, and rebuilds it when it returns a leg.",
+        "HERMETIC — the test file mocks './db' and './airports'; `grep -n \"better-sqlite3\\|flights.db\" <test files>` finds nothing, and no real timer wait is used (`grep -n \"await new Promise\\|setTimeout(\" <test files>` finds nothing outside fake-timer helpers).",
+        "`npx vitest run` over these files exits 0 with 0 failed and 0 skipped, and finishes in under 10 seconds despite simulating flights of tens of minutes — report the measured time as the evidence that the clock is faked.",
+        "`npx tsc` exits 0, `npm run build` exits 0, `npm test` exits 0, and `git diff --stat src/flightManager.ts` is empty."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 4 5 6 10",
+        "src/flightManager.ts",
+        "src/types.ts",
+        "src/legMatcher.ts"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-009",
+      "role": "reviewer",
+      "title": "Review phase 3 — the flight manager suite, by mutation",
+      "goal": "This is the review that decides whether the run delivered what the user asked for. A flight-manager suite that passes because it asserts nothing meaningful is the expensive failure mode, and it is invisible in a green run and nearly invisible in a diff. Judge it by mutating a scratch copy of the source and confirming the suite notices. Copy the tree to the scratchpad first (cp -r); never mutate the repo in place, and never touch the live server or flights.db.",
+      "depends_on": [
+        "T-008"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Re-ran `npm test`, `npx tsc` and `npm run build`; all exit 0. Reported the suite's total wall-clock time and confirmed it is under the 10 s the task claimed.",
+        "MUTATION 1 — AIRBORNE_DEBOUNCE_FRAMES 3 -> 2 in the scratch copy makes at least one named test fail.",
+        "MUTATION 2 — LANDED_DEBOUNCE_FRAMES 10 -> 9 makes at least one named test fail.",
+        "MUTATION 3 — MAX_COUNTED_GAP_MS 60_000 -> 600_000 makes at least one named test fail.",
+        "MUTATION 4 — deleting the `!this.interrupted &&` guard at src/flightManager.ts:493 (writePoint's gap accumulation) makes at least one PAUSE test fail. This is the mutation that proves pause detection is genuinely covered rather than incidentally covered.",
+        "MUTATION 5 — deleting the `!this.interrupted &&` guard in endFlight's tail-interval line (src/flightManager.ts:276) makes at least one DURATION test fail.",
+        "MUTATION 6 — changing the arrival comparison `deviationNm <= ARRIVAL_RADIUS_NM` to `<` makes at least one PLANNED LEG test fail.",
+        "MUTATION 7 — changing RECORD_INTERVAL_MS 5000 -> 1000 makes at least one DURATION test fail.",
+        "MUTATION 8 — replacing crossTrackNm's lonDeltaDeg calls with raw longitude subtraction makes the antimeridian getPlannedLegStatus test fail.",
+        "For each of the eight mutations, name the specific test that failed. Any mutation that leaves the suite green is a request_changes with that mutation quoted.",
+        "Restored/discarded the scratch copy and confirmed `git status --porcelain` in the real repo shows only T-008's allowed_paths; `git diff src/flightManager.ts` is empty.",
+        "md5sum of flights.db unchanged, and the user's server on port 3000 was never stopped, restarted or rebuilt over mid-edit."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 5 6 10",
+        "src/flightManager.ts"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-010",
+      "role": "devops",
+      "title": "Ship: finalise npm scripts, decide test:watch, update README, prove build and Docker are undisturbed",
+      "goal": "Wire the run into the project's surface. Confirm `npm test` runs the whole suite in one non-interactive command. Make the `test:watch` call per design §9 and this project's temperament — it resists tooling, so add it only if it is a one-line script and say plainly in the report why you did or did not; do not add coverage, reporters, CI config, or a pretest hook. Document how to run the tests in README.md in a short paragraph next to the existing build/run instructions. Then prove the two things a new devDependency can break: `npm run build`, and the Docker server stage, which copies only package*.json, tsconfig.json and src/.",
+      "depends_on": [
+        "T-009"
+      ],
+      "allowed_paths": [
+        "package.json",
+        "package-lock.json",
+        "README.md",
+        ".gitignore"
+      ],
+      "acceptance_criteria": [
+        "`timeout 180 npm test` exits 0, runs every test file added in this run, and reports the total test count. Quote the summary line.",
+        "package.json's scripts block contains `test`, and contains `test:watch` if and only if the report justifies it in one sentence. No coverage script, no pretest/posttest hook, no CI config file added.",
+        "`npm run build` exits 0. `npx tsc` exits 0. `ls dist | grep -i test` finds nothing.",
+        "Docker server stage simulation: copy package.json, package-lock.json, tsconfig.json and src/ into a scratch dir, `npm ci`, `npm run build:server` — exit 0. If it fails, that is the Dockerfile-compatibility bug this criterion exists to catch; report it rather than editing the Dockerfile (it is outside allowed_paths).",
+        "`npm ci --omit=dev` in a scratch dir does NOT install vitest (it is a devDependency) — confirm with `npm ls vitest` there, which must report it as missing/empty. This is what keeps the runtime image unchanged.",
+        "`node -e \"require('better-sqlite3')\"` exits 0 and `npm ls better-sqlite3` reports the same version as at the start of the run.",
+        "README.md gains a short, accurate description of how to run the tests, consistent with the actual script names; no claim in it is untrue (CLAUDE.md requires README stay accurate).",
+        "`git status --porcelain` shows only files inside this run's allowed_paths across all tasks; no coverage/, .vitest/ or scratch artefact is untracked.",
+        "md5sum of flights.db unchanged; the live server was not stopped or restarted."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 1 2 9",
+        "package.json",
+        "README.md",
+        "Dockerfile"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-011",
+      "role": "reviewer",
+      "title": "Review phase 4 — ship readiness",
+      "goal": "Re-run T-010's evidence and read the whole run's diff once, end to end, as the last chance to catch something that slipped between phases: a stray file, an untrue README sentence, a script that hangs in watch mode, or a source change outside src/airports.ts.",
+      "depends_on": [
+        "T-010"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Re-ran `timeout 180 npm test`, `npm run build`, `npx tsc`, the Docker server-stage simulation and the `npm ci --omit=dev` check; all pass as reported.",
+        "`git diff --stat` for the whole run shows exactly one changed file under src/ that is not a test file — src/airports.ts — and its diff matches design §7.",
+        "Read README.md's new paragraph and confirmed every command in it actually works when run.",
+        "Confirmed `npm test` is non-interactive (exits on its own, not 124 under timeout) and that watch mode, if added, is a separate script.",
+        "Confirmed nothing in the run reads or writes flights.db, makes a network request, or writes outside tmp; md5sum of flights.db unchanged.",
+        "Flagged to the Orchestrator that CLAUDE.md:104 and .claude/ENVIRONMENT.md's \"Verification without a test framework\" section are now false and are outside every task's allowed_paths by design."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests 2 7 9"
+      ],
+      "model_hint": "sonnet"
+    }
+  ],
+  "amendments": [
+    {
+      "date": "2026-09-09",
+      "by": "reviewer T-003, recorded by orchestrator",
+      "change": "Added tests/setup.ts to T-001.allowed_paths retroactively.",
+      "evidence": "vitest.config.ts (T-001) sets setupFiles: [\"./tests/setup.ts\"], which must exist for npm test to start. No task in the original plan owned this file. T-001 created it out of necessity; T-003 reviewed and accepted it as in-scope. Amending the plan to reflect reality rather than leaving a silent gap."
+    }
+  ]
+}

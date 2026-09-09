@@ -101,8 +101,23 @@ times in a run.
 
 ## Verification
 
-There is no test framework and the project does not want one. Verification is
-`npx tsc` / `npm run build`, `curl` against a scratch server, `better-sqlite3`
-queries, and `ts-node` CLI inspectors (`src/inspect-*.ts`) for logic that is hard
-to reach through the UI. Every claim in a report names the command that produced
-it.
+`npm test` (Vitest) covers the pure/near-pure decision logic: flight state
+transitions, pause detection, track-derived duration (`src/flightManager.ts`),
+leg matching (`src/legMatcher.ts`), planned-leg hand-close (`src/plannedLegClose.ts`),
+ICAO/CSV parsing (`src/airports.ts`), and `.lnmpln` route parsing (`src/lnmpln.ts`).
+It never touches `flights.db`, the network, or the live server — `./db` and
+`./airports` are mocked (`tests/helpers/index.ts`), and `.lnmpln` fixtures are
+read read-only from `samples/lnmpln/`. `npm run test:watch` for watch mode,
+`npm run test:types` to typecheck `tests/**`. See `.claude/runs/2026-09-09-vitest-unit-tests/`
+for the design (mock shapes, fake-clock pattern, fixture conventions) and worked
+example.
+
+`src/trafficStore.ts`, `src/db.ts` and `src/ingest.ts` have no unit coverage yet —
+good candidates for a follow-up run, deliberately out of scope for the first pass.
+
+Beyond unit tests, verification is still `npx tsc` / `npm run build`, `curl`
+against a scratch server, `better-sqlite3` queries, and `ts-node` CLI inspectors
+(`src/inspect-*.ts`) for behavior that's easier to eyeball against real fixtures
+than to assert on — the inspectors and the Vitest suite complement each other,
+neither replaced the other. Every claim in a report names the command that
+produced it.

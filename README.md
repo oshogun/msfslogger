@@ -82,6 +82,18 @@ npm start        # serves everything on PORT (default 3000)
 
 Open **http://localhost:3000**.
 
+### Running the tests
+
+```bash
+npm test          # runs the whole suite once, non-interactively
+npm run test:watch # re-runs affected tests on save, for local development
+npm run test:types # typechecks tests/ (npx tsc / npm run build does not)
+```
+
+Tests live under `tests/` (Vitest) and cover the server-side logic in `src/` —
+they are not exercised through the UI. There is no coverage tooling or CI
+config; `npm test` is what a change should pass before it ships.
+
 ---
 
 ## Running with Docker

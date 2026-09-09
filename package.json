@@ -13,7 +13,10 @@
     "start": "node dist/index.js",
     "backfill-icao": "ts-node src/backfill-icao.ts",
     "backfill-durations": "ts-node src/backfill-durations.ts",
-    "backup": "ts-node src/backup.ts"
+    "backup": "ts-node src/backup.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:types": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
@@ -30,6 +33,7 @@
     "@types/node": "^20.11.20",
     "concurrently": "^8.2.2",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "4.1.11"
   }
 }

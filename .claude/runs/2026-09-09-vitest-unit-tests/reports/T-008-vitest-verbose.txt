@@ -1,0 +1,66 @@
+
+ RUN  v4.1.11 /home/guilherme/msfslogger
+
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > needs exactly AIRBORNE_DEBOUNCE_FRAMES consecutive qualifying frames to start a flight 7ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > a non-qualifying frame resets the airborne streak 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > never starts a flight in slew, on the ground, or at or below 30 kt 2ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > starts at 31 kt — the guard is strictly greater than 30 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > needs exactly LANDED_DEBOUNCE_FRAMES consecutive landed frames to end a flight 2ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > a landed frame at exactly 5 kt ground speed resets the landed streak 5ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > simRunning === 0 ends a FLYING flight immediately, once 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > simRunning === 0 while IDLE is a silent no-op 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onCrash() ends a FLYING flight at the last frame's coordinates 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onCrash() is a no-op when no frame has ever arrived 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onCrash() is a no-op when IDLE after a completed flight 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onSimDisconnect() ends a FLYING flight at the last frame's coordinates 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onSimDisconnect() is a no-op when no frame has ever arrived 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > onSimDisconnect() is a no-op when IDLE after a completed flight 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > appState follows startFlight and endFlight 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > a second flight gets the next issued id 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — state machine > resolves the nearest airport exactly twice per flight 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — pause flags and suppression > setPaused(true, flags) publishes the flags; setPaused(false) always clears them 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — pause flags and suppression > records no points while paused, across several RECORD_INTERVAL_MS windows 1ms
+ ✓ tests/flightManager.state.test.ts > FlightManager — pause flags and suppression > a paused landing never ends the flight 1ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — recording interval > records at most one point per RECORD_INTERVAL_MS 7ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — recording interval > a burst of frames inside one window still records one point 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > worked flight (a): a clean 20 s flight reports duration_sec = 20 3ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > duration_sec is the counted gaps plus the tail: 5+5+5 + 3 = 18 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > duration_sec is rounded to the nearest second, not truncated 1ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > a gap of exactly MAX_COUNTED_GAP_MS is counted 1ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > a gap of MAX_COUNTED_GAP_MS + 1 is not counted 4ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > the tail is counted when the flight was not interrupted and it fits the budget 1ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > a tail of exactly MAX_COUNTED_GAP_MS is counted; one millisecond more is not 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > an interrupted tail is excluded even though it fits the budget 1ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — duration from counted gaps > a flight with one over-long gap reports only the counted time 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — interruption excludes the gap that spans it > control: with no interruption at all the same flight is 30 s 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — interruption excludes the gap that spans it > a 10 s pause is excluded from duration_sec even though it is far under the 60 s gap budget 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — interruption excludes the gap that spans it > slew (simRunning === 3) while FLYING records nothing and interrupts the following gap 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — interruption excludes the gap that spans it > worked flight (b): a 35 s pause leaves duration_sec = 15 on a 50 s flight 2ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — accumulators handed to closeFlight > distance is rounded to 0.1 nm and sums recorded points only; maxima ignore unrecorded frames 3ms
+ ✓ tests/flightManager.duration.test.ts > FlightManager — accumulators handed to closeFlight > distance stays 0 and the maxima stay at the takeoff frame when nothing changes 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — planned-leg live status > getPlannedLegStatus() is null before any flight and while a flight is unlinked 7ms
+ ✓ tests/flightManager.test.ts > FlightManager — planned-leg live status > names the far end of the segment the aircraft is beside, and the remaining chain from it 4ms
+ ✓ tests/flightManager.test.ts > FlightManager — planned-leg live status > breaks an exact cross-track tie towards the earlier segment 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — planned-leg live status > picks the right segment across the antimeridian rather than the ~360°-wide one 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a MATCHED result links exactly once and populates the status cache 3ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a refusal links nothing and leaves the status null 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a throw from getActiveTripId() leaves the flight recorded and unlinked 3ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a throw from getPlannedLegCandidatesForActiveTrip() leaves the flight recorded and unlinked 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a throw from getPlannedLegById() leaves the flight recorded and unlinked 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > a throw from linkFlightToPlannedLeg() leaves the flight recorded and unlinked 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — auto-link at takeoff > insertFlight itself is NOT wrapped — its throw propagates out of onFrame 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — arrival on the planned leg > landing inside ARRIVAL_RADIUS_NM of the planned destination records 'flown' 3ms
+ ✓ tests/flightManager.test.ts > FlightManager — arrival on the planned leg > landing outside ARRIVAL_RADIUS_NM records 'diverted' and keeps the link 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — arrival on the planned leg > records nothing when the flight carries no link 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — arrival on the planned leg > a throw from recordPlannedLegArrival does not escape endFlight 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — refreshPlannedLegForFlight > is a no-op for an id that is not the current flight 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — refreshPlannedLegForFlight > is a no-op when no flight is in progress 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — refreshPlannedLegForFlight > clears the cache when the flight row no longer carries a link 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — refreshPlannedLegForFlight > rebuilds the cache when the flight row gains a link 2ms
+ ✓ tests/flightManager.test.ts > FlightManager — refreshPlannedLegForFlight > leaves the cache empty when the linked leg row has gone 1ms
+
+ Test Files  3 passed (3)
+      Tests  57 passed (57)
+   Start at  13:36:47
+   Duration  472ms (transform 557ms, setup 77ms, import 600ms, tests 133ms, environment 0ms)
+

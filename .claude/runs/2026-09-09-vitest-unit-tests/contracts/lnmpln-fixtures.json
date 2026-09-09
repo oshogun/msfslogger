@@ -1,0 +1,155 @@
+{
+  "_note": "Measured, not guessed. Produced by running parseLnmpln()/chainOrderForBatch() from src/lnmpln.ts over every committed fixture under samples/lnmpln/ on 2026-09-09 under Node 20.20.2 + vitest 4.1.11. See design.md §8.2. Reproduce with .claude/runs/2026-09-09-vitest-unit-tests/prototypes/ or `npx ts-node src/inspect-lnmpln.ts 'samples/lnmpln/*.lnmpln'`.",
+
+  "real": [
+    {
+      "file": "VFR Santa Barbara Muni (KSBA) to Monterey Rgnl (KMRY).lnmpln",
+      "departure": { "ident": "KSBA", "isAirport": true, "lat": 34.426201, "lon": -119.841507 },
+      "destination": { "ident": "KMRY", "isAirport": true, "lat": 36.586952, "lon": -121.843079 },
+      "waypointCount": 7,
+      "alternateCount": 0,
+      "isSnippet": false,
+      "approxDistanceNm": 201.22,
+      "cruiseAltFt": 7500,
+      "flightplanType": "VFR",
+      "aircraftType": "C172",
+      "createdAt": "2026-09-04T21:08:44.000Z",
+      "sourceProgram": "Little Navmap 3.0.18",
+      "navDataCycle": "1801",
+      "warnings": [],
+      "route": "KSBA:AIRPORT SUDDO:WAYPOINT OINGO:WAYPOINT ZORAN:WAYPOINT HMPBK:WAYPOINT GIPVY:WAYPOINT KMRY:AIRPORT"
+    },
+    {
+      "file": "VFR Monterey Rgnl (KMRY) to Charles M Schulz - Sonoma Coun (KSTS).lnmpln",
+      "departure": { "ident": "KMRY", "isAirport": true, "lat": 36.586952, "lon": -121.843079 },
+      "destination": { "ident": "KSTS", "isAirport": true, "lat": 38.509693, "lon": -122.812897 },
+      "waypointCount": 5,
+      "alternateCount": 0,
+      "isSnippet": false,
+      "approxDistanceNm": 140.0,
+      "cruiseAltFt": 2500,
+      "flightplanType": "VFR",
+      "aircraftType": "C172",
+      "createdAt": "2026-09-04T21:08:13.000Z",
+      "sourceProgram": "Little Navmap 3.0.18",
+      "navDataCycle": "1801",
+      "warnings": [],
+      "route": "KMRY:AIRPORT WP1:USER WP2:USER WP3:USER KSTS:AIRPORT"
+    },
+    {
+      "file": "VFR Charles M Schulz - Sonoma Coun (KSTS) to California Redwood Coast-Humbo (KACV).lnmpln",
+      "departure": { "ident": "KSTS", "isAirport": true, "lat": 38.509693, "lon": -122.812897 },
+      "destination": { "ident": "KACV", "isAirport": true, "lat": 40.977814, "lon": -124.108475 },
+      "waypointCount": 6,
+      "alternateCount": 0,
+      "isSnippet": false,
+      "approxDistanceNm": 191.05,
+      "cruiseAltFt": 3500,
+      "flightplanType": "VFR",
+      "aircraftType": "C172",
+      "createdAt": "2026-09-04T21:07:47.000Z",
+      "sourceProgram": "Little Navmap 3.0.18",
+      "navDataCycle": "1801",
+      "warnings": [],
+      "route": "KSTS:AIRPORT WP1:USER WP2:USER WP3:USER JEBGA:WAYPOINT KACV:AIRPORT"
+    },
+    {
+      "file": "VFR Monterey Rgnl (KMRY) to San Francisco Intl (KSFO).lnmpln",
+      "departure": { "ident": "KMRY", "isAirport": true, "lat": 36.586952, "lon": -121.843079 },
+      "destination": { "ident": "KSFO", "isAirport": true, "lat": 37.618023, "lon": -122.375519 },
+      "waypointCount": 18,
+      "alternateCount": 0,
+      "isSnippet": false,
+      "approxDistanceNm": 101.14,
+      "cruiseAltFt": 3500,
+      "flightplanType": "VFR",
+      "aircraftType": "C172",
+      "createdAt": "2026-09-05T02:59:51.000Z",
+      "sourceProgram": "Little Navmap 3.0.18",
+      "navDataCycle": "2609",
+      "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT"],
+      "route": "KMRY:AIRPORT WP1..WP14:USER JUMDA:WAYPOINT WADVA:WAYPOINT KSFO:AIRPORT"
+    },
+    {
+      "file": "IFR San Francisco Intl (KSFO) to Los Angeles Intl (KLAX).lnmpln",
+      "departure": { "ident": "KSFO", "isAirport": true, "lat": 37.618023, "lon": -122.375519 },
+      "destination": { "ident": "KLAX", "isAirport": true, "lat": 33.942474, "lon": -118.409332 },
+      "waypointCount": 3,
+      "alternateCount": 0,
+      "isSnippet": false,
+      "approxDistanceNm": 293.48,
+      "cruiseAltFt": 27000,
+      "flightplanType": "IFR",
+      "aircraftType": "C172",
+      "createdAt": "2026-09-04T21:49:09.000Z",
+      "sourceProgram": "Little Navmap 3.0.18",
+      "navDataCycle": "2609",
+      "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT"],
+      "route": "KSFO:AIRPORT EBAYE:WAYPOINT KLAX:AIRPORT"
+    }
+  ],
+
+  "chainOrderForBatch": [
+    {
+      "case": "the VFR trio in alphabetical (= reverse route) order: KSTS->KACV, KMRY->KSTS, KSBA->KMRY",
+      "result": { "order": [2, 1, 0], "resolved": true, "reason": "CHAINED" }
+    },
+    {
+      "case": "all four VFR files (KMRY has two successors)",
+      "result": { "order": [0, 1, 2, 3], "resolved": false, "reason": "AMBIGUOUS_SUCCESSOR" }
+    },
+    {
+      "case": "the IFR file alone",
+      "result": { "order": [0], "resolved": true, "reason": "SINGLE_LEG" }
+    },
+    {
+      "case": "synthetic/chain-roundtrip-1-KAAA-to-KBBB + chain-roundtrip-2-KBBB-to-KAAA",
+      "result": { "order": [0, 1], "resolved": false, "reason": "NO_UNIQUE_HEAD" }
+    },
+    {
+      "case": "a real VFR leg + synthetic/snippet-non-airport-endpoints",
+      "result": { "order": [0, 1], "resolved": false, "reason": "SNIPPET_IN_BATCH" }
+    },
+    {
+      "case": "BROKEN_CHAIN has no committed fixture pair; build it in-test from two parsed plans with no shared ident, or leave it uncovered and say so",
+      "result": null
+    }
+  ],
+
+  "synthetic_rejected": {
+    "bad-comment-swallowed-waypoints.lnmpln": "TOO_FEW_WAYPOINTS",
+    "bad-empty.lnmpln": "EMPTY_FILE",
+    "bad-lat-91.lnmpln": "BAD_COORDINATE",
+    "bad-lon-minus-181.lnmpln": "BAD_COORDINATE",
+    "bad-missing-ident.lnmpln": "MISSING_IDENT",
+    "bad-missing-pos.lnmpln": "MISSING_POSITION",
+    "bad-no-flightplan.lnmpln": "NO_FLIGHTPLAN",
+    "bad-not-xml.lnmpln": "NO_FLIGHTPLAN",
+    "bad-one-waypoint.lnmpln": "TOO_FEW_WAYPOINTS",
+    "bad-truncated-comment.lnmpln": "NOT_XML",
+    "bad-zero-waypoints.lnmpln": "TOO_FEW_WAYPOINTS"
+  },
+  "_synthetic_rejected_note": "bad-not-xml.lnmpln rejects with NO_FLIGHTPLAN, NOT the NOT_XML its filename suggests: fast-xml-parser accepts the text and finds no <LittleNavmap><Flightplan>. NOT_XML comes from bad-truncated-comment.lnmpln. Do not infer a reject code from a filename.",
+
+  "synthetic_accepted": {
+    "alternates-optional-pos.lnmpln":            { "dep": "KSFO", "dst": "KLAX", "wps": 2, "alts": 2, "snippet": false, "approxNm": 293.23, "warnings": ["ALTERNATE_POSITION_MISSING"] },
+    "approach-published-arinc-suffix.lnmpln":    { "dep": "KSFO", "dst": "KLAX", "wps": 3, "alts": 0, "snippet": false, "approxNm": 293.48, "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT"] },
+    "bom.lnmpln":                                { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": ["BOM_STRIPPED"] },
+    "chain-roundtrip-1-KAAA-to-KBBB.lnmpln":     { "dep": "KAAA", "dst": "KBBB", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "chain-roundtrip-2-KBBB-to-KAAA.lnmpln":     { "dep": "KBBB", "dst": "KAAA", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "creation-date-no-offset.lnmpln":            { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": ["CREATION_DATE_NO_OFFSET"] },
+    "creation-date-two-digit-offset.lnmpln":     { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "cruising-alt-disagree.lnmpln":              { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "cruising-alt-f-missing.lnmpln":             { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": ["CRUISE_ALT_F_MISSING"] },
+    "departure-parking.lnmpln":                  { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "remarks-comment-and-description.lnmpln":    { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": ["COMMENT_AND_DESCRIPTION_BOTH_PRESENT", "COMMENT_AND_DESCRIPTION_BOTH_PRESENT"] },
+    "remarks-comment-tag.lnmpln":                { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": [] },
+    "remarks-description-after-pos.lnmpln":      { "dep": "KSBA", "dst": "KMRY", "wps": 2, "alts": 0, "snippet": false, "approxNm": 162.47, "warnings": ["DESCRIPTION_INSTEAD_OF_COMMENT", "DESCRIPTION_INSTEAD_OF_COMMENT", "DESCRIPTION_INSTEAD_OF_COMMENT"] },
+    "sid-customdepart.lnmpln":                   { "dep": "KSFO", "dst": "KLAX", "wps": 2, "alts": 0, "snippet": false, "approxNm": 293.23, "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT"] },
+    "snippet-non-airport-endpoints.lnmpln":      { "dep": "WP1",  "dst": "WP2",  "wps": 3, "alts": 0, "snippet": true,  "approxNm": 51.50,  "warnings": ["SNIPPET_DEPARTURE_NOT_AIRPORT", "SNIPPET_DESTINATION_NOT_AIRPORT"] },
+    "two-waypoint-blocks-two-alternate-blocks.lnmpln": { "dep": "KSFO", "dst": "KLAX", "wps": 4, "alts": 3, "snippet": false, "approxNm": 325.05, "warnings": ["MULTIPLE_WAYPOINT_BLOCKS"] },
+    "unknown-elements.lnmpln":                   { "dep": "KSFO", "dst": "KLAX", "wps": 2, "alts": 1, "snippet": false, "approxNm": 293.23, "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT", "UNKNOWN_ELEMENT"] },
+    "waypoint-pos-without-alt.lnmpln":           { "dep": "KSBA", "dst": "KMRY", "wps": 3, "alts": 0, "snippet": false, "approxNm": 171.04, "warnings": ["WAYPOINT_ALT_INVALID"] },
+    "xml-comments-nested-unbalanced.lnmpln":     { "dep": "KSFO", "dst": "KLAX", "wps": 3, "alts": 0, "snippet": false, "approxNm": 293.48, "warnings": ["PROCEDURES_PRESENT_WAYPOINTS_ABSENT"] }
+  }
+}

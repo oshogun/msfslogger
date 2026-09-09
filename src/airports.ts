@@ -3,7 +3,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 
-interface Airport {
+export interface Airport {
   icao: string;
   name: string;
   lat: number;
@@ -26,7 +26,7 @@ function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function parseCSVLine(line: string): string[] {
+export function parseCSVLine(line: string): string[] {
   const fields: string[] = [];
   let current = '';
   let inQuotes = false;
@@ -56,7 +56,7 @@ function download(url: string): Promise<string> {
   });
 }
 
-function parseCSV(csv: string): Airport[] {
+export function parseCSV(csv: string): Airport[] {
   const lines = csv.split('\n');
   const result: Airport[] = [];
   // CSV columns: id,ident,type,name,latitude_deg,longitude_deg,...,gps_code,...
@@ -76,10 +76,14 @@ function parseCSV(csv: string): Airport[] {
   return result;
 }
 
+export function setAirports(list: Airport[]): void {
+  airports = list;
+}
+
 export async function initAirports(): Promise<void> {
   if (fs.existsSync(AIRPORTS_PATH)) {
     try {
-      airports = JSON.parse(fs.readFileSync(AIRPORTS_PATH, 'utf8')) as Airport[];
+      setAirports(JSON.parse(fs.readFileSync(AIRPORTS_PATH, 'utf8')) as Airport[]);
       console.log(`[Airports] Loaded ${airports.length} airports from cache`);
       return;
     } catch {
@@ -90,12 +94,12 @@ export async function initAirports(): Promise<void> {
   console.log('[Airports] Downloading airport database from OurAirports...');
   try {
     const csv = await download(AIRPORTS_URL);
-    airports = parseCSV(csv);
+    setAirports(parseCSV(csv));
     fs.writeFileSync(AIRPORTS_PATH, JSON.stringify(airports));
     console.log(`[Airports] Cached ${airports.length} airports to airports.json`);
   } catch (err) {
     console.warn('[Airports] Download failed — ICAO lookup unavailable:', err);
-    airports = [];
+    setAirports([]);
   }
 }
 

@@ -70,10 +70,18 @@ Working files, scratch databases and throwaway servers go in the session
 scratchpad or `/tmp`, never in the repo. Run artifacts that are meant to survive
 go under `.claude/runs/<run-id>/` — see `.claude/runs/README.md`.
 
-## Verification without a test framework
+## Verification
 
-This project has no test runner and does not want one. Verification is: `npx
-tsc` / `npm run build`, `curl` against a scratch server, `better-sqlite3`
-queries, and purpose-built `ts-node` CLI inspectors (`src/inspect-*.ts`) for
-logic that is hard to reach through the UI. Claims in a report must name the
-command that produced them.
+`npm test` runs the Vitest suite (`tests/`) — hermetic, no network, no live
+`flights.db`, no server. `./db` and `./airports` are mocked via
+`tests/helpers/index.ts`; time is faked (`vi.useFakeTimers`); `.lnmpln`
+fixtures are read read-only from `samples/lnmpln/`. `npm run test:watch` for
+watch mode, `npm run test:types` to typecheck `tests/**` (not covered by the
+main `tsconfig.json`/`npm run build`). Full contract in
+`.claude/runs/2026-09-09-vitest-unit-tests/design.md`.
+
+Beyond unit tests, verification is: `npx tsc` / `npm run build`, `curl` against
+a scratch server, `better-sqlite3` queries, and purpose-built `ts-node` CLI
+inspectors (`src/inspect-*.ts`) for logic that's easier to check against real
+fixtures than to assert on. Claims in a report must name the command that
+produced them.

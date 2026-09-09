@@ -1,0 +1,57 @@
+T-008 mutation check — src/flightManager.ts mutated in an ISOLATED SCRATCH COPY
+(the repo's own src/flightManager.ts was never touched; git diff --stat is empty).
+
+Harness: $SCRATCH/mut = cp -r src tests + vitest.config.ts/tsconfig*.json/package.json,
+node_modules symlinked; each mutant applied with perl -0pi to $SCRATCH/mut/src/flightManager.ts,
+then `npx vitest run tests/flightManager*.test.ts` from $SCRATCH/mut.
+"applied" column confirms the mutation actually changed the file.
+
+BASELINE (no mutation)                              57 passed
+
+mutant                                              applied   result
+--------------------------------------------------- --------- -----------------------
+AIRBORNE_DEBOUNCE_FRAMES 3->2                       applied   3 failed  KILLED
+AIRBORNE_DEBOUNCE_FRAMES 3->4                       applied   46 failed KILLED
+LANDED_DEBOUNCE_FRAMES 10->9                        applied   7 failed  KILLED
+frame.airspeedKnots > 30  ->  >= 30                 applied   2 failed  KILLED
+frame.groundSpeedKnots < 5  ->  <= 5                applied   1 failed  KILLED
+drop !this.interrupted from the gap guard (:493)    applied   3 failed  KILLED
+gap <= MAX_COUNTED_GAP_MS  ->  gap <                applied   1 failed  KILLED
+drop !this.interrupted from the tail guard (:276)   applied   1 failed  KILLED
+tailMs <= MAX_COUNTED_GAP_MS  ->  tailMs <          applied   1 failed  KILLED
+drop the tail accumulation entirely                 applied   3 failed  KILLED
+recordPoint gate  <  ->  <=  (:475)                 applied   12 failed KILLED
+RECORD_INTERVAL_MS 5000 -> 4000                     applied   7 failed  KILLED
+lonDeltaDeg -> raw (to - from)                      applied   1 failed  KILLED
+distance not rounded (drop Math.round(d*10)/10)     applied   1 failed  KILLED
+deviation not rounded                               applied   2 failed  KILLED
+'flown'/'diverted' swapped                          applied   2 failed  KILLED
+setPaused: drop `if (paused) this.interrupted=true` applied   1 failed  KILLED
+onFrame FLYING: drop `this.interrupted = true`      applied   1 failed  KILLED
+onFrame FLYING: `if (inSlew||isPaused)` -> if(false)applied   5 failed  KILLED
+writePoint: drop `this.interrupted = false` reset   applied   3 failed  KILLED
+startFlight: pointCount = 1 instead of 0            applied   5 failed  KILLED
+endFlight: Math.round -> Math.floor on durationSec  applied   1 failed  KILLED
+appState.currentFlightId not cleared on endFlight   applied   2 failed  KILLED
+maxAltitude raised from every frame, not points     applied   1 failed  KILLED
+crossTrackNm: drop the 0..1 clamp on t              applied   2 failed  KILLED
+getPlannedLegStatus: nextIdx = bestSegment          applied   4 failed  KILLED
+getPlannedLegStatus: drop remainingFromNm chain     applied   2 failed  KILLED
+getPlannedLegStatus: `d < best` -> `d <= best`      applied   1 failed  KILLED
+autoLinkPlannedLeg: swallow -> rethrow              applied   4 failed  KILLED
+refreshPlannedLegForFlight: drop currentFlightId    applied   2 failed  KILLED
+link source 'auto' -> 'manual'                      applied   3 failed  KILLED
+
+SURVIVORS (2), both believed equivalent under any test this suite is allowed to write:
+
+1. deviationNm <= ARRIVAL_RADIUS_NM  ->  deviationNm <          57 passed  SURVIVED
+   Only a landing at EXACTLY 10.000000 nm distinguishes them. design.md §10.5
+   forbids constructing an exact radius boundary from coordinates (northOfNm(p,10)
+   measures 10.000000000000002), and ARRIVAL_RADIUS_NM — unlike matchPlannedLeg's
+   radiusNm — has no per-call override, so the "measure first, then set the radius"
+   escape hatch does not exist here. Left unkilled deliberately.
+
+2. onCrash(): `if (state==='FLYING' && lastFrame)` -> `if (lastFrame)`  57 passed  SURVIVED
+   Equivalent: endFlight() returns immediately when currentFlightId === null
+   (src/flightManager.ts:271), which is exactly the IDLE case. The state test is
+   redundant with that guard, so no observable behaviour changes.
