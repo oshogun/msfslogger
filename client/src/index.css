@@ -728,7 +728,12 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 }
 
 /* ── App layout (Header + Sidebar + routed content) ── */
-.app-body { display: flex; align-items: flex-start; }
+/* min-height keeps the row at least a full viewport tall (61px is the
+   header) so a short page's sidebar has something to stretch to fill —
+   without it, .app-body is only as tall as .app-main's own content, and
+   a stretched sidebar just matches that same short height instead of the
+   window. Content taller than the viewport still grows this normally. */
+.app-body { display: flex; align-items: flex-start; min-height: calc(100vh - 61px); }
 /* min-width: 0 is load-bearing: without it a flex child holding a Leaflet
    map (#map/#atlas-map) refuses to shrink below its content's intrinsic
    width and blows out the layout instead of scrolling. */
