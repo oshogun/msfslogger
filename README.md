@@ -4,7 +4,7 @@ Automatic flight logger for Microsoft Flight Simulator 2020/2024 and FSX. Record
 
 ## How it works
 
-The server records one data point per second while airborne, and saves completed flights to `flights.db`. Flight time is measured from the recorded track rather than the wall clock, so any interruption — **Active Pause**, a regular pause, a menu, slew mode, a frozen sim, even the agent dropping out — is excluded automatically. The web UI lets you browse flights, view GPS tracks and altitude charts, group flights into trips, edit or delete records, attach a PDF flight plan to each flight (stored in `flight_plans/`), and [export a flight or a whole trip as a PDF](#pdf-export).
+The server records one data point per second while airborne, and saves completed flights to `flights.db`. Flight time is measured from the recorded track rather than the wall clock, so any interruption — **Active Pause**, a regular pause, a menu, slew mode, a frozen sim, even the agent dropping out — is excluded automatically. The web UI's sidebar is the primary navigation — every trip (expandable to its legs) and every standalone flight, plus links to the Home landing page and the full All Flights browser. **Home** is a summary landing page (live status, totals, recent flights); **All Flights** (`/flights`) is the browser — every flight and trip in one table, with multi-select for grouping flights into trips, [combining](#combining-flights) them, and KML export. A flight's or trip's own page is where you view GPS tracks and altitude charts, edit or delete records, attach a PDF flight plan (stored in `flight_plans/`), and [export as a PDF](#pdf-export).
 
 Each trip can be viewed two ways. **Overview** is the working view — stats, notes, the combined route map and an editable legs table. **Atlas** (`/trip/:id?view=atlas`) is the analytical one: every leg drawn on a single map tinted from the trip's first flight to its last, plus airports, aircraft breakdown, countries visited (derived from ICAO prefixes), the longest unbroken chain of legs, and — for a trip with an [imported route](#trip-plans-little-navmap-import) — progress flown against that route's approximate total distance. Sections that say nothing about a given trip hide themselves, so a one-leg hop stays uncluttered.
 
@@ -191,16 +191,16 @@ that PID 1 would otherwise leave as zombies.
 
 ## KML export
 
-The **Export KML** button — on a flight page, a trip page, and in the Home
-page's multi-select toolbar — produces a data export of the flown track(s) for
-opening in Google Earth or another GIS tool, rather than a rendered document
-like the PDF export above.
+The **Export KML** button — on a flight page, a trip page, and in the All
+Flights page's (`/flights`) multi-select toolbar — produces a data export of
+the flown track(s) for opening in Google Earth or another GIS tool, rather
+than a rendered document like the PDF export above.
 
 | Endpoint | Produces |
 |---|---|
 | `GET /api/flights/:id/export.kml` | One flight's track |
 | `GET /api/trips/:id/export.kml` | Every flight in the trip, one folder per flight, in `start_time` order |
-| `POST /api/flights/export.kml` | An arbitrary set of flights (used by the Home page multi-select toolbar) |
+| `POST /api/flights/export.kml` | An arbitrary set of flights (used by the All Flights page's multi-select toolbar) |
 
 The third endpoint is a `POST` because the flight set is chosen in the browser
 and doesn't fit in a URL the way a single id does; it takes the ids in a JSON
@@ -324,15 +324,15 @@ override.
 ## Combining flights
 
 A pause long enough for MSFS or the agent to drop out mid-flight gets logged
-as two separate flights instead of one. From the flight log's **Home** page,
-check exactly two flights and click **Combine Selected** to merge them into
-one: the two legs are ordered by start time regardless of which order you
-selected them in, their recorded durations are summed (so the gap between
-them is never counted as flown time), and a short synthetic track is
-interpolated between the last point of the first leg and the first point of
-the second so the map and altitude chart don't show a jump. Both original
-flights are deleted once the merge succeeds — this cannot be undone. A flight
-with no recorded points can't be selected for combining.
+as two separate flights instead of one. From the **All Flights** page
+(`/flights`), check exactly two flights and click **Combine Selected** to
+merge them into one: the two legs are ordered by start time regardless of
+which order you selected them in, their recorded durations are summed (so
+the gap between them is never counted as flown time), and a short synthetic
+track is interpolated between the last point of the first leg and the first
+point of the second so the map and altitude chart don't show a jump. Both
+original flights are deleted once the merge succeeds — this cannot be
+undone. A flight with no recorded points can't be selected for combining.
 
 The same checkboxes also drive **New Trip** and **Add to Trip**, for grouping
 selected flights into a trip.

@@ -1,6 +1,8 @@
 import { Routes, Route } from 'react-router-dom';
 import { Header } from './components/Header';
+import { Sidebar } from './components/Sidebar';
 import { Home } from './pages/Home';
+import { AllFlights } from './pages/AllFlights';
 import { FlightDetail } from './pages/FlightDetail';
 import { TripDetail } from './pages/TripDetail';
 import { Device } from './pages/Device';
@@ -15,11 +17,17 @@ function AppShell() {
   return (
     <>
       <Header status={status} serverError={serverError} />
-      <Routes>
-        <Route path="/" element={<Home status={status} />} />
-        <Route path="/flight/:id" element={<FlightDetail />} />
-        <Route path="/trip/:id" element={<TripDetail />} />
-      </Routes>
+      <div className="app-body">
+        <Sidebar />
+        <div className="app-main">
+          <Routes>
+            <Route path="/" element={<Home status={status} />} />
+            <Route path="/flights" element={<AllFlights />} />
+            <Route path="/flight/:id" element={<FlightDetail />} />
+            <Route path="/trip/:id" element={<TripDetail />} />
+          </Routes>
+        </div>
+      </div>
     </>
   );
 }

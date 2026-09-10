@@ -1,0 +1,10 @@
+PASS — /trip/1 @800x900 no h-scroll: scrollWidth=800 innerWidth=800
+PASS — /trip/2 (45-leg fixture) @800x900 no h-scroll: scrollWidth=800 innerWidth=800
+PASS — /trip/1?view=atlas @800x900 no h-scroll (regression): scrollWidth=800 innerWidth=800
+PASS — /trip/1?view=atlas leaflet non-zero (regression): {"w":710,"h":518}
+PASS — /flight/65 @800x900 no h-scroll (regression): scrollWidth=800 innerWidth=800
+PASS — /trip/1 @1280x900 no h-scroll (regression): scrollWidth=1280 innerWidth=1280
+PASS — /trip/1 @1280x900 map width >=500 (regression): {"w":970,"h":418}
+PASS — .legs-table-wrap exists and can scroll internally: {"scrollWidth":784,"clientWidth":712}
+
+8/8 checks passed

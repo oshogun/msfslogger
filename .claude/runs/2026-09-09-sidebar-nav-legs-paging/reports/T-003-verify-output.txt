@@ -1,0 +1,35 @@
+fixture: trip2.id=2 flightInTrip2=66
+PASS /print/trip/1: no .sidebar
+PASS /print/trip/1: no .header
+PASS /print/flight/1: no .sidebar
+PASS /print/flight/1: no .header
+PASS /device: no .sidebar
+PASS /device: no .header
+PASS /override: no .sidebar
+PASS /override: no .header
+PASS /: exactly one .sidebar
+PASS /trip/1: exactly one .sidebar
+PASS /flight/1: exactly one .sidebar
+PASS trip row count == GET /api/trips length
+PASS trip 1 sub-item count == flights.length
+PASS standalone-flight item count == ungrouped flights
+NUMBERS trips=2 trip1Legs=46 ungrouped=3
+PASS /trip/2: exactly one active trip item, it is trip 2
+PASS /flight/66: leg sub-item is-active
+PASS /flight/66: parent trip auto-expanded without a click
+PASS clicking trip item navigates to /trip/:id
+PASS clicking disclosure does not navigate
+PASS collapse: .sidebar gets is-collapsed
+PASS collapse: localStorage sidebarCollapsed === '1'
+PASS collapse persists across reload
+PASS toggle stays visible/clickable (width > 0) when collapsed
+PASS #map width >= 500px at 1280x900
+PASS .leaflet-container height > 0
+PASS /: no horizontal overflow
+PASS /trip/1: no horizontal overflow
+PASS /flight/1: no horizontal overflow
+NUMBERS #flights-table rows=54 expected=54
+PASS #flights-table row count matches Home's own row math
+PASS no console/page errors on /
+
+30/30 checks passed

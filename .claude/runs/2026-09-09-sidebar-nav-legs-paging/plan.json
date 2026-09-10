@@ -1,0 +1,222 @@
+{
+  "run_id": "2026-09-09-sidebar-nav-legs-paging",
+  "goal": "Give the client a persistent left-rail navigation sidebar (trips, expandable to their legs, plus standalone flights, with an active-route highlight) mounted inside AppShell only, turn Home into a lightweight landing view backed by the data /api/trips and /api/flights already return, relocate Home's multi-select flight table and its combine / new-trip / add-to-trip / export-KML toolbar to a new /flights page so no existing capability is lost, and paginate TripDetail's legs table client-side at exactly 20 rows per page over the array interleaveTripRows already produces, with the page number carried in ?page= via the existing useSearchParams instance. Client-only: no file under src/ changes, no new endpoint, no schema change.",
+  "frozen_decisions": [
+    "Sidebar scope: sidebar *replaces* `Home`'s combined table as primary nav. `Home` becomes a lightweight landing/dashboard, not the trip/flight browser.",
+    "Legs pagination: 20 legs per page, implemented client-side (windowing the array already returned by `GET /api/trips/:id`) — explicitly not a backend/API change. The realistic case is \"dozens of legs,\" not thousands; no requirement to optimize for 100+-leg trips beyond correct paging.",
+    "Design step is skipped: both features wire up existing contracts only. There is no design.md for this run — `ctx.sh design` has nothing to return and tasks must not wait for one.",
+    "getTripById's eager point-track loading is out of scope. No task may add a ?points=0 flag or lazy per-leg loading.",
+    "Never touch the user's running server on port 3000 or the live flights.db. Verification runs on another port against a copy."
+  ],
+  "sequencing_rationale": [
+    "No server change is needed and none is planned. The sidebar's two data sources (GET /api/trips, which already embeds each trip's flights with points stripped, and GET /api/flights) are exactly the two calls Home.tsx makes today at lines 24-27, and the standalone-flight set is the `tripFlightIds` computation already at Home.tsx:161-163. Pagination slices `interleaveTripRows(trip.flights, trip.planned_legs)`, an array TripDetail already holds in full. Any task that finds itself editing a file under src/ has hit a frozen decision and must stop and escalate rather than proceed.",
+    "Three phases, because the shared file (client/src/index.css) means these tasks can never run in parallel anyway, and a reviewer gate between them is the only thing that makes the overlap safe. Phase order is chosen so the tree is shippable at every gate — this matters more than usual here: the user's live server serves client/dist off disk, so `npm run build:client` (needed to verify anything) immediately changes what their browser gets on reload.",
+    "Phase 1 is pagination: the smallest, most isolated change (one page component, a handful of CSS lines), independent of the layout rework, and it lands user-visible value in one short reviewed step.",
+    "Phase 2 makes the sidebar exist and work while Home is left completely alone. Navigation therefore ships *before* the browser it replaces is dismantled — the escape-hatch-first ordering. If phase 3 never landed, the app would still be fully usable.",
+    "Phase 3 dismantles Home: the table and its toolbar move verbatim to a new /flights page, Home becomes the landing view, the sidebar gains its 'All flights' entry, and README is corrected. This is the only phase that can lose functionality, so its reviewer is opus.",
+    "FLAGGED — a scope call the Orchestrator should sanity-check with the user: the frozen decision retires Home's combined table, but that table is also the only home of four capabilities the README documents (Combine Selected, New Trip from selection, Add to Trip, Export KML for a flight set — README lines ~203 and ~324-335). Deleting them was not asked for, so T-005 moves them intact to /flights rather than dropping them. This does not re-litigate the frozen decision (the sidebar, not that table, is primary nav) but it does add one route and one page beyond the literal wording of the intake. If the user would rather those actions live somewhere else, say so before phase 3 starts — it is cheap now and expensive after.",
+    "Verification recipe, written once as tools/scratch-server.sh by T-001 and reused by T-003 and T-005. src/db.ts:9 and src/server.ts:123 resolve both the database and the static client from process.cwd(), so a scratch server is a scratch *cwd*:\n  SCRATCH=<scratchpad>/ui; mkdir -p \"$SCRATCH/client\"\n  cp flights.db flights.db-wal flights.db-shm \"$SCRATCH/\" 2>/dev/null\n  ln -sfn /home/guilherme/msfslogger/client/dist \"$SCRATCH/client/dist\"\n  ln -sfn /home/guilherme/msfslogger/airports.json \"$SCRATCH/airports.json\"\n  ln -sfn /home/guilherme/msfslogger/flight_plans \"$SCRATCH/flight_plans\"\n  (cd \"$SCRATCH\" && export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; PORT=3100 node /home/guilherme/msfslogger/dist/index.js)\nThe existing dist/index.js is used as-is — no server code changes in this run, so nothing needs rebuilding on the server side. Kill the scratch server when the task ends.",
+    "DOM assertions use puppeteer, already a root dependency (src/pdfExport.ts:25). Launch with the same args it uses — ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage'] — because Ubuntu 24.04's AppArmor policy blocks Chromium's sandbox on this box. This is what makes the UI acceptance criteria falsifiable without a browser test framework; `npm test` (Vitest) excludes client/** by config and gains nothing here.",
+    "DevOps/Ship is skipped: nothing about build, packaging or deploy changes. `npm run build` is the existing path and each implementation task runs it as part of its own acceptance."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Legs pagination",
+      "ships": "A trip with more than 20 legs renders 20 rows at a time with Prev/Next controls, and the page number survives reload and browser Back via ?page=. Trips with 20 or fewer rows look exactly as they do today.",
+      "tasks": ["T-001", "T-002"]
+    },
+    {
+      "phase": 2,
+      "name": "Persistent sidebar navigation",
+      "ships": "A left rail is visible on /, /trip/:id and /flight/:id listing every trip (expandable to its legs) and every standalone flight, with the open trip or flight highlighted, and a collapse toggle that persists. Print, device and override pages are untouched. Home still works exactly as before.",
+      "tasks": ["T-003", "T-004"]
+    },
+    {
+      "phase": 3,
+      "name": "Home becomes a landing view; the flight browser moves to /flights",
+      "ships": "Home is a summary dashboard (live panel, totals, recent flights); the full flight table with combine / new-trip / add-to-trip / export-KML lives at /flights, reachable from the sidebar; README matches.",
+      "tasks": ["T-005", "T-006"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "dispatcher",
+      "title": "Paginate TripDetail's legs table at 20 rows per page, page number in ?page=",
+      "goal": "Window the legs table in client/src/pages/TripDetail.tsx to 20 rows per page, client-side, over the existing `mergedRows` array. Do not change what is fetched. Implement exactly this, do not improvise an alternative:\n\n1. `const LEGS_PER_PAGE = 20;` at module scope, next to LEG_COLORS (TripDetail.tsx:11).\n2. Reuse the component's existing `useSearchParams()` instance (line 23) — do not call the hook a second time. Derive `const pageCount = Math.max(1, Math.ceil(mergedRows.length / LEGS_PER_PAGE))` and `const page = clamp(parseInt(searchParams.get('page') ?? '1', 10) || 1, 1, pageCount)`. A missing, non-numeric, zero, negative or too-large value must clamp silently — never throw, never render an empty table, never rewrite the URL on its own.\n3. `const pageRows = mergedRows.slice((page - 1) * LEGS_PER_PAGE, page * LEGS_PER_PAGE);` and render `pageRows` in the tbody instead of `mergedRows`. The empty-state row still keys off `mergedRows.length === 0`.\n4. A `setPage(n)` helper that mirrors `setView` (TripDetail.tsx:89-94) exactly: copy searchParams, `params.set('page', String(n))` or `params.delete('page')` when n === 1, then `setSearchParams(params, { replace: true })`. `replace: true` is deliberate and matches the ?view= precedent — it also gives the required Back behaviour, since leaving the page for /flight/:id and pressing Back returns to the URL that still carries ?page=N.\n5. Controls render *only* when `mergedRows.length > LEGS_PER_PAGE`, immediately after the </table> inside .legs-section, as `<div className=\"legs-pagination\">` containing: a Prev button (disabled at page 1), the text `Page {page} of {pageCount} · legs {from}–{to} of {mergedRows.length}`, and a Next button (disabled at the last page). No numbered page buttons. Style it in client/src/index.css in the house idiom — plain CSS appended near .legs-section, reusing .btn/.btn-ghost, no new colour values that are not already in the file.\n6. Do NOT change ghost-row reorder semantics: `canMoveUp`/`canMoveDown` keep deriving from the leg's index in `sortedPlannedLegs` (the whole trip), not the page window, so a ↑ that moves a leg across a page boundary still works and the leg simply appears on the adjacent page.\n7. client/src/components/PlannedLegRows.tsx is in allowed_paths but is not expected to change; interleaveTripRows stays pure and page-unaware.\n\nAlso write two reusable checkers into the run's tools/ directory (they are run artifacts, not application code): tools/scratch-server.sh (the recipe verbatim from the plan's sequencing_rationale) and tools/seed-many-legs.mjs, which takes a scratch database path and creates one trip holding exactly 45 flights by direct better-sqlite3 INSERT (read the trips/flights DDL in src/db.ts; src/ is read-only context here). The seed script must refuse to run against a path ending in the repo's own flights.db.",
+      "depends_on": [],
+      "allowed_paths": [
+        "client/src/pages/TripDetail.tsx",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/index.css",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/"
+      ],
+      "acceptance_criteria": [
+        "`grep -n 'LEGS_PER_PAGE' client/src/pages/TripDetail.tsx` shows the constant defined as exactly 20 and used in exactly one `.slice(` expression.",
+        "`grep -n 'useSearchParams' client/src/pages/TripDetail.tsx` shows exactly one call site (the existing one at line 23), and `grep -n 'setSearchParams' client/src/pages/TripDetail.tsx` shows every call passing `{ replace: true }`.",
+        "`git diff --name-only` for this task lists no file under `src/`, and `git status --porcelain` lists only paths from allowed_paths.",
+        "Fixture built on a COPY: `node .claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/seed-many-legs.mjs <scratch>/flights.db` creates a trip with 45 flights. The report states `md5sum flights.db` for the live file before and after the whole task and the two values are identical.",
+        "Against the scratch server on :3100 (tools/scratch-server.sh) with a freshly built client, a puppeteer script asserts on the seeded 45-leg trip: `/trip/<id>` renders 20 leg rows; `?page=3` renders 5 rows; `?page=0`, `?page=abc` and `?page=999` render 20, 20 and 5 rows respectively with no console error and no thrown exception.",
+        "The same script asserts `.legs-pagination` reads `Page 3 of 3 · legs 41–45 of 45`, that Prev is disabled on page 1, and that Next is disabled on page 3.",
+        "Round-trip: the script loads `/trip/<id>?page=3`, reloads and still sees page 3; then clicks a leg's View link, asserts the URL is `/flight/<n>`, calls `page.goBack()`, and asserts the URL is `/trip/<id>?page=3` with the page-3 rows rendered.",
+        "No-op for small trips: on a real trip from the copied database with 20 or fewer merged rows, `document.querySelector('.legs-pagination')` is null and the `tbody tr` count equals the count produced by the same query against the pre-change build (state both numbers in the report).",
+        "`cd client && npx tsc --noEmit` exits 0; `npm run build:client` exits 0; `npm test` passes with the same test count as on HEAD (state it).",
+        "Both new tools/ scripts run from a clean shell using only Node 20 and the repo's existing dependencies, and the report names the exact command line for each so the Reviewer can re-run them."
+      ],
+      "context": [
+        "client/src/pages/TripDetail.tsx — lines 23-24 (?view= via useSearchParams), 89-94 (setView, the pattern to mirror), 415-421 (mergedRows / sortedPlannedLegs), 580-739 (the legs table)",
+        "client/src/components/PlannedLegRows.tsx — interleaveTripRows contract",
+        "client/src/index.css — .legs-section (line 366), .btn (249), responsive block (333)",
+        "src/db.ts — trips/flights DDL, read-only, for the seed script",
+        ".claude/ENVIRONMENT.md",
+        "No design.md exists for this run (Design was deliberately skipped); do not go looking for one."
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-002",
+      "role": "reviewer",
+      "title": "Review phase 1 — legs pagination",
+      "goal": "Re-run T-001's evidence yourself rather than trusting its report: rebuild the client, start your own scratch server on a port of your choosing other than 3000, re-run the seed and smoke scripts, and confirm every one of T-001's acceptance criteria. Pay particular attention to three regressions the criteria only partly cover: (a) a trip with zero planned legs and ≤20 flights must render byte-identically to HEAD — diff the rendered tbody HTML against a build of HEAD if in any doubt; (b) `client/src/pages/PrintTrip.tsx` must be untouched, and `/print/trip/<seeded-id>` must still render all 45 legs in one table, since the PDF export path renders that route; (c) the live flights.db md5 must be unchanged. Write the verdict to reviews/phase-1.md.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [".claude/runs/2026-09-09-sidebar-nav-legs-paging/reviews/"],
+      "acceptance_criteria": [
+        "Every T-001 acceptance criterion is re-run by you, and reviews/phase-1.md cites the command and the deciding line of output for each — not a restatement of T-001's report.",
+        "`/print/trip/<seeded 45-leg trip>` on your scratch server renders 45 leg rows and contains no `.legs-pagination` element.",
+        "`md5sum flights.db` matches the value recorded in intake-time state; state it in the review.",
+        "Verdict is `approve` or `request_changes` with numbered, individually actionable findings."
+      ],
+      "context": [
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "Add the Sidebar component and mount it in AppShell (Home left untouched)",
+      "goal": "Create client/src/components/Sidebar.tsx and wire it into AppShell in client/src/App.tsx, with its CSS in client/src/index.css. Home.tsx is explicitly NOT part of this task — the app must still work exactly as it does today, with the sidebar as an addition. Implement exactly this:\n\n1. Data: `Sidebar` fetches `/api/trips` and `/api/flights` through `apiFetch` from ../utils/api, the same two calls Home.tsx makes at lines 24-27, using Promise.allSettled the same way and failing soft (render whatever loaded; a failed fetch shows a one-line muted message, never an empty rail with no explanation). Refresh on a 30s interval, on `visibilitychange` when the document becomes visible, and whenever `useLocation().pathname` changes. No new endpoint, no query parameters, no file under src/ touched.\n2. Structure: a `<nav className=\"sidebar\">` containing, in order: a `Home` NavLink to `/`; a `Trips` section listing every trip from /api/trips; a `Flights` section listing the flights not present in any trip (reuse Home.tsx:161-163's tripFlightIds logic verbatim). Each trip row is a disclosure button (▸/▾) plus a `NavLink to={`/trip/${t.id}`}` showing the trip name, the `Active` badge when `t.is_active === 1` (reuse the existing .badge.badge-active-trip classes), and the leg count. The disclosure button toggles expansion only and must call stopPropagation so it never navigates. Expanded, a trip lists one sub-item per entry in `t.flights`, each a `NavLink to={`/flight/${f.id}`}` labelled `Leg {n} · {departure_icao ?? '???'} → {arrival_icao ?? '???'}`, falling back to the aircraft name when neither ICAO is set.\n3. Active state: use react-router's NavLink `className={({ isActive }) => ...}` so the open trip or flight carries `is-active`. Additionally, the trip containing the currently open flight auto-expands: seed the expanded set from the current route, and let an explicit user toggle win over that seeding for as long as the component is mounted. Expansion state lives in component state and is not persisted.\n4. Rail collapse: a `.sidebar-toggle` button that collapses the rail to a narrow strip; the toggle itself stays visible and clickable when collapsed. Persist the flag in `localStorage` under the key `sidebarCollapsed` ('1' / absent), read once on mount, and default to collapsed when `window.innerWidth <= 900`.\n5. AppShell layout in App.tsx becomes `<Header/>` followed by `<div className=\"app-body\"><Sidebar/><div className=\"app-main\"><Routes>…</Routes></div></div>`. The outer `App` route table — /device, /override, /print/flight/:id, /print/trip/:id and its explanatory comment — must be left byte-identical: those routes stay outside AppShell and must mount neither Header nor Sidebar, for the same reason the existing comment gives.\n6. CSS: `.app-body { display: flex; align-items: flex-start; }`, `.app-main { flex: 1; min-width: 0; }` (the min-width:0 is load-bearing — without it a Leaflet map inside a flex child can blow out the layout), a sticky rail below the sticky header, its own scroll for a long trip list, and a `@media (max-width: 900px)` rule. Plain CSS appended in the file's existing style, no framework, no CSS variables that do not already exist, and no edits to the existing .header rules.",
+      "depends_on": ["T-002"],
+      "allowed_paths": [
+        "client/src/components/Sidebar.tsx",
+        "client/src/App.tsx",
+        "client/src/index.css",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/"
+      ],
+      "acceptance_criteria": [
+        "`git diff --name-only` lists no file under `src/` and does not list `client/src/pages/Home.tsx`; `git status --porcelain` lists only paths from allowed_paths.",
+        "`grep -n \"apiFetch\\|fetch(\" client/src/components/Sidebar.tsx` shows requests to `/api/trips` and `/api/flights` and to nothing else.",
+        "`git diff client/src/App.tsx` shows the /device, /override and both /print routes and their comment unchanged.",
+        "Puppeteer against the scratch server on :3100: `/print/trip/<id>`, `/print/flight/<id>`, `/device` and `/override` each yield `document.querySelector('.sidebar') === null` and `document.querySelector('.header') === null`.",
+        "Puppeteer: `/`, `/trip/<id>` and `/flight/<id>` each yield exactly one `.sidebar` element.",
+        "Sidebar contents match the API: the number of trip rows equals the length of `GET /api/trips`; expanding a specific trip yields a sub-item count equal to that trip's `flights.length`; the standalone-flight item count equals the number of flights whose id appears in no trip. State all three numbers in the report.",
+        "Active state: on `/trip/<id>` exactly one trip item has a class containing `is-active` and it is that trip's; on `/flight/<id>` for a flight inside a trip, that flight's sub-item is `is-active` and its parent trip is expanded without any click.",
+        "Navigation: clicking a trip item changes the URL to `/trip/:id`; clicking a trip's disclosure button changes the URL not at all (assert `page.url()` before and after).",
+        "Collapse: clicking `.sidebar-toggle` collapses the rail, `localStorage.getItem('sidebarCollapsed')` is '1', and after `page.reload()` the rail is still collapsed and the toggle's bounding box width is greater than 0.",
+        "Layout is not broken by the flex change: at viewport 1280x900 on `/trip/<id>`, `#map`'s bounding box width is at least 500px and its `.leaflet-container` height is greater than 0; and `document.documentElement.scrollWidth <= window.innerWidth + 1` on `/`, `/trip/<id>` and `/flight/<id>`.",
+        "Home is unchanged in behaviour: `/` still renders `#flights-table` with the same row count as before this task (state both numbers).",
+        "`cd client && npx tsc --noEmit` exits 0; `npm run build:client` exits 0; `npm test` passes unchanged; `md5sum flights.db` for the live file is unchanged across the task."
+      ],
+      "context": [
+        "client/src/App.tsx (all 43 lines — the print-route comment is the constraint)",
+        "client/src/components/Header.tsx — the house idiom for a small presentational component",
+        "client/src/pages/Home.tsx lines 23-58 (the fetch + poll + visibilitychange pattern to mirror) and 161-163 (tripFlightIds / ungrouped)",
+        "client/src/types.ts — Trip, Flight",
+        "client/src/index.css lines 1-27 (.header, sticky, z-index), 128 (.container), 333-343 (responsive), 397-431 (.badge family)",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/scratch-server.sh",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-004",
+      "role": "reviewer",
+      "title": "Review phase 2 — sidebar and AppShell layout",
+      "goal": "Re-run T-003's evidence on your own scratch server and build. The three findings most likely to matter and least likely to be self-reported: (a) the print routes — confirm by DOM assertion, not by reading the diff, that /print/trip/:id and /print/flight/:id mount neither Header nor Sidebar, since a stray useStatus poll there breaks PDF export's settle detection; actually generate one trip PDF against your scratch server and confirm it succeeds and has the expected page count; (b) Leaflet inside the new flex layout on /flight/:id, /trip/:id and /trip/:id?view=atlas — maps must have non-zero width and height and the page must not scroll horizontally at 1280px or at 800px; (c) that Home and the whole existing table still behave identically, since nothing in phase 2 was supposed to touch it. Write reviews/phase-2.md.",
+      "depends_on": ["T-003"],
+      "allowed_paths": [".claude/runs/2026-09-09-sidebar-nav-legs-paging/reviews/"],
+      "acceptance_criteria": [
+        "Every T-003 acceptance criterion re-run by you, each cited with its command and deciding output line.",
+        "A trip PDF generated against your own scratch server succeeds; state the byte size and page count.",
+        "Map dimensions asserted at both 1280x900 and 800x900 on /flight/:id, /trip/:id and /trip/:id?view=atlas.",
+        "`md5sum flights.db` for the live file unchanged; stated.",
+        "Verdict is `approve` or `request_changes` with numbered, individually actionable findings."
+      ],
+      "context": [
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-005",
+      "role": "dispatcher",
+      "title": "Home becomes a landing view; move the flight table and its toolbar to /flights; update README",
+      "goal": "Retire Home's combined table as the trip/flight browser without losing any capability it carried. Implement exactly this:\n\n1. New page `client/src/pages/AllFlights.tsx`: move the *entire* current body of Home.tsx there — the combined `#flights-table`, the collapsible trip group headers, the selection state, and the whole combine toolbar (New Trip, Add to Trip with its picker, Combine Selected, Export KML), plus the 10s poll and visibilitychange refresh — as a move, not a rewrite. It takes no props and does not render LivePanel. Keep the class names and the `#flights-table` id so the existing CSS and the responsive rules at index.css:333-343 keep applying.\n2. New route in App.tsx inside AppShell: `<Route path=\"/flights\" element={<AllFlights />} />`. The outer App route table (device/override/print) stays byte-identical.\n3. Home.tsx becomes a landing view keeping its `status` prop and the existing LivePanel condition verbatim, and rendering, from the same `/api/flights` + `/api/trips` calls it already makes: a `<StatsGrid>` (reuse client/src/components/StatsGrid.tsx) with total flights, total trips, total duration and total distance summed client-side; a 'Recent flights' list of at most the 5 most recent flights by start_time, each linking to `/flight/:id`; and a link to `/flights` labelled 'All flights →'. Keep the existing empty-state copy for the case of zero flights. No new endpoint and no new query parameter — if you find yourself wanting one, stop and escalate: it contradicts a frozen decision.\n4. Sidebar.tsx gains one item, 'All flights' → `/flights`, directly under the existing Home item, with the same NavLink is-active treatment. Nothing else about the sidebar changes.\n5. Back-links: the two `← All Flights` links (TripDetail.tsx:444, FlightDetail.tsx:273) now point to `/flights`. The two `← Back` buttons (TripDetail.tsx:745, FlightDetail.tsx:448) keep pointing at `/`. Change nothing else in those two files.\n6. README.md is kept accurate (CLAUDE.md requires it): the API table row that says the KML set export is 'used by the Home page multi-select toolbar' (~line 203) and the whole 'Combining flights' section (~lines 324-335) must name the All Flights page at /flights, and the web-interface overview near the top must describe the sidebar as the primary navigation and Home as a summary landing page.\n7. CSS for the landing view and the new sidebar item goes in client/src/index.css in the existing plain-CSS idiom.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        "client/src/pages/Home.tsx",
+        "client/src/pages/AllFlights.tsx",
+        "client/src/App.tsx",
+        "client/src/components/Sidebar.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/index.css",
+        "README.md",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/"
+      ],
+      "acceptance_criteria": [
+        "`git diff --name-only` lists no file under `src/`; `git status --porcelain` lists only paths from allowed_paths.",
+        "Capability preserved: `grep -n 'handleCombine\\|handleNewTrip\\|handleAddToTrip\\|handleExportKml\\|toggleSelectAll\\|toggleCheck\\|toggleTrip' client/src/pages/AllFlights.tsx` finds all seven, and `git show HEAD:client/src/pages/Home.tsx` compared against AllFlights.tsx shows the toolbar markup moved rather than reimplemented.",
+        "Puppeteer against the scratch server: `/flights` contains `#flights-table`; `/` does not contain `#flights-table`.",
+        "Puppeteer on `/`: a `.stats-grid` with at least 4 `.stat-card` children; a recent-flights list with at most 5 items, each an anchor whose href matches `/flight/\\d+`; exactly one anchor with href `/flights`.",
+        "Combine still works end to end on a COPY: on the scratch server's `/flights`, select two seeded flights that have points, accept the confirm dialog, and assert the URL becomes `/flight/<newId>` and that the scratch database's flight count dropped by one. `md5sum flights.db` for the LIVE file is identical before and after the entire task — state both values.",
+        "Sidebar: `/flights` renders with the 'All flights' item carrying `is-active`, and that item is not `is-active` on `/`.",
+        "Back-links: `grep -n 'className=\"back-link\"' client/src/pages/TripDetail.tsx client/src/pages/FlightDetail.tsx` shows `to=\"/flights\"` in both; `grep -n '← Back' client/src/pages/TripDetail.tsx client/src/pages/FlightDetail.tsx` still shows `to=\"/\"` in both.",
+        "Phase 1 is not regressed: `/trip/<seeded 45-leg trip>?page=3` still renders 5 rows and `Page 3 of 3`.",
+        "README: `grep -n -i 'home page' README.md` returns no line still claiming the multi-select toolbar or flight browser lives on Home; the Combining flights section names `/flights`; the overview section mentions the sidebar. Quote the three changed passages in the report.",
+        "`cd client && npx tsc --noEmit` exits 0; `npm run build:client` exits 0; `npm run build` (client + server) exits 0 and leaves the tree shippable; `npm test` passes unchanged."
+      ],
+      "context": [
+        "client/src/pages/Home.tsx (all 318 lines — this is a move)",
+        "client/src/components/StatsGrid.tsx",
+        "client/src/components/Sidebar.tsx (as built by T-003)",
+        "client/src/App.tsx",
+        "client/src/pages/TripDetail.tsx:444 and :745, client/src/pages/FlightDetail.tsx:273 and :448 — back-links only",
+        "README.md lines ~195-210 (API table) and ~320-340 (Combining flights)",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-006",
+      "role": "reviewer",
+      "title": "Review phase 3 — Home retirement, /flights, README",
+      "goal": "This is the phase that can silently delete user-facing functionality, so review it as a deletion, not as a feature. Re-run T-005's evidence yourself, then go further: enumerate every interactive control present in `git show HEAD~1:client/src/pages/Home.tsx` (or the pre-run revision of Home.tsx) and prove each one still exists and still works somewhere in the shipped app — checkbox select, select-all, trip collapse, New Trip, Add to Trip picker, Combine Selected, Export KML, the disabled-checkbox tooltip for flights with no points, and the empty state. Anything that cannot be demonstrated is a request_changes finding. Then confirm the whole run holds together: pagination from phase 1 still works, the sidebar from phase 2 still highlights correctly, print/device/override still mount neither Header nor Sidebar, a trip PDF still generates, and README makes no claim the code no longer supports. Write reviews/phase-3.md.",
+      "depends_on": ["T-005"],
+      "allowed_paths": [".claude/runs/2026-09-09-sidebar-nav-legs-paging/reviews/"],
+      "acceptance_criteria": [
+        "A control-by-control table in reviews/phase-3.md: every interactive control of the pre-run Home page, where it lives now, and the command or DOM assertion that proves it works.",
+        "The Combine flow is exercised end to end by you against your own copy of the database, and the live `flights.db` md5 is stated unchanged.",
+        "Cross-phase regression checks re-run: legs pagination on the 45-leg fixture, sidebar active state on /trip/:id and /flight/:id, absence of .header/.sidebar on both print routes plus /device and /override, and one successful trip PDF export.",
+        "Every factual claim in README's changed passages is checked against the running app; any that is not is a finding.",
+        "Verdict is `approve` or `request_changes` with numbered, individually actionable findings."
+      ],
+      "context": [
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/reports/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/tools/",
+        ".claude/runs/2026-09-09-sidebar-nav-legs-paging/intake.md",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    }
+  ]
+}

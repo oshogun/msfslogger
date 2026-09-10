@@ -9,6 +9,13 @@ import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/
 import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
+// Client-side windowing of the legs table (plan.json T-001): 20 rows per
+// page over the array interleaveTripRows already produces, no backend change.
+const LEGS_PER_PAGE = 20;
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(Math.max(v, lo), hi);
+}
 
 export function TripDetail() {
   const { id } = useParams<{ id: string }>();
@@ -90,6 +97,17 @@ export function TripDetail() {
     const params = new URLSearchParams(searchParams);
     if (next === 'atlas') params.set('view', 'atlas');
     else params.delete('view');
+    setSearchParams(params, { replace: true });
+  }
+
+  // Mirrors setView exactly (plan.json T-001 §4): replace: true both matches
+  // the ?view= precedent and gives the required Back behaviour, since leaving
+  // the page for /flight/:id and pressing Back returns to the URL that still
+  // carries ?page=N.
+  function setPage(n: number) {
+    const params = new URLSearchParams(searchParams);
+    if (n === 1) params.delete('page');
+    else params.set('page', String(n));
     setSearchParams(params, { replace: true });
   }
 
@@ -413,6 +431,12 @@ export function TripDetail() {
   // trip.planned_legs is always [] for a trip with no imported plans, so this
   // is a no-op for every trip that predates this feature (design.md §9.3, §18).
   const mergedRows = interleaveTripRows(trip.flights, trip.planned_legs);
+  // Windowing (plan.json T-001 §2-3): a missing, non-numeric, zero, negative
+  // or too-large ?page= clamps silently rather than throwing or rendering an
+  // empty table, and never rewrites the URL on its own.
+  const pageCount = Math.max(1, Math.ceil(mergedRows.length / LEGS_PER_PAGE));
+  const page = clamp(parseInt(searchParams.get('page') ?? '1', 10) || 1, 1, pageCount);
+  const pageRows = mergedRows.slice((page - 1) * LEGS_PER_PAGE, page * LEGS_PER_PAGE);
   const sortedPlannedLegs = [...trip.planned_legs].sort((a, b) => a.seq - b.seq || a.id - b.id);
   const legByIdForFlights = new Map(trip.planned_legs.map(l => [l.id, l] as const));
   // The "Link to leg" escape hatch only appears once this trip actually uses
@@ -441,7 +465,7 @@ export function TripDetail() {
 
   return (
     <main className="container" id="trip-detail">
-      <Link to="/" className="back-link">← All Flights</Link>
+      <Link to="/flights" className="back-link">← All Flights</Link>
 
       <h2 className="flight-title">{trip.name}</h2>
       <p className="flight-subtitle">
@@ -579,6 +603,17 @@ export function TripDetail() {
 
       <div className="legs-section">
         <div className="section-title">Legs</div>
+        {/*
+          Round-1 fix (reviews/phase-2.md Finding 1): the legs table has an
+          intrinsic min-width wider than narrow viewports can give it inside
+          .app-main's flex layout. Wrapping it in its own overflow-x:auto
+          container lets the TABLE scroll internally instead of the whole
+          document blowing out sideways — the standard fix for a wide table
+          in a narrow flex child, and the same idea as .app-main's
+          min-width:0 above (contain the overflow at the smallest possible
+          scope, not the document).
+        */}
+        <div className="legs-table-wrap">
         <table>
           <thead>
             <tr>
@@ -596,7 +631,7 @@ export function TripDetail() {
             {mergedRows.length === 0 ? (
               <tr><td colSpan={8} style={{ padding: '1rem', color: '#4b5563' }}>No flights in this trip.</td></tr>
             ) : (
-              mergedRows.map(row => {
+              pageRows.map(row => {
                 if (row.kind === 'planned') {
                   const leg = row.leg;
                   const legIdx = sortedPlannedLegs.findIndex(l => l.id === leg.id);
@@ -736,6 +771,16 @@ export function TripDetail() {
             )}
           </tbody>
         </table>
+        </div>
+        {mergedRows.length > LEGS_PER_PAGE && (
+          <div className="legs-pagination">
+            <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>
+            <span>
+              Page {page} of {pageCount} · legs {(page - 1) * LEGS_PER_PAGE + 1}–{Math.min(page * LEGS_PER_PAGE, mergedRows.length)} of {mergedRows.length}
+            </span>
+            <button className="btn btn-ghost" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</button>
+          </div>
+        )}
       </div>
 
       </>

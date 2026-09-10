@@ -270,7 +270,7 @@ export function FlightDetail() {
 
   return (
     <main className="container" id="flight-detail">
-      <Link to="/" className="back-link">← All Flights</Link>
+      <Link to="/flights" className="back-link">← All Flights</Link>
 
       <h2 className="flight-title">Flight #{flight.id} — {flight.aircraft || 'Unknown Aircraft'}</h2>
       <p className="flight-subtitle">
