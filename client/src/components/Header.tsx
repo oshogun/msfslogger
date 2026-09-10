@@ -1,5 +1,6 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Status } from '../types';
+import { useSession } from '../hooks/useSession';
 
 interface Props {
   status: Status | null;
@@ -7,6 +8,14 @@ interface Props {
 }
 
 export function Header({ status, serverError }: Props) {
+  const session = useSession();
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    await session.logout();
+    navigate('/login');
+  }
+
   let dotClass = 'dot disconnected';
   let label = 'Checking...';
 
@@ -38,6 +47,14 @@ export function Header({ status, serverError }: Props) {
           <div className={dotClass}></div>
           <span>{label}</span>
         </div>
+        {session.user && (
+          <div className="header-account">
+            <span className="header-username">{session.user.username}</span>
+            <button type="button" className="header-logout" onClick={handleLogout}>
+              Log out
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

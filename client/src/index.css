@@ -26,6 +26,40 @@ a:hover { text-decoration: underline; }
 .header h1 span { color: #60a5fa; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
 
+.header-account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid #2d3148;
+}
+.header-username {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-logout {
+  flex-shrink: 0;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid #2d3148;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.header-logout:hover { background: #24273a; color: #e2e8f0; border-color: #3d4163; }
+
+@media (max-width: 640px) {
+  .header-username { display: none; }
+  .header { flex-wrap: wrap; row-gap: 0.5rem; padding: 0.75rem 1rem; }
+  .header-right { margin-left: 0; width: 100%; justify-content: space-between; }
+}
+
 /* ── Status badge ── */
 .status-badge {
   display: flex;
@@ -707,10 +741,15 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   width: 260px;
   background: #1a1d27;
   border-right: 1px solid #2d3148;
-  /* Sticks below the sticky .header (measured: ~61px tall), not over it. */
+  /* Sticks below the sticky .header (measured: ~61px tall), not over it.
+     .app-body sets align-items:flex-start (so .app-main's own height
+     tracks its content, not the tallest sibling), which would otherwise
+     shrink-wrap the sidebar to its own nav content and leave it looking
+     truncated against a taller page. align-self:stretch opts back in,
+     capped at the viewport by max-height below. */
   position: sticky;
   top: 61px;
-  align-self: flex-start;
+  align-self: stretch;
   max-height: calc(100vh - 61px);
   overflow-y: auto;
 }
@@ -802,40 +841,16 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   display: block;
 }
 
-.sidebar-account {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-top: 0.4rem;
-  padding: 0.6rem 0.6rem 0.2rem;
-  border-top: 1px solid #2d3148;
-}
-.sidebar-username {
-  font-size: 0.8rem;
-  color: #94a3b8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sidebar-logout {
-  flex-shrink: 0;
-  padding: 0.3rem 0.6rem;
-  border-radius: 6px;
-  border: 1px solid #2d3148;
-  background: transparent;
-  color: #94a3b8;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.sidebar-logout:hover { background: #1e2130; color: #e2e8f0; border-color: #3d4163; }
-
 @media (max-width: 900px) {
   /* An expanded rail overlays the page instead of squeezing .app-main,
      which at this width has no room to give up without triggering
      horizontal scroll. The collapsed strip stays in normal flow. */
   .sidebar:not(.is-collapsed) {
+    /* Chromium won't resolve height:auto against top+bottom here — the
+       switch from the base rule's position:sticky to position:fixed
+       leaves the flex container sized to its content instead of filling
+       the viewport, so the height is given explicitly instead. */
+    height: calc(100vh - 61px);
     position: fixed;
     top: 61px;
     left: 0;
