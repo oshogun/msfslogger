@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { apiFetch } from '../utils/api';
+import { useSession } from '../hooks/useSession';
 import type { Flight, Trip } from '../types';
 
 const COLLAPSE_KEY = 'sidebarCollapsed';
@@ -49,6 +50,8 @@ function navItemClass(extra?: string) {
 
 export function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const session = useSession();
   const [flights, setFlights] = useState<Flight[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -117,6 +120,11 @@ export function Sidebar() {
       next.has(tripId) ? next.delete(tripId) : next.add(tripId);
       return next;
     });
+  }
+
+  async function handleLogout() {
+    await session.logout();
+    navigate('/login');
   }
 
   function toggleCollapsed() {
@@ -197,6 +205,15 @@ export function Sidebar() {
               </NavLink>
             ))}
           </div>
+
+          {session.user && (
+            <div className="sidebar-section sidebar-account">
+              <span className="sidebar-username">{session.user.username}</span>
+              <button type="button" className="sidebar-logout" onClick={handleLogout}>
+                Log out
+              </button>
+            </div>
+          )}
         </div>
       )}
     </nav>

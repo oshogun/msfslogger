@@ -1,7 +1,8 @@
 import express from 'express';
+import session from 'express-session';
 import multer, { MulterError } from 'multer';
 import path from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, setPlannedLegHandOutcome, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
@@ -17,9 +18,29 @@ import type { FlightManager } from './flightManager';
 import type { Flight, FlightEditPayload, TripEditPayload, PlannedLegWithChildren } from './types';
 import { createIngestRouter } from './ingest';
 import { TrafficStore } from './trafficStore';
+import { getConfig } from './config';
+import { getOrCreateAppSecret } from './db';
+import { SqliteSessionStore } from './auth/sessionStore';
+import { requireAuth, requireSameOrigin, sessionCookieFrom, SESSION_COOKIE_NAME } from './auth/middleware';
+import { createAuthRouter } from './auth/routes';
 
+// Multer's own defaults are `fields: Infinity` and `fieldSize: 1MB`, so a
+// multipart request could otherwise carry unbounded non-file fields. A
+// legitimate PDF upload sends one file and no fields; the .lnmpln import sends
+// at most 25 files and one field (allow_duplicates). design.md §8.5.
 const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FLIGHT_PLAN_BYTES } });
+const MAX_UPLOAD_FIELDS = 5;
+const MAX_UPLOAD_FIELD_BYTES = 8192;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_FLIGHT_PLAN_BYTES,
+    files: 1,
+    fields: MAX_UPLOAD_FIELDS,
+    fieldSize: MAX_UPLOAD_FIELD_BYTES,
+    parts: 1 + MAX_UPLOAD_FIELDS,   // 6 — one file plus the field allowance
+  },
+});
 
 // ── LNMPLN import ──────────────────────────────────────────────────────────
 // A separate multer instance, deliberately: a real .lnmpln plan is a few KB of
@@ -29,7 +50,13 @@ const MAX_LNMPLN_BYTES = 512 * 1024;
 const MAX_LNMPLN_FILES = 25;
 const uploadLnmpln = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_LNMPLN_BYTES, files: MAX_LNMPLN_FILES },
+  limits: {
+    fileSize: MAX_LNMPLN_BYTES,
+    files: MAX_LNMPLN_FILES,
+    fields: MAX_UPLOAD_FIELDS,
+    fieldSize: MAX_UPLOAD_FIELD_BYTES,
+    parts: MAX_LNMPLN_FILES + MAX_UPLOAD_FIELDS + 1,   // 31 — 25 files plus the field allowance
+  },
 });
 
 /**
@@ -118,8 +145,12 @@ function localeParams(req: express.Request): string {
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
+  const config = getConfig();
 
-  app.use(express.json());
+  // Middleware order is behaviour, and this order is frozen — design.md §8.3
+  // positions 1-10. Anything registered after app.use('/api', requireAuth)
+  // below is gated by default, including routes added later.
+  app.use(express.json({ limit: config.jsonBodyLimit }));
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
   // One instance per server (not a module-level singleton), so a scratch
@@ -127,7 +158,51 @@ export function createServer(flightManager: FlightManager): express.Express {
   // design.md (run 2026-09-08-ai-traffic-map) §5.1.
   const trafficStore = new TrafficStore();
 
-  app.use('/api/ingest', createIngestRouter(flightManager, trafficStore));
+  // Deliberately above the session middleware: the agent never sends a cookie,
+  // and an ingest request must never allocate or touch the session store
+  // (design.md §8.3 position 3, §8.4). Authenticated by INGEST_TOKEN instead
+  // (§12).
+  app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest));
+
+  // SESSION_SECRET when the operator set one, otherwise a random 32-byte secret
+  // created on first run and stored in app_secret. There is no hard-coded
+  // fallback anywhere: the server either finds a secret or makes one
+  // (design.md §10.3).
+  const sessionSecret = config.sessionSecretFromEnv
+    ?? getOrCreateAppSecret('session_secret', () => randomBytes(32).toString('base64'));
+
+  // `trust proxy` is deliberately NOT set: X-Forwarded-For stays ignored, so a
+  // spoofed header cannot poison the login throttle's key, and req.protocol
+  // reflects the real connection (design.md §10.1, §16.2).
+  app.use(session({
+    name: SESSION_COOKIE_NAME,
+    secret: sessionSecret,
+    store: new SqliteSessionStore(config.sessionMaxAgeMs),
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      // Tied to TLS, never hard-coded: a browser will not send a Secure cookie
+      // over plaintext HTTP, and a non-Secure one would cross the network in
+      // the clear on a TLS deployment (design.md §10.6).
+      secure: config.tls.enabled,
+      path: '/',
+      maxAge: config.sessionMaxAgeMs,
+    },
+  }));
+
+  // CSRF defence in depth behind SameSite=Lax; skips GET/HEAD/OPTIONS, non-/api
+  // paths and /api/ingest/* (design.md §16.3).
+  app.use(requireSameOrigin);
+
+  // Public by name — it cannot require a session to create one (design.md §8.1).
+  app.use('/api/auth', createAuthRouter());
+
+  // The gate. One mount, not per-handler decoration, so every /api route below
+  // — and any unmatched /api path — is 401 without a session (design.md §8.1).
+  app.use('/api', requireAuth);
 
   app.get('/api/status', (_req, res) => {
     const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
@@ -767,7 +842,9 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (!flight) { res.status(404).json({ error: 'Flight not found' }); return; }
 
     try {
-      let pdf = await renderPdf(`/print/flight/${id}${localeParams(req)}`);
+      // The print page fetches its data from the gated /api, so the headless
+      // render carries this caller's own session cookie (design.md §13.2).
+      let pdf = await renderPdf(`/print/flight/${id}${localeParams(req)}`, { sessionCookie: sessionCookieFrom(req) });
       if (flight.flight_plan_name && includePlans(req)) {
         pdf = await appendPdfs(pdf, [flightPlanPath(id)]);
       }
@@ -786,7 +863,8 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
 
     try {
-      let pdf = await renderPdf(`/print/trip/${id}${localeParams(req)}`);
+      // Same as the flight export above — design.md §13.2.
+      let pdf = await renderPdf(`/print/trip/${id}${localeParams(req)}`, { sessionCookie: sessionCookieFrom(req) });
       const attachments = includePlans(req)
         ? trip.flights.filter(f => f.flight_plan_name).map(f => flightPlanPath(f.id))
         : [];

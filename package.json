@@ -14,6 +14,7 @@
     "backfill-icao": "ts-node src/backfill-icao.ts",
     "backfill-durations": "ts-node src/backfill-durations.ts",
     "backup": "ts-node src/backup.ts",
+    "set-password": "node dist/setPassword.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:types": "tsc -p tsconfig.test.json"
@@ -21,6 +22,7 @@
   "dependencies": {
     "better-sqlite3": "^9.4.3",
     "express": "^4.18.3",
+    "express-session": "^1.19.0",
     "fast-xml-parser": "^5.11.1",
     "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.8",
     "@types/express": "^4.17.21",
+    "@types/express-session": "^1.19.0",
     "@types/multer": "^2.2.0",
     "@types/node": "^20.11.20",
     "concurrently": "^8.2.2",

@@ -60,6 +60,7 @@ import {
 import { createIngestRouter, buildTrafficObjects } from './ingest';
 import type { TrafficObject } from './types';
 import type { FlightManager } from './flightManager';
+import type { IngestConfig } from './config';
 
 const failures: string[] = [];
 let rowCount = 0;
@@ -558,7 +559,15 @@ async function withRouterServer(
   const flightManager = makeStubFlightManager();
   const app = express();
   app.use(express.json());
-  app.use('/api/ingest', createIngestRouter(flightManager, store));
+  // §12.4: createIngestRouter() now takes an IngestConfig. Rebuilt here from
+  // process.env.INGEST_TOKEN (after the envOverrides loop above) so it tracks
+  // the same semantics loadConfig() would derive — token set -> authenticated,
+  // token unset -> unauthenticated — preserving every scenario's behaviour.
+  const rawToken = process.env.INGEST_TOKEN || '';
+  const ingestConfig: IngestConfig = rawToken
+    ? { token: rawToken, allowUnauthenticated: false }
+    : { token: null, allowUnauthenticated: true };
+  app.use('/api/ingest', createIngestRouter(flightManager, store, ingestConfig));
 
   const logs: string[] = [];
   const origLog = console.log;

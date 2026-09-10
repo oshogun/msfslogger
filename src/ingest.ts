@@ -1,4 +1,6 @@
 import express, { Router, Request, Response } from 'express';
+import { createHash, timingSafeEqual } from 'crypto';
+import type { IngestConfig } from './config';
 import type { FlightManager } from './flightManager';
 import type { SimFrame, TrafficObject } from './types';
 import { TrafficStore, roundCoord, roundAlt, normHeading, applyRetentionCap } from './trafficStore';
@@ -110,14 +112,29 @@ export function buildTrafficObjects(body: unknown): TrafficBatchResult {
   return { ok: true, objects: [...byId.values()] };
 }
 
+/** Fixed-width digest of a token or header value, so the ingest-token check can
+ *  use crypto.timingSafeEqual (design.md §12.3). */
+function sha256(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
+}
+
 /**
  * Receives flight data pushed over HTTP by the Windows-side agent (see /agent),
  * which talks to SimConnect locally on the MSFS machine. This is the only
  * supported way to get data in from a remote sim.
  */
-export function createIngestRouter(flightManager: FlightManager, trafficStore: TrafficStore): Router {
+export function createIngestRouter(
+  flightManager: FlightManager,
+  trafficStore: TrafficStore,
+  ingestConfig: IngestConfig,
+): Router {
   const router = express.Router();
-  const token = process.env.INGEST_TOKEN;
+  // The token comes from AppConfig, not process.env: src/config.ts is the only
+  // module that reads the environment for security settings, and it already
+  // refused to start unless the token is set or ALLOW_UNAUTHENTICATED_INGEST
+  // opted out of it (design.md §7.4, §12.1, §12.2).
+  const token = ingestConfig.token;
+  const tokenDigest = token ? sha256(token) : null;
   let lastFrameAt = 0;
 
   // Read once, at construction — same rule as the agent's (design.md §3.5,
@@ -126,8 +143,14 @@ export function createIngestRouter(flightManager: FlightManager, trafficStore: T
   let trafficDisabledLogged = false;
 
   const checkAuth = (req: Request, res: Response): boolean => {
-    if (!token) return true;
-    if (req.get('x-ingest-token') === token) return true;
+    // Reachable only through the explicit ALLOW_UNAUTHENTICATED_INGEST opt-out
+    // — loadConfig() will not hand us a null token otherwise (§12.2).
+    if (!tokenDigest) return true;
+    const header = req.get('x-ingest-token');
+    // Compared as SHA-256 digests so the two buffers are always the same
+    // length: timingSafeEqual cannot throw on a length mismatch, and the
+    // comparison leaks nothing about the token's length (§12.3).
+    if (header && timingSafeEqual(sha256(header), tokenDigest)) return true;
     res.status(401).json({ error: 'Invalid or missing ingest token' });
     return false;
   };

@@ -14,9 +14,11 @@ This is the supported way to connect a remote server to MSFS. The alternative �
    ```powershell
    npm install
    ```
-4. Set the server URL (the LAN address of the machine running `msfslogger`) and start the agent. By default it targets MSFS 2020 — see [MSFS 2020 vs 2024 vs FSX](#msfs-2020-vs-2024-vs-fsx) below to point it at MSFS 2024 or FSX instead:
+4. Set the server URL, the ingest token (must match the server's `INGEST_TOKEN` exactly — the server now requires one, see the main [README](../README.md#environment-variables)), and start the agent. If the server is running HTTPS (the norm now — see [HTTPS](#https) below), also trust its certificate. By default the agent targets MSFS 2020 — see [MSFS 2020 vs 2024 vs FSX](#msfs-2020-vs-2024-vs-fsx) below to point it at MSFS 2024 or FSX instead:
    ```powershell
-   $env:SERVER_URL = "http://192.168.0.30:3000"
+   $env:SERVER_URL = "https://192.168.0.30:3000"
+   $env:INGEST_TOKEN = "<same value as the server's INGEST_TOKEN>"
+   $env:NODE_EXTRA_CA_CERTS = "C:\msfslogger\msfslogger-cert.pem"
    npm start
    ```
    To pass the `--sim` flag through `npm start`, add an extra `--` before it (npm forwards everything after it to `node agent.js`), or just run `node agent.js` directly:
@@ -44,10 +46,39 @@ Any non-zero flag stops the flight clock on the server and suspends track record
 
 | Variable | Required | Description |
 |---|---|---|
-| `SERVER_URL` | Yes | Base URL of the `msfslogger` server, e.g. `http://192.168.0.30:3000` |
-| `INGEST_TOKEN` | No | Shared secret. If set, must match the `INGEST_TOKEN` configured on the server — sent as the `x-ingest-token` header on every request. |
+| `SERVER_URL` | Yes | Base URL of the `msfslogger` server. `https://192.168.0.30:3000` once the server has TLS configured (see [HTTPS](#https) below) — `http://` only works against a server explicitly running plaintext HTTP. |
+| `INGEST_TOKEN` | **Yes** | Shared secret, **must match the `INGEST_TOKEN` configured on the server exactly** — sent as the `x-ingest-token` header on every request. The server now refuses to start without one configured on its side, and rejects every ingest request with `401` if this doesn't match it. |
 | `TRAFFIC_ENABLED` | No | Opt-out for [AI traffic gathering](#ai-traffic). Set to `0`, `false`, `off` or `no` to disable; anything else (including unset or empty) leaves it enabled. The server has its own, independently-read copy of the same variable, documented in the main [`README.md`](../README.md#environment-variables) — setting one does not imply the other. |
 | `TRAFFIC_RADIUS_M` | No | Sweep radius in metres for AI traffic. Default `40000` (~21.6 NM), clamped to `[1000, 200000]`. An unparseable value falls back to the default and logs a warning. |
+
+## HTTPS
+
+The server now normally runs HTTPS with a self-signed certificate (see the
+main [README § HTTPS](../README.md#https)). The agent is unmodified — it uses
+Node's built-in `fetch`, which rejects a self-signed certificate it doesn't
+know to trust (`DEPTH_ZERO_SELF_SIGNED_CERT`) — so the operator copies the
+server's certificate file to the Windows box and points `NODE_EXTRA_CA_CERTS`
+at it:
+
+```powershell
+$env:SERVER_URL = "https://<server-ip-or-name>:3000"
+$env:INGEST_TOKEN = "<same value as the server>"
+$env:NODE_EXTRA_CA_CERTS = "C:\msfslogger\msfslogger-cert.pem"
+node agent.js
+```
+
+There is no `rejectUnauthorized: false` option and none is planned — that
+would make the agent's TLS decorative. The certificate's SAN must cover
+whatever `SERVER_URL` uses (an IP, a hostname, or both — see the `-addext
+subjectAltName=...` in the main README's `openssl` command).
+
+**Deploy ordering.** Both boxes change together: the server won't start
+without an `INGEST_TOKEN`, and the agent can't reach a TLS server it doesn't
+trust. Set the token and copy the certificate to the server first, start the
+server, *then* update the agent's environment (`SERVER_URL`, `INGEST_TOKEN`,
+`NODE_EXTRA_CA_CERTS`) and restart the agent. An agent that "stopped working"
+right after an upgrade is a redeploy question before it's a debugging one —
+check both sides were actually updated and restarted.
 
 ## AI traffic
 

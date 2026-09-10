@@ -1,0 +1,4 @@
+{
+  "error": "Too many login attempts. Try again in 812 seconds.",
+  "retryAfterSec": 812
+}

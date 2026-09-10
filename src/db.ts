@@ -231,6 +231,38 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_planned_legs_source     ON planned_legs(trip_id, source_sha256);
     CREATE INDEX IF NOT EXISTS idx_planned_waypoints_leg   ON planned_waypoints(planned_leg_id, seq);
     CREATE INDEX IF NOT EXISTS idx_planned_alternates_leg  ON planned_alternates(planned_leg_id, seq);
+
+    -- The single operator account. id is pinned to 1 by a CHECK so a second
+    -- account cannot be inserted by accident; design.md §6.1 explains why one
+    -- account. Written only by the set-password CLI (src/setPassword.ts).
+    CREATE TABLE IF NOT EXISTS auth_user (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      username      TEXT NOT NULL,
+      -- scrypt$N$r$p$<salt-b64>$<key-b64> — encoding frozen in §6.2
+      password_hash TEXT NOT NULL,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+
+    -- express-session store backing table (§10.2). data is the JSON-serialised
+    -- session; expires_at is epoch milliseconds, so the sweep is an integer
+    -- comparison and needs no date parsing.
+    CREATE TABLE IF NOT EXISTS auth_session (
+      sid        TEXT PRIMARY KEY,
+      data       TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_auth_session_expires ON auth_session(expires_at);
+
+    -- Server-side secrets that the operator does not have to manage. Currently
+    -- one row: name='session_secret' (§10.3). Values are base64 of 32 random
+    -- bytes.
+    CREATE TABLE IF NOT EXISTS app_secret (
+      name       TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 
   // Migrate existing DBs that predate the notes and trip_id columns
@@ -1390,4 +1422,90 @@ export function setPlannedLegHandOutcome(
     ).run(status, deviationNm, legId);
     return result.changes > 0;
   })();
+}
+
+// ── Auth: operator account, sessions, app secrets ─────────────────────────────
+//
+// The only database access the auth stack performs. Three tables, none of which
+// references or is referenced by anything else in the schema
+// (run 2026-09-10-security-hardening, design.md §4, §5).
+
+/** The single operator row. `id` is pinned to 1 by a CHECK constraint. */
+export interface AuthUserRow {
+  id: 1;
+  username: string;
+  password_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** null when the deployment has no operator account yet (design.md §6.4). */
+export function getAuthUser(): AuthUserRow | null {
+  const row = db.prepare('SELECT id, username, password_hash, created_at, updated_at FROM auth_user WHERE id = 1')
+    .get() as AuthUserRow | undefined;
+  return row ?? null;
+}
+
+/**
+ * Inserts or updates row id=1. Used only by the set-password CLI
+ * (src/setPassword.ts). created_at survives a password change; updated_at does
+ * not — design.md §6.5.
+ */
+export function setAuthUser(username: string, passwordHash: string): void {
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO auth_user (id, username, password_hash, created_at, updated_at)
+    VALUES (1, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      username      = excluded.username,
+      password_hash = excluded.password_hash,
+      updated_at    = excluded.updated_at
+  `).run(username, passwordHash, now, now);
+}
+
+export function getAppSecret(name: string): string | null {
+  const row = db.prepare('SELECT value FROM app_secret WHERE name = ?').get(name) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+/**
+ * Returns the stored secret, generating and storing one on first call. The
+ * read and the insert share one transaction, so two callers in the same process
+ * cannot produce two secrets (design.md §16.4).
+ */
+export function getOrCreateAppSecret(name: string, generate: () => string): string {
+  return db.transaction((): string => {
+    const row = db.prepare('SELECT value FROM app_secret WHERE name = ?').get(name) as { value: string } | undefined;
+    if (row) return row.value;
+    const value = generate();
+    db.prepare('INSERT INTO app_secret (name, value, created_at) VALUES (?, ?, ?)')
+      .run(name, value, new Date().toISOString());
+    return value;
+  })();
+}
+
+/** expires_at is epoch milliseconds; expiry itself is the store's business. */
+export function sessionGet(sid: string): { data: string; expires_at: number } | null {
+  const row = db.prepare('SELECT data, expires_at FROM auth_session WHERE sid = ?')
+    .get(sid) as { data: string; expires_at: number } | undefined;
+  return row ?? null;
+}
+
+export function sessionSet(sid: string, data: string, expiresAt: number): void {
+  db.prepare(`
+    INSERT INTO auth_session (sid, data, expires_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(sid) DO UPDATE SET
+      data       = excluded.data,
+      expires_at = excluded.expires_at
+  `).run(sid, data, expiresAt);
+}
+
+export function sessionDestroy(sid: string): void {
+  db.prepare('DELETE FROM auth_session WHERE sid = ?').run(sid);
+}
+
+/** Deletes every row with expires_at <= now. Returns the number deleted (§10.5). */
+export function sessionSweep(now: number): number {
+  return db.prepare('DELETE FROM auth_session WHERE expires_at <= ?').run(now).changes;
 }

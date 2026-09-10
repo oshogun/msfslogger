@@ -1,0 +1,38 @@
+T-007 acceptance criterion 2 — the gate is total (design.md §8.1, §8.2)
+Server: dist/index.js on 127.0.0.1:3104, scratch copy of flights.db, no cookie sent.
+2026-09-10T18:20:10+00:00
+
+GET     /api/status                            401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/flights                           401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/flights/combine                   401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/flights/1                         401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PATCH   /api/flights/1                         401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+DELETE  /api/flights/1                         401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/flights/1/flight-plan             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/flights/1/flight-plan             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+DELETE  /api/flights/1/flight-plan             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PUT     /api/flights/1/planned-leg             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PUT     /api/flights/1/planned-leg-status      401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/flights/1/export.pdf              401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/flights/1/export.kml              401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/flights/export.kml                401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/trips                             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips                             401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips/1                           401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PATCH   /api/trips/1                           401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+DELETE  /api/trips/1                           401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/trips/1/flights                   401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+DELETE  /api/trips/1/flights/2                 401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips/1/journey                   401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+POST    /api/trips/1/planned-legs              401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips/1/planned-legs              401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PATCH   /api/trips/1/planned-legs/order        401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips/1/export.pdf                401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/trips/1/export.kml                401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/planned-legs/1                    401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PATCH   /api/planned-legs/1                    401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+DELETE  /api/planned-legs/1                    401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+GET     /api/active-trip                       401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+PUT     /api/active-trip                       401  application/json; charset=utf-8  body={"error":"Authentication required"}  www-authenticate=0
+
+unmatched   GET /api/does-not-exist -> 401

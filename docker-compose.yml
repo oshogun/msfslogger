@@ -7,10 +7,22 @@ services:
     volumes:
       - ./flights.db:/app/flights.db
       - ./flight_plans:/app/flight_plans
+      # Certificate directory for TLS_CERT_FILE/TLS_KEY_FILE below, if you use
+      # them — mount the directory holding the PEM files and point the two
+      # variables at their in-container path (README § HTTPS):
+      # - ./certs:/app/certs:ro
     environment:
       # SimConnect connects over TCP to the Windows host running MSFS.
       # On Docker Desktop for Windows, host.docker.internal resolves to the host.
       # Override with SIMCONNECT_HOST=<ip> if needed.
       - SIMCONNECT_HOST=${SIMCONNECT_HOST:-host.docker.internal}
       - SIMCONNECT_PORT=${SIMCONNECT_PORT:-500}
+      # Security settings (README § Environment variables) — set these in your
+      # shell or an .env file next to this compose file; nothing is defaulted
+      # here and no value is baked into the image.
+      - INGEST_TOKEN=${INGEST_TOKEN}
+      - TLS_CERT_FILE=${TLS_CERT_FILE}
+      - TLS_KEY_FILE=${TLS_KEY_FILE}
+      - ALLOW_PLAINTEXT_HTTP=${ALLOW_PLAINTEXT_HTTP}
+      - SESSION_SECRET=${SESSION_SECRET}
     restart: unless-stopped

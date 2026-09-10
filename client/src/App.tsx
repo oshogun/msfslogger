@@ -1,15 +1,18 @@
 import { Routes, Route } from 'react-router-dom';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
+import { RequireAuth } from './components/RequireAuth';
 import { Home } from './pages/Home';
 import { AllFlights } from './pages/AllFlights';
 import { FlightDetail } from './pages/FlightDetail';
 import { TripDetail } from './pages/TripDetail';
 import { Device } from './pages/Device';
 import { Override } from './pages/Override';
+import { Login } from './pages/Login';
 import { PrintFlight } from './pages/PrintFlight';
 import { PrintTrip } from './pages/PrintTrip';
 import { useStatus } from './hooks/useStatus';
+import { SessionProvider } from './hooks/useSession';
 
 function AppShell() {
   const { status, serverError } = useStatus();
@@ -25,6 +28,8 @@ function AppShell() {
             <Route path="/flights" element={<AllFlights />} />
             <Route path="/flight/:id" element={<FlightDetail />} />
             <Route path="/trip/:id" element={<TripDetail />} />
+            <Route path="/device" element={<Device />} />
+            <Route path="/override" element={<Override />} />
           </Routes>
         </div>
       </div>
@@ -34,18 +39,29 @@ function AppShell() {
 
 export function App() {
   return (
-    <Routes>
-      {/*
-        Print routes are kept outside AppShell on purpose: they must not mount
-        Header, whose useStatus hook polls /api/status forever. That polling
-        would keep the page permanently busy and prevent the PDF export from
-        ever seeing it settle.
-      */}
-      <Route path="/device" element={<Device />} />
-      <Route path="/override" element={<Override />} />
-      <Route path="/print/flight/:id" element={<PrintFlight />} />
-      <Route path="/print/trip/:id" element={<PrintTrip />} />
-      <Route path="*" element={<AppShell />} />
-    </Routes>
+    <SessionProvider>
+      <Routes>
+        {/*
+          /login and the print routes are kept outside AppShell and outside
+          RequireAuth on purpose (design.md §14.4): Login must not mount
+          Header, whose useStatus hook polls /api/status forever — that would
+          401-loop on a page shown specifically to an anonymous visitor. The
+          print routes stay public HTML so a mid-render 401 during a PDF
+          export surfaces as window.__EXPORT_ERROR__, never a redirect that
+          would render the login page into the PDF (§13.4).
+        */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/print/flight/:id" element={<PrintFlight />} />
+        <Route path="/print/trip/:id" element={<PrintTrip />} />
+        <Route
+          path="*"
+          element={
+            <RequireAuth>
+              <AppShell />
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </SessionProvider>
   );
 }

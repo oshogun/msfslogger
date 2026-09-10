@@ -297,3 +297,31 @@ export interface TrafficObject {
   headingDeg: number;
   onGround: boolean;
 }
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+//
+// Wire shapes for the operator login of run 2026-09-10-security-hardening
+// (design.md §4.4, §9). Mirrored byte-identically in client/src/types.ts;
+// neither file imports from the other, matching how SimFrame / StatusFrame and
+// TrafficObject are already mirrored in this project.
+
+/** What a logged-in session holds. Persisted inside auth_session.data. */
+export interface SessionUser {
+  username: string;
+}
+
+/** POST /api/auth/login request body (§9.1). */
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+/** POST /api/auth/login 200 body (§9.1). */
+export interface LoginResponse {
+  user: SessionUser;
+}
+
+/** GET /api/auth/session 200 body (§9.3). Always 200, never 401. */
+export type SessionResponse =
+  | { authenticated: true; user: SessionUser }
+  | { authenticated: false; user: null };

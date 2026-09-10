@@ -1,7 +1,35 @@
+/**
+ * Thrown by apiFetch/download when the server answers 401. Distinguishable by
+ * `instanceof`, so a caller can tell "logged out" from "request failed".
+ * design.md §14.2.
+ */
+export class UnauthorizedError extends Error {
+  readonly status = 401 as const;
+
+  constructor(message = 'Authentication required') {
+    super(message);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+/**
+ * Registered once by <RequireAuth> (§14.3), so a mid-session expiry bounces
+ * the operator to /login. Never registered on a /print/* route (§13.4).
+ */
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
+}
+
 export async function apiFetch<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 401) {
+      unauthorizedHandler?.();
+      throw new UnauthorizedError((body as { error?: string }).error || res.statusText);
+    }
     throw new Error((body as { error?: string }).error || res.statusText);
   }
   return res.json() as Promise<T>;
@@ -24,6 +52,10 @@ async function download(url: string, fallbackName: string, init: DownloadInit = 
   const res = await fetch(url, init);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (res.status === 401) {
+      unauthorizedHandler?.();
+      throw new UnauthorizedError((body as { error?: string }).error || res.statusText);
+    }
     throw new Error((body as { error?: string }).error || res.statusText);
   }
 

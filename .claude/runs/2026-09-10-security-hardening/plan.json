@@ -1,0 +1,422 @@
+{
+  "run_id": "2026-09-10-security-hardening",
+  "goal": "Make the secure configuration msfslogger's default. Today every /api route is open to anyone who can reach port 3000, the server binds 0.0.0.0 in plaintext, and INGEST_TOKEN is optional (src/ingest.ts:120 — `if (!token) return true`). This run lands, exactly as frozen in design.md: a single-operator session login (scrypt over node:crypto, express-session over a better-sqlite3 store) gating every /api/* route except the three /api/auth endpoints and /api/ingest/*; TLS terminated inside the Node process with four fatal misconfiguration modes and no silent plaintext fallback; a mandatory INGEST_TOKEN with ALLOW_UNAUTHENTICATED_INGEST=1 as the documented opt-out and a timing-safe header comparison; explicit express.json and multer field/part limits; the puppeteer session-cookie forwarding that keeps PDF export working against its own gated API; the client login page, session hook and RequireAuth guard; and the README/agent/compose documentation an operator needs to get from a broken upgrade to a working deployment. It is a deliberate breaking change: an upgraded deployment that takes no action exits 1 with the exact messages of design §12.2 and §6.4. Out of scope, deliberately: multi-user, public-internet exposure, encryption at rest, ACME, audit logging, and any change to agent/agent.js, agent/traffic.js, client/vite.config.ts, client/src/components/Header.tsx, src/inspect-*.ts or tests/ existing files.",
+  "frozen_decisions": [
+    "Web UI auth: session-based login (username/password -> server-side session cookie), gating all existing /api routes.",
+    "HTTPS: built into the Node server (TLS_CERT_FILE/TLS_KEY_FILE env vars), no silent plaintext fallback.",
+    "INGEST_TOKEN required by default; ALLOW_UNAUTHENTICATED_INGEST=1 is the documented opt-out.",
+    "Destructive ops (deletes, combine) get no extra step beyond the standard session gate.",
+    "Design-level freezes that follow from the above and are equally not open for redesign: one operator account stored in SQLite (not env), node:crypto scrypt N=16384 r=8 p=1 keylen=32 (no bcrypt/argon2 native addon), express-session@^1.19 as the only new runtime dependency, cookie name msfslogger.sid, one port serving one protocol with no HTTP->HTTPS redirect listener, and puppeteer page.setCookie (never setExtraHTTPHeaders) for the export loopback."
+  ],
+  "sequencing_rationale": [
+    "COMMAND PREFIX — every command in every acceptance criterion runs under Node 20, i.e. is prefixed with: export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null. The default node on this machine is v26 and better-sqlite3 has no binary for its ABI (.claude/ENVIRONMENT.md). Criteria name the bare command for readability; the prefix is never optional.",
+    "SCRATCH-SERVER RECIPE — src/db.ts:9 pins DB_PATH to path.join(process.cwd(), 'flights.db'), so a scratch server is made by changing cwd, never by editing db.ts. Every task that needs a running server uses exactly this, with its own port from the table below: SCRATCH=$(mktemp -d); cp /home/guilherme/msfslogger/flights.db /home/guilherme/msfslogger/flights.db-wal /home/guilherme/msfslogger/flights.db-shm \"$SCRATCH/\" 2>/dev/null; mkdir -p \"$SCRATCH/client\"; ln -s /home/guilherme/msfslogger/client/dist \"$SCRATCH/client/dist\"; cd \"$SCRATCH\" && PORT=<your port> ... node /home/guilherme/msfslogger/dist/index.js. Module resolution follows dist/'s own location, so better-sqlite3 and puppeteer resolve from the repo's node_modules regardless of cwd. Kill the server at the end of the task. Never bind 3000 and never open the repo's flights.db for writing.",
+    "PORT ALLOCATION — so two agents can never collide: T-002 3101, T-003 (no server), T-004 3102, T-005 3110, T-006 3103, T-007 3104, T-008 3105, T-009 3111, T-010 3106, T-011 3107, T-012 3112.",
+    "SEAM 1 — src/server.ts is owned by exactly one task in this entire plan (T-007). Design §22 puts four separate concerns in that file (§8.3 middleware order, §8.5 body limits, §12.4 ingest wiring, §13.2 cookie forwarding at the two export routes); splitting them across tasks would break the one-file-one-Dispatcher rule, so they are one task. src/ingest.ts and src/pdfExport.ts join it because both change a signature that src/server.ts is the only caller of (createIngestRouter's third parameter, renderPdf's opts) — landing them separately would leave a tsc error between tasks.",
+    "SEAM 2 — Phase 1 gets the mandatory ingest token for free without touching src/server.ts. loadConfig() refuses to start when INGEST_TOKEN is unset and the opt-out is not set, and today's src/ingest.ts already enforces the header whenever process.env.INGEST_TOKEN is non-empty. So Phase 1 already delivers 'ingest is authenticated by default'; T-007's ingest change is only the config-threading and the timing-safe comparison. This is what lets the whole config/TLS/credential foundation ship before anything in src/server.ts moves.",
+    "SEAM 3 — the PDF-export cookie fix (design §13, R2, the highest-regression-risk item) is in the SAME task as the auth gate that breaks it, not a follow-up. T-007 cannot be reported done with a broken export; the phase-2 Reviewer re-renders a real PDF and compares page count and Content-Disposition against a pre-change capture.",
+    "SEAM 4 — client and server auth land in the same phase (phase 2), because a server whose UI cannot log in is not a shippable increment. T-008 (client) runs in parallel with T-006 (server auth modules) — client/src/** and src/** are disjoint — and verifies itself against a throwaway stub server in scratch that implements only /api/auth/* from contracts/samples/. The full-stack browser flow is the phase Reviewer's evidence.",
+    "PHASE GATE — the first task of each phase depends on the previous phase's reviewer task (T-006 and T-008 on T-005; T-010 on T-009). That gate is what stops T-004 (src/index.ts) and T-007 (src/server.ts) — which must agree about listener/config wiring — from ever running concurrently, and it stops T-010's README claims from being written against unreviewed behaviour.",
+    "TASK ORDER WITHIN PHASE 1 — T-002 and T-003 both depend on T-001 even though neither imports express-session. The reason is node_modules: T-001 runs npm install, and an agent running tsc or vitest against a node_modules being rewritten under it produces unreproducible failures. One extra serialization step is cheaper than one flaky review round.",
+    "NEW TEST FILES ONLY — design §19 item 5 forbids editing any existing file under tests/. Three new files are added, with disjoint names owned by one task each: tests/config.test.ts (T-002), tests/password.test.ts (T-003), tests/loginThrottle.test.ts (T-006). parseBooleanEnv, verifyPassword and LoginThrottle are the pure, high-consequence units in this run and are exactly what Vitest is good for; nothing that needs a server, a socket or flights.db goes into tests/.",
+    "EVERY task states the md5sum of /home/guilherme/msfslogger/flights.db before and after its work, and confirms the live server on port 3000 is still the same PID (ss -ltnp | grep :3000). The user's next restart of that server will hit the §20.1 refusal — that belongs in the final report to the user, and T-011 is the task that proves the documented recovery sequence works."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Secure startup: configuration, schema, credentials, TLS listener",
+      "ships": "The server enforces its own security preconditions before it will run. A deployment with no INGEST_TOKEN exits 1 with the documented three-line message before the database is even opened; one with a token but no operator account exits 1 telling the operator to run `npm run set-password`; that CLI exists and creates the account against a live or stopped database. With TLS_CERT_FILE/TLS_KEY_FILE set the process serves HTTPS on one port, and every TLS misconfiguration is fatal rather than a quiet downgrade. Because today's ingest handler already enforces a non-empty INGEST_TOKEN, this phase alone closes the unauthenticated-ingest hole.",
+      "tasks": ["T-001", "T-002", "T-003", "T-004", "T-005"]
+    },
+    {
+      "phase": 2,
+      "name": "The auth gate, the login API and the client login flow",
+      "ships": "The whole feature the user asked for, end to end: browsing to the app redirects to /login, a username and password create a session cookie, and every /api route answers 401 without one. Logout works, a mid-session expiry bounces the operator back to /login, cross-origin state-changing requests are rejected, ingest is token-authenticated with a timing-safe comparison, and PDF/KML export still produce the same files from inside a logged-in session.",
+      "tasks": ["T-006", "T-007", "T-008", "T-009"]
+    },
+    {
+      "phase": 3,
+      "name": "Documentation, packaging and the upgrade rehearsal",
+      "ships": "An operator who pulls this build and hits the exit-1 message finds the fix in README.md rather than in a stack trace: a First run section, the rewritten environment table, an HTTPS section with a working openssl one-liner, a named Insecure modes subsection, the verbatim upgrade sequence, and the dev note. agent/README.md tells the Windows side that INGEST_TOKEN is now required and how to trust a self-signed certificate; docker-compose.yml passes the new variables through. The whole sequence is then rehearsed against a copy of the live database.",
+      "tasks": ["T-010", "T-011", "T-012"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "devops",
+      "title": "Add express-session + @types and the set-password script; install under Node 20 without disturbing better-sqlite3",
+      "goal": "Add `express-session` at ^1.19.0 to dependencies and `@types/express-session` at ^1.19.0 to devDependencies (design §10.1 — both verified to install and run on Node 20 with Express 4 in prototypes P1/P3), and add the script `\"set-password\": \"node dist/setPassword.js\"` (design §6.4; the script must be `node dist/...`, not ts-node, because the production Docker image has no dev dependencies). Install under Node 20 only. Change nothing else in package.json: no version bumps, no reordering, no new scripts beyond that one. This is the only task in the run that owns package.json or package-lock.json. `npm run set-password` will not work yet — T-003 lands src/setPassword.ts — and you must not create that file.",
+      "depends_on": [],
+      "allowed_paths": ["package.json", "package-lock.json"],
+      "acceptance_criteria": [
+        "`npm ls express-session @types/express-session` prints both packages with resolved versions in the 1.19.x range; paste the output.",
+        "`node -e \"require('better-sqlite3')\"` exits 0 after the install, and `npm ls better-sqlite3` reports the same resolved version as before the install. State both numbers, before and after — this is the one failure mode that would break the user's live server on its next restart.",
+        "`git diff package.json` shows exactly three added lines (one dependency, one devDependency, one script) and zero removed lines. Paste the diff.",
+        "`git diff --stat package-lock.json` shows only additions attributable to express-session and its transitive deps; no existing package's `version` or `resolved` line changed. Verify with: `git diff package-lock.json | grep '^-' | grep -v '^---' | grep '\"version\"'` printing nothing.",
+        "`npm run build` exits 0 and `npm test` exits 0 (the existing Vitest suite is untouched — design §19 item 5).",
+        "`npm audit --omit=dev` is run and its summary pasted into the report (design §21 R9). Any high or critical advisory introduced by express-session or its transitive deps is called out explicitly rather than left in the noise.",
+        "`npm run set-password` exits non-zero with a 'Cannot find module' error naming dist/setPassword.js — state the observed message; do not create the file, do not stub it.",
+        "md5sum of /home/guilherme/msfslogger/flights.db is identical before and after the task; `ss -ltnp | grep :3000` shows the same PID before and after."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 10",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 6",
+        "package.json",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-002",
+      "role": "dispatcher",
+      "title": "src/config.ts — the only module that reads process.env for security settings, with the exact startup-validation messages",
+      "goal": "Create src/config.ts implementing design §7 in full, with the export names and signatures of .claude/runs/2026-09-10-security-hardening/contracts/config.ts verbatim: AppConfig, TlsConfig, IngestConfig, ENV_VARS, parseBooleanEnv, loadConfig(env?), getConfig(), ConfigError. loadConfig validates in the exact order of §7.3 steps 1-7 and throws ConfigError with the exact message strings given there — they are quoted in the design character for character, including the '(README § HTTPS)' suffixes, and a Reviewer will diff them. Step 2 reads the cert and key files and calls tls.createSecureContext({cert,key,passphrase}) eagerly so a bad PEM is fatal at startup rather than on the first connection. parseBooleanEnv is the fail-closed parser of §7.2 ('1'|'true'|'yes'|'on' after trim+lowercase, everything else false) and is deliberately NOT the inverted-list shape of parseTrafficEnabled in src/ingest.ts, which you must not touch. loadConfig caches into a module singleton that getConfig() returns, throwing if loadConfig has not run. No secret value ever appears in a message or a log line. Nothing imports this module yet — T-004 is its first caller. Also write tests/config.test.ts (a new file; no existing test file may be edited, design §19 item 5).",
+      "depends_on": ["T-001"],
+      "allowed_paths": ["src/config.ts", "tests/config.test.ts"],
+      "acceptance_criteria": [
+        "`npx tsc --noEmit` exits 0 and `npm run test:types` exits 0.",
+        "tests/config.test.ts asserts the parseBooleanEnv truth table with at least these twelve cases: '1','true','yes','on','TRUE',' On ' -> true; undefined,'','0','no','maybe','2' -> false.",
+        "tests/config.test.ts covers every fatal branch of §7.3 (steps 1, 2 unreadable, 2 bad PEM, 3 non-loopback with no TLS and no opt-out, 4 missing ingest token, 7 short SESSION_SECRET) by asserting the thrown message is `toBe`-equal to the string in the design — not `toContain`. Each assertion uses a synthetic env object passed to loadConfig(env), never process.env.",
+        "The §12.2 three-line INGEST_TOKEN message is asserted verbatim, newlines included.",
+        "Ordering is asserted: an env with a one-sided TLS pair AND no INGEST_TOKEN throws the step-1 TLS message, not the step-4 ingest message.",
+        "The step-2 branches are exercised against real files created in a scratch dir under /tmp: (a) a path that does not exist, (b) a file containing 'not a pem', and (c) a real self-signed pair generated with the openssl command of design §11.5, which must load successfully and yield tls.enabled === true with the right certFile/keyFile/passphrase fields.",
+        "Warning branches (§7.3 steps 3-loopback, 3-optout, 5, 6) are asserted non-fatal and asserted to reach console.warn with the exact message, via vi.spyOn(console,'warn').",
+        "Defaults are asserted: loadConfig({ INGEST_TOKEN: 'x'.repeat(24), ALLOW_PLAINTEXT_HTTP: '1' }) returns port 3000, bindHost '0.0.0.0', tls.enabled false, jsonBodyLimit '100kb', sessionMaxAgeMs 2592000000 (30 days, §10.4), sessionSecretFromEnv null, ingest.token the token, ingest.allowUnauthenticated true.",
+        "No secret leaks: the message thrown for SESSION_SECRET='short' does not contain the string 'short', and the message for a wrong-length INGEST_TOKEN does not contain the token. Assert both.",
+        "getConfig() throws before loadConfig() has run and returns the same object afterwards; assert both.",
+        "`npm test` exits 0 with the new file included, and `git status --porcelain tests/` lists only tests/config.test.ts — no existing test file modified.",
+        "`grep -n 'process.env' src/config.ts` shows reads only inside loadConfig's default-argument path; the function body reads its `env` parameter. Paste the grep.",
+        "md5sum of /home/guilherme/msfslogger/flights.db unchanged before/after; the task never starts a server or opens a database."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 7",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 11 12",
+        ".claude/runs/2026-09-10-security-hardening/contracts/config.ts",
+        "src/ingest.ts",
+        "tests/setup.ts",
+        "tests/helpers/index.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "Schema, auth accessors, scrypt password module, wire types and the set-password CLI",
+      "goal": "Four files, one unit of work — the CLI is only verifiable once the DDL and the hash function exist, and all three are additive. (1) src/db.ts: transcribe the three CREATE TABLE IF NOT EXISTS statements and the one CREATE INDEX IF NOT EXISTS from contracts/schema.sql into the existing db.exec(`...`) template literal in initDb(), AFTER the existing CREATE TABLE statements and BEFORE the `PRAGMA table_info(flights)` migration block (src/db.ts:237 today), then add AuthUserRow and the accessors getAuthUser, setAuthUser, getAppSecret, getOrCreateAppSecret (transactional, §16.4), sessionGet, sessionSet, sessionDestroy, sessionSweep with the signatures in contracts/auth-types.ts. No ALTER TABLE, no DROP, no UPDATE of any existing row anywhere (design §5.2, §19 item 10). (2) src/auth/password.ts: SCRYPT_PARAMS, PASSWORD_MIN_LENGTH/MAX_LENGTH, USERNAME_MAX_LENGTH, hashPassword, verifyPassword and DUMMY_PASSWORD_HASH per §6.2/§6.3 — the storage encoding is scrypt$N$r$p$<salt-b64>$<key-b64>, verifyPassword re-derives with the row's own parameters and compares with crypto.timingSafeEqual, and it returns false rather than throwing on any malformed input. (3) src/types.ts: add SessionUser, LoginRequest, LoginResponse, SessionResponse exactly as contracts/auth-types.ts declares them, additively. (4) src/setPassword.ts: the CLI of §6.4 — --username defaulting to 'operator', TTY prompt with echo disabled plus confirmation, non-TTY first-line-of-stdin path for Docker, initDb() then setAuthUser() then closeDb(), never accepting the password as a command-line argument. Also write tests/password.test.ts (new file only).",
+      "depends_on": ["T-001"],
+      "allowed_paths": ["src/db.ts", "src/types.ts", "src/auth/password.ts", "src/setPassword.ts", "tests/password.test.ts"],
+      "acceptance_criteria": [
+        "Placement evidence: `grep -n 'CREATE TABLE IF NOT EXISTS auth_user\\|CREATE TABLE IF NOT EXISTS app_secret\\|PRAGMA table_info(flights)' src/db.ts` shows all three new CREATE lines with line numbers below the last pre-existing CREATE TABLE and above the PRAGMA line. Paste it.",
+        "`git diff src/db.ts | grep '^-' | grep -v '^---'` prints nothing except whitespace-only context — the change is purely additive.",
+        "`grep -nE 'ALTER TABLE|DROP TABLE|DROP INDEX' src/db.ts` returns no line that is not already present in `git show HEAD:src/db.ts`. Paste both greps.",
+        "Migration on real data: against a scratch copy of flights.db (recipe in sequencing_rationale item 2), run initDb() twice in one process and once more in a second process. Report, before and after: the full list from `SELECT name,type FROM sqlite_master ORDER BY name`, and the row counts of flights, flight_points, trips, planned_legs, planned_waypoints, planned_alternates. The only delta is the three new tables plus idx_auth_session_expires; every row count is identical. Running twice produces no error.",
+        "`PRAGMA foreign_key_check` on the migrated scratch copy returns no rows.",
+        "The CHECK (id = 1) constraint holds: inserting a second auth_user row raises a constraint error. Show the thrown message.",
+        "hashPassword output matches /^scrypt\\$16384\\$8\\$1\\$[A-Za-z0-9+/=]+\\$[A-Za-z0-9+/=]+$/ and two calls on the same password differ (random 16-byte salt). verifyPassword round-trips true for the right password and false for a wrong one. Assert in tests/password.test.ts.",
+        "verifyPassword never throws: for each of '', 'x', 'scrypt$16384$8$1$abc', 'argon2$a$b$c$d$e', 'scrypt$abc$8$1$YWJj$YWJj', 'scrypt$16384$8$1$!!!$!!!' it returns false. Six assertions in tests/password.test.ts.",
+        "DUMMY_PASSWORD_HASH parses and returns false for any password, and one verify against it costs within 2x of one verify against a real hash — report both measured times in ms (design §9.2 depends on this; §6.2 measured ~45 ms).",
+        "Non-TTY CLI path, against a scratch DB copy: `printf 'correct horse battery staple\\n' | node /home/guilherme/msfslogger/dist/setPassword.js --username operator` run with cwd=$SCRATCH exits 0 and prints exactly `Password set for user \"operator\".`; a follow-up better-sqlite3 query shows one auth_user row with id 1, username 'operator' and a password_hash starting 'scrypt$16384$8$1$'.",
+        "CLI validation: reproduce each of the four §6.3 messages with exit code 1 — an 11-character password, a 201-character password, a whitespace-only password, and a 65-character username. Paste command and stderr for each.",
+        "The password is never an argv: `node /home/guilherme/msfslogger/dist/setPassword.js --username operator --password hunter2hunter2` does not create or change an auth_user row (show the row is unchanged), and `grep -n 'password' src/setPassword.ts` shows no argv parsing of a password value.",
+        "Re-running the CLI upserts row 1: created_at is byte-identical to the first run's value and updated_at differs. State both timestamps for both runs.",
+        "getOrCreateAppSecret('session_secret', gen) called twice returns the identical value, leaves exactly one app_secret row, and the value base64-decodes to 32 bytes. State the decoded byte length, never the value.",
+        "sessionSet/sessionGet/sessionDestroy round-trip on the scratch copy, and sessionSweep(now) deletes only rows with expires_at <= now and returns the deleted count: seed 3 expired and 2 live rows, assert the return value is 3 and 2 rows remain.",
+        "`git diff src/types.ts` shows additions only, and the four added interfaces are byte-identical to lines 16-39 of contracts/auth-types.ts (diff the block).",
+        "`npx tsc` exits 0, `npm run build` exits 0, `npm test` exits 0, `npm run test:types` exits 0, and `git status --porcelain tests/` lists only tests/password.test.ts.",
+        "md5sum of /home/guilherme/msfslogger/flights.db is identical before and after the task — every database operation in this task ran against a copy in /tmp. State both hashes."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 4 5 6",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 16",
+        ".claude/runs/2026-09-10-security-hardening/contracts/schema.sql",
+        ".claude/runs/2026-09-10-security-hardening/contracts/auth-types.ts",
+        ".claude/runs/2026-09-10-security-hardening/prototypes/proto-agent-tls-and-cli-write.js",
+        "src/db.ts",
+        "src/types.ts",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-004",
+      "role": "dispatcher",
+      "title": "src/index.ts — startup validation order, credential refusal, TLS/HTTP listener selection and the session sweep",
+      "goal": "Rewire src/index.ts to the startup contract of design §7.3, §6.4, §11 and §10.5, without touching src/server.ts (createServer(flightManager) keeps its current signature this phase). Order, exactly: loadConfig() first, inside a try/catch that on ConfigError prints `[Config] ${err.message}` to stderr and process.exit(1) — before initDb(), before any listener, so a misconfigured deployment writes nothing. Then initDb(), then getAuthUser(); if it returns null, print the two `[Auth] Refusing to start:` lines of §6.4 to stderr and exit 1. Then sessionSweep(Date.now()) once, and a setInterval every 6 hours that is .unref()'d, logging `[Auth] Swept <n> expired sessions` only when n > 0. Then the listener: https.createServer({ key, cert, passphrase }, app) when config.tls.enabled, otherwise http, always server.listen(config.port, config.bindHost, ...), logging `[HTTP] Server running at https://<bindHost>:<port>` or the http form. The existing SIGINT/SIGTERM shutdown block, its 3 s unref'd fallback and closeDb() are unchanged (§19 item 11). Default bind stays 0.0.0.0:3000 with no new env set (§19 item 7).",
+      "depends_on": ["T-002", "T-003"],
+      "allowed_paths": ["src/index.ts"],
+      "acceptance_criteria": [
+        "Fails before the database is opened: in an EMPTY scratch dir with no env set, `node /home/guilherme/msfslogger/dist/index.js` exits 1, stderr is exactly the three `[Config]` lines of design §12.2, and `ls -a` in that dir afterwards shows no flights.db and no flight_plans directory. Paste the listing.",
+        "No-account refusal: with INGEST_TOKEN set, ALLOW_PLAINTEXT_HTTP=1 and a scratch DB copy whose auth_user table is empty, the process exits 1 with exactly the two `[Auth] Refusing to start: no operator account exists.` / `[Auth] Run \\`npm run set-password\\` to create one (README § First run).` lines on stderr.",
+        "Loopback plaintext: with INGEST_TOKEN set, BIND_HOST=127.0.0.1, PORT=3102 and an operator account present, the server starts, warns `No TLS configured — serving plaintext HTTP on loopback only.`, logs `[HTTP] Server running at http://127.0.0.1:3102`, and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3102/api/status` prints 200 (routes are not gated until phase 2).",
+        "HTTPS: generate a self-signed pair with the openssl command of §11.5 into the scratch dir, start with TLS_CERT_FILE/TLS_KEY_FILE set and PORT=3102, and confirm the log line reads `https://0.0.0.0:3102`, `curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:3102/api/status` prints 200, and plain `curl http://127.0.0.1:3102/api/status` fails to connect/parse (one port, one protocol — §11.4).",
+        "All four TLS failure modes of §11.2 exit 1 with the §7.3 messages, verified one at a time: only TLS_CERT_FILE set; both set with a missing key file; both set with a key file containing 'garbage'; and — the negative control — both set and valid, which must start. Paste stderr for each of the three failures.",
+        "Non-loopback plaintext refusal: INGEST_TOKEN set, no TLS, BIND_HOST unset -> exit 1 with the §7.3 step-3 message naming 0.0.0.0. Adding ALLOW_PLAINTEXT_HTTP=1 starts the server and prints the WARNING line verbatim.",
+        "Sweep: seed the scratch DB with 3 auth_session rows whose expires_at is in the past and 2 in the future, start the server, and confirm stdout contains `[Auth] Swept 3 expired sessions` and a query afterwards shows the 2 future rows intact. Then start again with nothing expired and confirm no `[Auth] Swept` line is printed at all.",
+        "The sweep interval cannot hold the process open: after SIGTERM the process exits 0 within 3 seconds — `time` the shutdown and paste the elapsed value — and stdout still shows `[Shutdown] SIGTERM — closing database...` then `[Shutdown] Clean.` (§19 item 11).",
+        "Default bind unchanged: with only INGEST_TOKEN and ALLOW_PLAINTEXT_HTTP set and PORT=3102, `ss -ltnp | grep 3102` shows the listener on 0.0.0.0 (§19 item 7).",
+        "`npx tsc` exits 0, `npm run build` exits 0, `npm test` exits 0.",
+        "md5sum of /home/guilherme/msfslogger/flights.db identical before and after; `ss -ltnp | grep :3000` shows the same PID as before the task; every scratch server started in this task was killed before the report."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 7",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 11",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 6",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 10",
+        ".claude/runs/2026-09-10-security-hardening/contracts/config.ts",
+        "src/index.ts",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Review phase 1 — schema migration, credential CLI, startup refusal and TLS",
+      "goal": "Re-run the evidence for T-001 through T-004 rather than trusting their reports; this phase changes the database schema of the user's logbook and the conditions under which their server will start, so both get first-hand verification. Specifically: apply the migration to a fresh copy of the live flights.db yourself and diff sqlite_master and every existing table's row count; confirm the change to src/db.ts is additive by diff; run the set-password CLI in both its TTY-less and its validation-failure paths; reproduce every fatal startup message in §7.3, §12.2 and §6.4 character for character against the design text; and confirm HTTPS serves and that no TLS misconfiguration produces a plaintext listener. Check the phase against design §19 items 5, 7, 10 and 11 one at a time. Confirm that no file outside the four tasks' allowed_paths changed (`git status --porcelain`), that no agent committed anything (`git log --oneline -1` is unchanged from the run's start), and that the live flights.db md5 and the port-3000 PID are unchanged.",
+      "depends_on": ["T-001", "T-002", "T-003", "T-004"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Every §7.3 / §12.2 / §6.4 message reproduced by the reviewer is diffed against the design text and reported as an exact match or a discrepancy — quote any character-level difference; a near-enough message is request_changes, because README §20.1 and the operator's recovery depend on these strings.",
+        "The migration is applied by the reviewer to a fresh copy of flights.db and the before/after sqlite_master listing plus the six existing table row counts are pasted from the reviewer's own run.",
+        "An unauthenticated `curl` still reaches /api/status in this phase (the gate is phase 2) — confirm this is true and flag it in the report as expected-and-temporary, so nobody mistakes phase 1 for the finished feature.",
+        "`npm test`, `npm run test:types`, `npx tsc` and `npm run build` are all re-run by the reviewer and exit 0.",
+        "`git status --porcelain` lists only files inside T-001..T-004 allowed_paths, plus .claude/runs artifacts. No file under tests/ other than the two new ones is modified; `git diff --stat HEAD -- tests/` proves it.",
+        "md5sum of the live flights.db and the port-3000 listener PID are stated, and match the values from the start of the phase."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 5 6 7",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 11 12",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 19",
+        ".claude/runs/2026-09-10-security-hardening/contracts/schema.sql",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-006",
+      "role": "dispatcher",
+      "title": "Auth modules — SQLite session store, requireAuth/requireSameOrigin/LoginThrottle/sessionCookieFrom, and the /api/auth router",
+      "goal": "Four new files under src/auth/ implementing design §9, §10.2, §13.2 and §16, none of them wired into the app yet (T-007 mounts them). (1) src/auth/express-session.d.ts — the SessionData augmentation from contracts/express-session.d.ts; this is the ONLY declaration of it anywhere in the tree (§4.4). (2) src/auth/sessionStore.ts — SqliteSessionStore extends session.Store with get/set/destroy/touch over the src/db.ts accessors; get treats a missing row, an expired row and a JSON.parse failure all as cb(null,null) and deletes the expired row; touch delegates to set; length and clear are not implemented; expiry is derived per §16.5 with the NaN fallback. (3) src/auth/middleware.ts — requireAuth (401 with the exact body of §8.2), requireSameOrigin (the five-step algorithm of §16.3, skipping GET/HEAD/OPTIONS, non-/api paths and /api/ingest/*), LoginThrottle (the fixed-window algorithm of §16.2 with WINDOW_MS 15 min, MAX_FAILURES 10, the window start that does not move, and the >1000-entry bounding), and sessionCookieFrom(req) which parses req.headers.cookie for msfslogger.sid and returns the value still percent-encoded (§13.2). (4) src/auth/routes.ts — createAuthRouter() with POST /login implementing §16.1 step by step (regenerate BEFORE setting req.session.user; one full scrypt derivation against DUMMY_PASSWORD_HASH on both no-user and wrong-user paths), POST /logout always 204 after destroy+clearCookie, GET /session always 200 with Cache-Control: no-store, and the log lines of §9.4 which never contain a password. Every response body must match contracts/samples/*.json byte for byte. Also write tests/loginThrottle.test.ts (new file only).",
+      "depends_on": ["T-005"],
+      "allowed_paths": ["src/auth/express-session.d.ts", "src/auth/sessionStore.ts", "src/auth/middleware.ts", "src/auth/routes.ts", "tests/loginThrottle.test.ts"],
+      "acceptance_criteria": [
+        "`npx tsc` exits 0 and `npm run test:types` exits 0 with the new files present.",
+        "tests/loginThrottle.test.ts covers §16.2 with fake timers: check returns null on an empty map; ten recordFailure calls then check returns a positive integer seconds value; the returned wait decreases as time advances but the window start does not move when an eleventh failure is recorded; the entry is dropped once WINDOW_MS has elapsed; recordSuccess deletes the entry; and inserting 1001 entries with elapsed windows leaves the map pruned on the next check. At least eight assertions.",
+        "Response bodies match the frozen samples: a script that imports the router's handlers or drives them through a throwaway express app on port 3103 must produce JSON that `diff`s clean against contracts/samples/login-200.json, login-401.json, login-429.json, session-anonymous-200.json, session-authenticated-200.json, gated-401.json and cross-origin-403.json. Paste the diff results (all empty).",
+        "Session fixation is defeated: log in twice against the throwaway app and show that the Set-Cookie sid after login differs from the sid the client presented before login; and show by grep that req.session.regenerate is called before any assignment to req.session.user in src/auth/routes.ts.",
+        "No enumeration: measure the wall-clock of POST /login for (a) a username that does not exist, (b) the right username with a wrong password, (c) an empty auth_user table. Report all three medians over 5 runs; they must be within 25% of each other, and all three responses must be byte-identical 401s.",
+        "Throttle keys on the socket address only: eleven failed logins carrying eleven different `X-Forwarded-For` headers still trip the 429 (trust proxy is off — §10.1), and eleven failures with eleven different usernames also trip it. Show both.",
+        "requireSameOrigin: a POST with Origin http://evil.example gets 403 with the exact cross-origin-403.json body; a POST with a matching Origin passes; a POST with no Origin header passes; a GET with an evil Origin passes; a request to /api/ingest/frame with an evil Origin passes.",
+        "SqliteSessionStore survives a restart: against a scratch DB copy, set a session through one store instance, construct a second store instance over a fresh connection to the same file, and get the same session data back with user.username intact (this is prototype P1's assertion — reproduce it, do not cite it).",
+        "SqliteSessionStore is robust: a row whose data column is 'not json' makes get() call back (null, null) rather than erroring, and a row whose expires_at is in the past is deleted by get() and reported as absent. Show the row count before and after.",
+        "sessionCookieFrom returns the raw percent-encoded value: given `Cookie: msfslogger.sid=s%3Aabc.def; other=1` it returns { name: 'msfslogger.sid', value: 's%3Aabc.def' } — assert the '%3A' is still encoded (§13.2). Given no cookie header it returns undefined.",
+        "`grep -rn \"declare module 'express-session'\" src/ client/src/` matches exactly one file, src/auth/express-session.d.ts (§4.4).",
+        "No password value can reach a log: `grep -n 'password' src/auth/routes.ts` shows no occurrence inside a console.* call. Paste the grep.",
+        "`npm test` exits 0; `git status --porcelain tests/` lists only tests/loginThrottle.test.ts.",
+        "md5sum of the live flights.db unchanged before/after; port-3000 PID unchanged."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 9 10",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 16",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 8",
+        ".claude/runs/2026-09-10-security-hardening/contracts/auth-types.ts",
+        ".claude/runs/2026-09-10-security-hardening/contracts/express-session.d.ts",
+        ".claude/runs/2026-09-10-security-hardening/contracts/samples/",
+        ".claude/runs/2026-09-10-security-hardening/prototypes/proto-auth-tls-pdf.js",
+        "src/db.ts",
+        "src/config.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-007",
+      "role": "dispatcher",
+      "title": "Mount the gate in src/server.ts, thread IngestConfig into src/ingest.ts, and keep PDF export working via the forwarded session cookie",
+      "goal": "The one task that owns src/server.ts in this run, plus the two files whose signatures only it calls. (1) src/server.ts: implement the middleware order of §8.3 positions 1-10 exactly — express.json({ limit: getConfig().jsonBodyLimit }), the unmoved static mount, the unmoved ingest router now receiving getConfig().ingest as its third argument and still ABOVE the session middleware, then session({...}) with the frozen options of §10.1 (name msfslogger.sid, SqliteSessionStore, resave false, saveUninitialized false, rolling true, httpOnly, sameSite lax, secure: config.tls.enabled, path '/', maxAge config.sessionMaxAgeMs) and the secret from SESSION_SECRET or getOrCreateAppSecret, then requireSameOrigin, then the /api/auth router, then app.use('/api', requireAuth), then every existing route in its existing order, then the catch-all, then the MulterError handler. Do not set 'trust proxy'. (2) Add the §8.5 multer limits (PDF: fields 5, fieldSize 8192, parts 6 alongside the untouched fileSize 20MB and files 1; lnmpln: fields 5, fieldSize 8192, parts 31 alongside the untouched 512KB and 25) — the existing validators, magic-byte sniffs and error handler are untouched (§19 item 4). (3) At the two export.pdf routes, pass { sessionCookie: sessionCookieFrom(req) } to renderPdf. (4) src/ingest.ts: createIngestRouter gains a third IngestConfig parameter, stops reading process.env.INGEST_TOKEN, and replaces the `===` header comparison with sha256+crypto.timingSafeEqual (§12.3); parseTrafficEnabled and everything else in the file are untouched (§19 item 8). (5) src/pdfExport.ts: renderPdf(path, opts?) does page.setCookie with the host from baseUrl() before page.goto — never setExtraHTTPHeaders — puppeteer.launch gains acceptInsecureCerts: true, and baseUrl() becomes scheme-aware while EXPORT_BASE_URL keeps its precedence (§19 item 9). Capture a pre-change PDF and KML export from a scratch server BEFORE you start editing; you will need them for the regression criteria below.",
+      "depends_on": ["T-006"],
+      "allowed_paths": ["src/server.ts", "src/ingest.ts", "src/pdfExport.ts"],
+      "acceptance_criteria": [
+        "Middleware order: `grep -n \"app.use(\\|app.get('\\*'\" src/server.ts | head -20` output is pasted and matches §8.3 positions 1-10 in order, with app.use('/api', requireAuth) above the first existing /api route and the ingest mount above the session middleware.",
+        "The gate is total: a loop over ALL 32 rows of the §8.1 gated table issues an unauthenticated request with the right method and prints method, path and status. Every one is 401 with body exactly {\"error\":\"Authentication required\"} and Content-Type application/json, and no response carries a WWW-Authenticate header (§8.2). Paste the full 32-line output — a sample is not acceptable evidence (§21 R3).",
+        "An unmatched path is gated too: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3104/api/does-not-exist` prints 401, not 404.",
+        "Public surface still public with no cookie: GET / -> 200 HTML, GET /login -> 200 HTML, GET /print/flight/<id> -> 200 HTML, GET /api/auth/session -> 200 {\"authenticated\":false,\"user\":null} with Cache-Control: no-store. Paste all four.",
+        "Login round-trip: POST /api/auth/login with the account created by set-password returns 200 {\"user\":{\"username\":\"operator\"}} and a Set-Cookie whose attributes include HttpOnly, SameSite=Lax, Path=/ and — over an HTTPS scratch server — Secure. Reusing that cookie makes GET /api/flights return 200. POST /api/auth/logout returns 204, and the same cookie then gets 401. Paste the headers.",
+        "Ingest: POST /api/ingest/frame with no x-ingest-token -> 401 {\"error\":\"Invalid or missing ingest token\"}; with a wrong token -> 401; with the right token -> 204. Restarting with ALLOW_UNAUTHENTICATED_INGEST=1 and no INGEST_TOKEN -> 204 with no header. Paste all four.",
+        "Ingest never touches the session store (§8.4): count auth_session rows, post 20 valid frames, count again — the number is unchanged. State both counts.",
+        "Timing-safe compare: `grep -n 'timingSafeEqual\\|createHash' src/ingest.ts` shows the sha256-then-compare, and `git diff src/ingest.ts` shows the old `===` comparison removed and parseTrafficEnabled untouched.",
+        "Body limits: a POST /api/ingest/traffic carrying the maximum legitimate batch (200 objects, ~22 KB, §8.5) returns 204, and a 200 KB JSON body returns 413. `grep -n 'fileSize\\|fields\\|fieldSize\\|parts\\|files' src/server.ts` shows PDF limits fileSize 20MB/files 1/fields 5/fieldSize 8192/parts 6 and lnmpln limits 512KB/files 25/fields 5/fieldSize 8192/parts 31.",
+        "Upload validators untouched: `git diff src/server.ts` shows no change to isPdfBuffer, the application/pdf mimetype check, the BOM-stripped '<' sniff, the duplicate-hash rules or chainOrderForBatch (§19 item 4). A real upload of samples/ fixtures through the authenticated endpoint still returns the same results[] shape — paste one.",
+        "PDF regression (§21 R2 — the highest-risk item in this run): with a valid session cookie, GET /api/flights/<id>/export.pdf returns 200 application/pdf. Compare against the pre-change capture from the same scratch DB and report: both byte sizes, both page counts read with pdf-lib (must be equal), and both Content-Disposition headers (must be identical). A 500 carrying 'Authentication required' is a hard fail.",
+        "The same for a trip: GET /api/trips/<id>/export.pdf with ?plans included returns 200 and the same page count as the pre-change capture.",
+        "The session cookie does not leak to third-party origins: `grep -n 'setExtraHTTPHeaders' src/pdfExport.ts` returns nothing, and `grep -n 'setCookie' src/pdfExport.ts` shows the domain scoped to the baseUrl() host (§13.2, prototype P5).",
+        "KML unchanged: GET /api/flights/<id>/export.kml with a cookie is byte-identical to the pre-change capture — `diff` prints nothing (§19 item 9).",
+        "Same-origin: POST /api/flights/combine with a valid cookie and Origin: http://evil.example -> 403 {\"error\":\"Cross-origin request rejected\"}; with the matching Origin -> its normal response; with no Origin -> its normal response; GET /api/flights with an evil Origin -> 200.",
+        "Route order preserved (§19 item 2): `git show HEAD:src/server.ts | grep -oE \"app\\\\.(get|post|put|patch|delete)\\\\('[^']+'\" > /tmp/before.txt` compared with the same grep on the new file shows an unchanged relative order — /api/flights/combine before /api/flights/:id, planned-legs before the exports, everything before app.get('*'), the MulterError handler last. Paste the diff.",
+        "GET /api/status with a valid session returns a body byte-identical to the pre-change capture for the same AppState, including the conditional plannedLeg/traffic keys (§19 item 1).",
+        "`npx tsc` exits 0, `npm run build` exits 0, `npm test` exits 0 (no existing test edited).",
+        "md5sum of the live flights.db identical before and after; port-3000 PID unchanged; every scratch server killed."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 8",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 10 12 13",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 16",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 19",
+        ".claude/runs/2026-09-10-security-hardening/contracts/samples/",
+        ".claude/runs/2026-09-10-security-hardening/prototypes/proto-auth-tls-pdf.js",
+        "src/server.ts",
+        "src/ingest.ts",
+        "src/pdfExport.ts"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-008",
+      "role": "dispatcher",
+      "title": "Client login flow — UnauthorizedError, useSession, RequireAuth, Login page, route table and the logout control",
+      "goal": "All seven client files of design §14, as one task because App.tsx depends on the four new files and Sidebar depends on useSession. (1) client/src/types.ts: hand-copy SessionUser, LoginRequest, LoginResponse and SessionResponse from src/types.ts byte-identically (§4.4 — there is no shared package and this run does not introduce one). (2) client/src/utils/api.ts: add UnauthorizedError (status 401), setUnauthorizedHandler(fn|null) as a module-level slot, and in BOTH apiFetch and the private download, on res.status === 401 call the handler if registered and then throw UnauthorizedError. Everything else in that file, including `throw new Error(body.error ?? statusText)` for every other non-2xx, is unchanged (§19 item 6). No call site needs a credentials option. (3) client/src/hooks/useSession.ts: SessionState per contracts/client-auth.ts, one GET /api/auth/session on mount, login() and logout(), exposed through a React context provider so the guard and the sidebar share one value. (4) client/src/components/RequireAuth.tsx: renders nothing while loading, <Navigate to=\"/login\" state={{from}} replace/> when anonymous, children when authenticated; registers setUnauthorizedHandler on mount and clears it on unmount. (5) client/src/pages/Login.tsx: the form of §14.1, rendering the server's 401 and 429 messages verbatim and never inventing a distinction between unknown user and wrong password. (6) client/src/App.tsx: the route table of §14.4 — /login and /print/* outside RequireAuth and outside AppShell, /device and /override moved inside the guard, everything else inside. Login must not mount Header or start the useStatus poll. (7) client/src/components/Sidebar.tsx: the logout control of §14.5 showing the logged-in username. Do not touch client/src/components/Header.tsx, client/src/hooks/useStatus.ts or client/vite.config.ts (§14.5, §14.6). You are running in parallel with the server tasks, so verify against a stub: write a throwaway express app in your scratch dir (NOT in the repo) that serves client/dist statically, implements only the three /api/auth endpoints returning the exact bodies in contracts/samples/, and 401s every other /api path — then drive it with the repo's puppeteer.",
+      "depends_on": ["T-005"],
+      "allowed_paths": ["client/src/types.ts", "client/src/utils/api.ts", "client/src/hooks/useSession.ts", "client/src/components/RequireAuth.tsx", "client/src/pages/Login.tsx", "client/src/App.tsx", "client/src/components/Sidebar.tsx"],
+      "acceptance_criteria": [
+        "`npm run build:client` exits 0 with no TypeScript errors, and `npm run build` exits 0.",
+        "The four wire types in client/src/types.ts are byte-identical to the ones in src/types.ts: `diff <(sed -n '/interface SessionUser/,/^}/p' src/types.ts) <(sed -n '/interface SessionUser/,/^}/p' client/src/types.ts)` prints nothing, and the same for LoginRequest, LoginResponse and SessionResponse. Paste all four diffs.",
+        "api.ts is additive for every non-401 status: `git diff client/src/utils/api.ts` shows no change to the existing `throw new Error(body.error ?? statusText)` line, and UnauthorizedError extends Error so existing catch sites compile untouched (§19 item 6). Paste the diff.",
+        "Both entry points handle 401: `grep -n '401' client/src/utils/api.ts` shows the check inside apiFetch AND inside the private download function.",
+        "Stub-server flow with puppeteer against the built bundle on port 3105 — paste the script and its output: (a) navigating to / while the stub reports anonymous ends on /login; (b) submitting the form posts {\"username\":...,\"password\":...} matching contracts/samples/login-request.json and, on the stub's 200, lands back on / and renders AppShell; (c) with the stub returning login-401.json the page displays the string 'Invalid username or password' verbatim; (d) with login-429.json it displays the server's message including the wait seconds; (e) after login, making the stub 401 a subsequent /api call bounces the browser to /login.",
+        "The login page does not poll: with the stub logging every request, loading /login produces zero requests to /api/status. Paste the stub's request log.",
+        "Print routes are outside the guard (§13.4): navigating to /print/flight/1 while anonymous renders the print page shell and does NOT redirect to /login; the stub log shows no /api/auth/session-driven redirect. This is what stops the login page being rendered into a PDF.",
+        "Route table matches §14.4: `grep -n 'path=\\|<Route' client/src/App.tsx` shows /login and /print/* outside RequireAuth, /device and /override inside, and no Header/useStatus mount on the /login branch. Paste it.",
+        "Logout: the Sidebar control shows the username from useSession, and clicking it in the puppeteer run posts /api/auth/logout to the stub and ends on /login. Paste the stub log line.",
+        "Untouched files: `git status --porcelain client/` lists only the seven allowed paths — Header.tsx, useStatus.ts and vite.config.ts are unmodified (§14.5, §14.6).",
+        "`npm test` exits 0 (the server-side suite is unaffected) and md5sum of the live flights.db is unchanged; no scratch server left running."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 14",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 9",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 13",
+        ".claude/runs/2026-09-10-security-hardening/contracts/client-auth.ts",
+        ".claude/runs/2026-09-10-security-hardening/contracts/samples/",
+        "client/src/App.tsx",
+        "client/src/utils/api.ts",
+        "client/src/components/Sidebar.tsx",
+        "client/src/types.ts"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-009",
+      "role": "reviewer",
+      "title": "Review phase 2 — the gate, the login API, the client flow and the export regression",
+      "goal": "Re-run the evidence for T-006, T-007 and T-008 first-hand against one real scratch server (port 3111) built from the tree as it stands: HTTPS with a self-signed cert, an INGEST_TOKEN, an operator account created with the CLI, and a copy of the live database. The three things that must not be taken on trust: (1) the gate is total — issue an unauthenticated request for every one of the 32 rows of §8.1 yourself and paste all 32 statuses (§21 R3); (2) PDF export still works — render a real flight PDF and a real trip PDF through the authenticated route and compare page count and Content-Disposition against a render from the pre-phase tree (§21 R2); (3) the browser flow works end to end against the real server, not a stub — drive puppeteer through anonymous-redirect, login, a gated page load, logout, and a mid-session 401 bounce. Then walk design §19 items 1-12 one at a time and report each as verified or violated, with the command that decided it. Confirm nothing outside the tasks' allowed_paths changed and that no sub-agent committed.",
+      "depends_on": ["T-007", "T-008"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "All 32 gated rows of §8.1 are exercised by the reviewer and reported line by line; any 200 is an immediate request_changes.",
+        "Public surface confirmed public by the reviewer: /, /login, /print/flight/:id, static assets, GET /api/auth/session, and the three /api/ingest/* paths with a valid token.",
+        "Both PDF exports and both KML exports are produced by the reviewer through the authenticated routes; page counts and Content-Disposition are compared against pre-phase captures and pasted.",
+        "The puppeteer end-to-end run against the real HTTPS scratch server is the reviewer's own, with its script and output pasted, including the Set-Cookie attributes observed over TLS (Secure present) and over loopback plaintext (Secure absent — §10.6).",
+        "Design §19 items 1-12 are each reported individually with the command that verified them; item 3 (ingest behaviour unchanged apart from the mandatory token), item 4 (upload validators untouched) and item 5 (Vitest suite unedited and passing) get explicit diffs.",
+        "A session survives a server restart (§10.2): log in, kill the scratch server, restart it against the same scratch DB, and confirm the same cookie still authenticates.",
+        "`npm test`, `npm run test:types`, `npx tsc` and `npm run build` are re-run by the reviewer and exit 0.",
+        "`git status --porcelain` lists only files inside T-006/T-007/T-008 allowed_paths plus .claude/runs artifacts; `git log --oneline -1` is unchanged from the run's start.",
+        "md5sum of the live flights.db and the port-3000 PID stated and unchanged."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 8 9 10",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 12 13 14",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 19",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 21",
+        ".claude/runs/2026-09-10-security-hardening/contracts/samples/",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-010",
+      "role": "dispatcher",
+      "title": "README, agent README and docker-compose — the six documentation obligations of §20.3",
+      "goal": "Three documentation/config files, one task, because they describe one change and must agree with each other. README.md gets, per §20.3: (1) a First run section — `npm run set-password` before the first start, the non-interactive stdin form for Docker (`printf '%s\\n' \"$PW\" | docker compose run --rm -T msfslogger node dist/setPassword.js`), and how to reset a forgotten password including `DELETE FROM auth_session` to end existing sessions; (2) the environment-variable table at line 21 rewritten with every row of §7.1 — INGEST_TOKEN's current wording ('Optional shared secret ... If unset, the endpoints are unauthenticated — fine on a trusted home LAN') is now false and must go; (3) an HTTPS section with the two variables, the openssl one-liner of §11.5, the one-port rule, the fact that a stale http:// bookmark will fail to connect, and that certificate rotation needs a restart; (4) an Insecure modes subsection naming ALLOW_UNAUTHENTICATED_INGEST and ALLOW_PLAINTEXT_HTTP in the same words the startup warnings use — insecure, trusted LAN only, never on an internet-reachable host; (5) the upgrade note carrying the §20.1 sequence verbatim; (6) the dev note — loopback plaintext needs no opt-out, npm run dev is unaffected, and changeOrigin in the Vite proxy must stay false. agent/README.md gets §15.1 and §15.2: INGEST_TOKEN is now required and must match the server exactly, SERVER_URL becomes https://, and the PowerShell block with NODE_EXTRA_CA_CERTS, plus the deploy ordering of §15.3. docker-compose.yml gets INGEST_TOKEN, TLS_CERT_FILE, TLS_KEY_FILE, ALLOW_PLAINTEXT_HTTP and SESSION_SECRET as pass-throughs and a certificate-directory volume hint, with no default values baked into the image. Do not document anything the code does not do — every command you write is one you ran.",
+      "depends_on": ["T-009"],
+      "allowed_paths": ["README.md", "agent/README.md", "docker-compose.yml"],
+      "acceptance_criteria": [
+        "The stale claim is gone: `grep -in 'If unset, the endpoints are unauthenticated\\|fine on a trusted home LAN' README.md` returns nothing.",
+        "Every variable of §7.1 appears in the README table: `grep -c` each of INGEST_TOKEN, ALLOW_UNAUTHENTICATED_INGEST, TLS_CERT_FILE, TLS_KEY_FILE, TLS_KEY_PASSPHRASE, ALLOW_PLAINTEXT_HTTP, BIND_HOST, SESSION_SECRET returns at least 1. Paste the counts.",
+        "The openssl command in the README is run verbatim in a scratch dir and produces a cert/key pair that a scratch server on port 3106 accepts — `curl -k -s -o /dev/null -w '%{http_code}' https://127.0.0.1:3106/api/auth/session` prints 200. Paste both commands.",
+        "The First run instructions are run verbatim against a scratch DB copy: the non-interactive set-password form creates the account, and the documented reset form changes the password. Paste both.",
+        "The §20.1 upgrade block in the README is diffed against the design text and reported as an exact match.",
+        "The two insecure-mode names appear with the words 'insecure' and 'LAN' in the same section, matching the startup warnings the code actually prints — quote the code's warning and the README's sentence side by side.",
+        "agent/README.md states that INGEST_TOKEN is required (not optional) and contains the NODE_EXTRA_CA_CERTS PowerShell block; `grep -in 'optional' agent/README.md` returns no line that still describes INGEST_TOKEN as optional.",
+        "docker-compose.yml parses: if `docker compose version` succeeds, `docker compose config` exits 0 and its output is pasted; otherwise parse it with a Node YAML read and say which route was taken. Either way, `grep -nE '(TOKEN|SECRET|PASSWORD)=[^$]' docker-compose.yml` returns nothing — no secret value is baked in.",
+        "No behaviour claim is invented: every fenced command block added to README.md or agent/README.md that can be run on this machine was run, and its exit status is reported. Say explicitly which blocks are Windows-only and therefore unrun (§21 R5).",
+        "`git status --porcelain` lists only the three allowed paths; no source file changed.",
+        "md5sum of the live flights.db unchanged; port-3000 PID unchanged."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 20",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 7",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 11 12",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 15",
+        "README.md",
+        "agent/README.md",
+        "docker-compose.yml"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-011",
+      "role": "devops",
+      "title": "Upgrade rehearsal — follow README §20.1 from a stale deployment to a working HTTPS server, and check the packaging",
+      "goal": "Prove the breaking change is recoverable exactly as documented, and that the tree is shippable. Working entirely in scratch, against a copy of the live database: start from the built tree with no new environment set and confirm the two refusals in sequence (missing INGEST_TOKEN, then missing operator account), then follow the README's §20.1 block verbatim — build, set-password, INGEST_TOKEN, a certificate — and end with a server on port 3107 that a curl session can log into, list flights from, export a PDF from, and post an ingest frame to with the token. Then the packaging checks: the Docker server stage still builds from the file set the Dockerfile copies, `npm audit` is recorded, and `npm run build` leaves the tree in a shippable state — the user's live process will load whatever is in dist/ on its next restart. Write no source files; if something fails, report it rather than fixing it.",
+      "depends_on": ["T-010"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "The two refusals are reproduced in order from a stale-deployment starting point, with exit code 1 and the exact stderr pasted for each.",
+        "The README §20.1 sequence is executed verbatim, command by command, with each command's exit status pasted. Any deviation needed to make it work is a documentation bug reported against T-010, not a silent fix.",
+        "End state on port 3107 over HTTPS: POST /api/auth/login -> 200 with a Set-Cookie; GET /api/flights with that cookie -> 200 and a flight count matching the scratch DB; GET /api/flights/<id>/export.pdf -> 200 application/pdf over 10 KB; POST /api/ingest/frame with x-ingest-token -> 204; the same POST without the header -> 401. Paste all five.",
+        "Docker server stage: copy package.json, package-lock.json, tsconfig.json and src/ into a scratch dir (the exact file set the Dockerfile copies), `npm ci` there, `npm run build:server`, exit 0 — this proves dist/setPassword.js and dist/auth/* are produced by the production build path with no dev dependencies. `ls dist/setPassword.js dist/auth/` in that scratch build is pasted.",
+        "`docker build .` is attempted; if the daemon is unavailable, say so explicitly and report the server-stage check above as the substitute.",
+        "`npm audit --omit=dev` summary pasted, with any new high/critical advisory named (§21 R9).",
+        "Shippability: `npm run build` exits 0, `npm test` exits 0, `npx tsc` exits 0, and `git status --porcelain` shows no unintended modification and no build artifact tracked.",
+        "The live system is untouched: md5sum of flights.db before and after, and `ss -ltnp | grep :3000` showing the same PID before and after. State that the user's next restart of that process will hit the §20.1 refusal until they set INGEST_TOKEN and run set-password — this sentence must appear in the report so it reaches the final user-facing summary.",
+        "Every scratch server started is killed and every scratch directory is under /tmp, not in the repo."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 20",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 6",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 11",
+        "README.md",
+        "Dockerfile",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-012",
+      "role": "reviewer",
+      "title": "Review phase 3 — documentation accuracy and the shipped state",
+      "goal": "Verify that the documentation matches the code that actually shipped, not the design that described it. Re-run the README's runnable command blocks yourself on port 3112 against a scratch DB copy — the openssl one-liner, the First run sequence, the §20.1 upgrade block — and confirm each does what the surrounding prose claims. Cross-check the README's environment table against `grep -o` on src/config.ts's ENV_VARS so no variable is documented that does not exist and none exists that is not documented. Confirm the insecure-mode wording matches the strings the server actually prints. Re-run T-011's Docker server-stage check. Then close out the run: walk design §19 one final time, confirm no file outside the run's cumulative allowed_paths changed, confirm no sub-agent committed or switched branches, and state the residual risks from §21 that ship unmitigated (R4 trust-on-first-use, R5 the Windows agent is unverified on this machine, R6 a password change does not end sessions, R7 no ingest rate limit).",
+      "depends_on": ["T-011"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Every runnable command block in README.md and agent/README.md is executed by the reviewer or explicitly marked Windows-only/unrunnable, with a per-block exit status table in the report.",
+        "Documentation/code agreement on env vars: the set from `grep -oE \"'[A-Z_]+'\" src/config.ts` (ENV_VARS) equals the set documented in the README table. Paste both sets and the diff.",
+        "The three fatal startup messages and the two insecure-mode warnings printed by the built server are diffed against the README's quotations of them; any drift is request_changes.",
+        "The Docker server-stage build is re-run by the reviewer and exits 0, producing dist/setPassword.js and dist/auth/.",
+        "Design §19 items 1-12 reported one final time as verified against the shipped tree.",
+        "`git status --porcelain` shows only the run's intended files across all three phases; `git log --oneline -3` is unchanged from the run's start — no sub-agent committed, pushed or switched branches.",
+        "md5sum of the live flights.db and the port-3000 PID stated and unchanged since the run began.",
+        "The report ends with the residual-risk list (§21 R4, R5, R6, R7) and the sentence the user needs: their running server will refuse to start after this change until INGEST_TOKEN is set and an operator account exists."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 19 20 21",
+        ".claude/tools/ctx.sh design 2026-09-10-security-hardening 7",
+        "README.md",
+        "agent/README.md",
+        "docker-compose.yml",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    }
+  ],
+  "amendments": []
+}

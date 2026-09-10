@@ -1,3 +1,28 @@
+// ── Auth ──────────────────────────────────────────────────────────────────
+//
+// Mirrors src/types.ts byte-identically (design.md §4.4). Hand-maintained;
+// there is no shared package and this run does not introduce one.
+
+export interface SessionUser {
+  username: string;
+}
+
+/** POST /api/auth/login request body (§9.1). */
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+/** POST /api/auth/login 200 body (§9.1). */
+export interface LoginResponse {
+  user: SessionUser;
+}
+
+/** GET /api/auth/session 200 body (§9.3). Always 200, never 401. */
+export type SessionResponse =
+  | { authenticated: true; user: SessionUser }
+  | { authenticated: false; user: null };
+
 export interface FlightPoint {
   lat: number;
   lon: number;

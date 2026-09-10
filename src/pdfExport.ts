@@ -1,6 +1,7 @@
 import fs from 'fs';
 import puppeteer, { Browser } from 'puppeteer';
 import { PDFDocument } from 'pdf-lib';
+import { getConfig } from './config';
 
 const READY_TIMEOUT_MS = 30_000;
 const NAV_TIMEOUT_MS = 30_000;
@@ -13,16 +14,31 @@ let idleTimer: NodeJS.Timeout | null = null;
 // several at once is a real memory spike on a small box.
 let queue: Promise<unknown> = Promise.resolve();
 
+/** The session cookie forwarded into the headless render (design.md §13.2). */
+export interface RenderOptions {
+  sessionCookie?: { name: string; value: string };
+}
+
 function baseUrl(): string {
   // Overridable so dev can point at the Vite server (:5173) instead of the
-  // Express server, which only ever serves the last built client/dist.
-  return process.env.EXPORT_BASE_URL ?? `http://127.0.0.1:${process.env.PORT ?? '3000'}`;
+  // Express server, which only ever serves the last built client/dist. The
+  // override keeps its precedence; only the derived default changed, and only
+  // to follow the scheme the server is actually listening on (design.md §13.2,
+  // §19 item 9).
+  const scheme = () => (getConfig().tls.enabled ? 'https' : 'http');
+  return process.env.EXPORT_BASE_URL ?? `${scheme()}://127.0.0.1:${process.env.PORT ?? '3000'}`;
 }
 
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     console.log('[PDF] Launching headless browser...');
     browserPromise = puppeteer.launch({
+      // The loopback render targets this server's own HTTPS listener, whose
+      // certificate is typically self-signed and issued for the LAN name
+      // rather than 127.0.0.1. Both would abort the navigation otherwise, and
+      // the browser only ever loads our own pages — the same rationale as
+      // --no-sandbox below. design.md §13.3.
+      acceptInsecureCerts: true,
       // Ubuntu 24.04's AppArmor policy blocks unprivileged user namespaces,
       // which breaks Chromium's sandbox. We only ever load our own localhost
       // pages, so disabling it is acceptable here.
@@ -68,7 +84,7 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
-async function renderOnce(path: string): Promise<Buffer> {
+async function renderOnce(path: string, opts: RenderOptions = {}): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -86,7 +102,28 @@ async function renderOnce(path: string): Promise<Buffer> {
     // Identify ourselves per the OSM tile usage policy
     await page.setUserAgent('msfslogger-pdf-export/1.0 (+https://github.com/oshogun/msfslogger)');
 
-    const url = `${baseUrl()}${path}`;
+    const base = baseUrl();
+
+    // The print page fetches its data from /api, which is behind the auth gate
+    // — without the caller's own session cookie every export would fail with
+    // "Authentication required". It goes in through the cookie jar and never
+    // as a blanket extra request header: this scopes it to our own host, so it
+    // is not attached to the OSM tile requests the print maps make.
+    // design.md §13.2.
+    if (opts.sessionCookie) {
+      const u = new URL(base);
+      await page.setCookie({
+        name: opts.sessionCookie.name,
+        value: opts.sessionCookie.value,
+        domain: u.hostname,
+        path: '/',
+        httpOnly: true,
+        secure: u.protocol === 'https:',
+        sameSite: 'Lax',
+      });
+    }
+
+    const url = `${base}${path}`;
     console.log(`[PDF] Rendering ${url}`);
     // Not networkidle: the print pages fetch map tiles lazily and would never
     // look idle, so we wait on an explicit flag the page sets once its maps
@@ -121,8 +158,8 @@ async function renderOnce(path: string): Promise<Buffer> {
 }
 
 /** Renders a print route to PDF. Calls are serialised across the process. */
-export function renderPdf(path: string): Promise<Buffer> {
-  const result = queue.then(() => renderOnce(path));
+export function renderPdf(path: string, opts?: RenderOptions): Promise<Buffer> {
+  const result = queue.then(() => renderOnce(path, opts));
   // Keep the chain alive even if this render rejects
   queue = result.catch(() => undefined);
   return result;

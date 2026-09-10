@@ -9,3 +9,5 @@ flight_plans/
 start.sh
 server.log
 backups/
+certs/
+*.pem

@@ -20,12 +20,101 @@ If the server runs on the **same machine** as MSFS, you don't need the agent —
 
 ## Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | Port the HTTP server listens on |
-| `INGEST_TOKEN` | *(none)* | Optional shared secret for the agent ingest endpoints (`/api/ingest/*`). If set, the agent must send it back as the `x-ingest-token` header. If unset, the endpoints are unauthenticated — fine on a trusted home LAN, not recommended otherwise. |
-| `EXPORT_BASE_URL` | `http://127.0.0.1:$PORT` | Where the [PDF export](#pdf-export) loads pages from. Only needs setting in dev, to point at the Vite server (`http://127.0.0.1:5173`) instead of the last built `client/dist`. |
-| `TRAFFIC_ENABLED` | enabled | Server-side kill switch for [AI traffic on the live map](#ai-traffic-on-the-live-map). Set to `0`, `false`, `off` or `no` to make `/api/ingest/traffic` discard every batch it receives (`204`, no validation, nothing stored). The agent has its own, independently-read copy of the same variable — see [`agent/README.md`](agent/README.md). |
+The server validates its security-relevant variables at startup and refuses to
+start on the first problem it finds — see [First run](#first-run) and
+[HTTPS](#https) below for what that looks like and how to get past it.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `3000` | Port the server listens on — HTTPS or HTTP, never both (see [HTTPS](#https)) |
+| `BIND_HOST` | No | `0.0.0.0` | Interface to bind. `0.0.0.0` is today's behaviour. `127.0.0.1` (or `::1`/`localhost`) is the loopback-only dev mode that needs no TLS or opt-out — see [Running locally](#running-locally-development) |
+| `INGEST_TOKEN` | **Yes**, unless `ALLOW_UNAUTHENTICATED_INGEST` is set | *(none)* | Shared secret for the agent ingest endpoints (`/api/ingest/*`), compared timing-safely against the `x-ingest-token` header the agent sends. Must match the value configured on the agent — see [`agent/README.md`](agent/README.md). Without it, and without the opt-out below, the server will not start |
+| `ALLOW_UNAUTHENTICATED_INGEST` | No | off | Insecure, trusted-LAN-only opt-out that runs `/api/ingest/*` with no token check at all — see [Insecure modes](#insecure-modes) |
+| `TLS_CERT_FILE` | No, but see [HTTPS](#https) | *(none)* | PEM certificate (a chain is fine). Must be set together with `TLS_KEY_FILE` |
+| `TLS_KEY_FILE` | No | *(none)* | PEM private key |
+| `TLS_KEY_PASSPHRASE` | No | *(none)* | Passphrase for an encrypted `TLS_KEY_FILE` |
+| `ALLOW_PLAINTEXT_HTTP` | No | off | Insecure, trusted-LAN-only opt-out that allows plaintext HTTP on a non-loopback `BIND_HOST` — see [Insecure modes](#insecure-modes) |
+| `SESSION_SECRET` | No | auto-generated and stored in `flights.db` | Must be ≥ 16 characters if set. Overriding it logs out every existing session |
+| `EXPORT_BASE_URL` | No | `http://127.0.0.1:$PORT` | Where the [PDF export](#pdf-export) loads pages from. Only needs setting in dev, to point at the Vite server (`http://127.0.0.1:5173`) instead of the last built `client/dist`. |
+| `TRAFFIC_ENABLED` | No | enabled | Server-side kill switch for [AI traffic on the live map](#ai-traffic-on-the-live-map). Set to `0`, `false`, `off` or `no` to make `/api/ingest/traffic` discard every batch it receives (`204`, no validation, nothing stored). The agent has its own, independently-read copy of the same variable — see [`agent/README.md`](agent/README.md). |
+
+---
+
+## First run
+
+There is no HTTP setup flow — the server refuses to start until an operator
+account exists, and (unless you opt out, see [Insecure modes](#insecure-modes))
+until `INGEST_TOKEN` is set. Create the account once, before the first start,
+after `npm run build` (the script lives in `dist/`, so it works the same way
+in a plain checkout and in Docker, which has no dev dependencies):
+
+```bash
+npm run build
+npm run set-password    # prompts for a username (default "operator") and a password
+```
+
+Run it again at any time to change the password — it upserts the one operator
+row rather than requiring a delete first. Existing browser sessions are **not**
+invalidated by a password change; they simply expire on their own schedule.
+
+**Non-interactive / Docker.** `docker compose run` gives the command no TTY, so
+when stdin is not a terminal the script reads the password from the first line
+of stdin instead of prompting, and skips the confirmation step:
+
+```bash
+printf '%s\n' "$PW" | docker compose run --rm -T msfslogger node dist/setPassword.js
+```
+
+**Forgot the password?** Re-run the same command with a new password — that
+*is* the reset. To also force every currently logged-in session to re-login
+(a password change alone doesn't do this), delete the session rows:
+
+```bash
+node -e "new (require('better-sqlite3'))('flights.db').prepare('DELETE FROM auth_session').run()"
+```
+
+---
+
+## HTTPS
+
+Set `TLS_CERT_FILE` and `TLS_KEY_FILE` (PEM, required together) to serve
+HTTPS instead of plaintext HTTP; add `TLS_KEY_PASSPHRASE` if the key is
+encrypted. Both files are read once at startup and held in memory for the
+life of the process, so **rotating a certificate needs a restart** — there is
+no hot-reload.
+
+Generate a self-signed certificate (verified with OpenSSL 3.0.13 on this
+machine):
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -keyout msfslogger-key.pem -out msfslogger-cert.pem \
+  -subj "/CN=msfslogger" \
+  -addext "subjectAltName=IP:<server-lan-ip>,DNS:<server-hostname>"
+```
+
+Browsers show a one-time warning for a self-signed certificate, which you
+accept once per browser. The agent needs the same certificate file trusted
+separately — see [`agent/README.md`](agent/README.md).
+
+**One port, one protocol.** `PORT` serves either HTTPS or HTTP, never both —
+there is no listener that redirects `http://` to `https://`. If you turn TLS
+on, update any bookmark or shortcut from `http://host:3000` to
+`https://host:3000`; the old `http://` URL will fail to connect, not redirect.
+
+### Insecure modes
+
+Two environment variables intentionally weaken security, each printing a
+warning on every start it's active for. Never set either on a host reachable
+from the internet — both are insecure, trusted-LAN-only opt-outs.
+
+- **`ALLOW_UNAUTHENTICATED_INGEST`** — runs `/api/ingest/*` with no token
+  check. If you set neither this nor `INGEST_TOKEN`, the server's own refusal
+  message ends with:
+  > ...or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).
+- **`ALLOW_PLAINTEXT_HTTP`** — allows the server to bind a non-loopback
+  address (see `BIND_HOST` above) without TLS. Its startup warning:
+  > WARNING: serving plaintext HTTP on \<host\>:\<port\> because ALLOW_PLAINTEXT_HTTP is set. The session cookie and the ingest token cross the network unencrypted. Configure TLS_CERT_FILE and TLS_KEY_FILE (README § HTTPS).
 
 ---
 
@@ -65,11 +154,26 @@ If MSFS is on the **same machine** as the server, you don't need the agent or an
 
 ### 3. Start
 
+`npm run dev` enforces the same startup checks as any other environment — it
+still needs `INGEST_TOKEN` set and an operator account created (see
+[First run](#first-run)) before it will run. The one thing dev doesn't need is
+TLS: export `BIND_HOST=127.0.0.1` and the server binds loopback-only, prints
+`No TLS configured — serving plaintext HTTP on loopback only.`, and needs no
+`ALLOW_PLAINTEXT_HTTP` opt-out, because nothing leaves the machine:
+
 ```bash
+export BIND_HOST=127.0.0.1
+export INGEST_TOKEN=devtoken1234567890
 npm run dev
 ```
 
 This starts both the Express server (port `3000`) and the Vite dev server (port `5173`) concurrently. Open **http://localhost:5173** during development — Vite proxies all `/api` calls to Express.
+
+`client/vite.config.ts`'s `/api` proxy must keep `changeOrigin` unset
+(defaults to `false`): that's what makes the browser's `Origin:
+http://localhost:5173` match the `Host` header the Express server sees, which
+the same-origin check on every state-changing request depends on. Turning it
+on makes those requests start failing with `403`.
 
 ---
 
@@ -130,6 +234,43 @@ See [Backups](#backups) below — copying `flights.db` by hand is not reliable w
 ```bash
 docker compose up --build
 ```
+
+---
+
+## Upgrading from an earlier version
+
+This is a deliberate breaking change: an existing deployment that pulls this
+build and takes no other action will not start. Verified against a completely
+empty environment (nothing exported at all — `BIND_HOST` defaults to
+`0.0.0.0`, which is not loopback): the server refuses to start with the
+plaintext/TLS message first, *then*, once that's resolved, with the missing
+`INGEST_TOKEN` message, and only then, once both are resolved, with the
+missing-operator-account message — three sequential refusals as each is fixed
+in turn, not one. `INGEST_TOKEN` is checked before the database is opened
+either way, so nothing is written and nothing is lost at any step.
+
+Minimum sequence to a working deployment:
+
+```
+npm run build
+node dist/setPassword.js                 # or: npm run set-password
+export INGEST_TOKEN=$(openssl rand -hex 24)
+# EITHER supply a certificate:
+export TLS_CERT_FILE=/etc/msfslogger/cert.pem TLS_KEY_FILE=/etc/msfslogger/key.pem
+# OR accept plaintext on the LAN, knowingly:
+export ALLOW_PLAINTEXT_HTTP=1
+npm start
+```
+
+Afterwards: browsing to the app redirects to `/login` until you sign in with
+the account from [First run](#first-run); with TLS on, the URL becomes
+`https://…` and a self-signed certificate produces a one-time browser warning;
+the agent stops delivering data until its environment has the same
+`INGEST_TOKEN` and, if TLS is on, a trusted certificate (see
+[`agent/README.md`](agent/README.md)) — flights in progress aren't corrupted,
+the server just marks the agent disconnected after the existing 10s stale
+timeout; PDF and KML export keep working exactly as before, from inside a
+logged-in session.
 
 ---
 
