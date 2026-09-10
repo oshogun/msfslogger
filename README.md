@@ -195,8 +195,10 @@ npm run test:types # typechecks tests/ (npx tsc / npm run build does not)
 ```
 
 Tests live under `tests/` (Vitest) and cover the server-side logic in `src/` —
-they are not exercised through the UI. There is no coverage tooling or CI
-config; `npm test` is what a change should pass before it ships.
+they are not exercised through the UI. There is no coverage tooling, but
+[CI](.github/workflows/ci.yml) runs build, `test:types` and `npm test` on
+every push and pull request; `npm test` is what a change should pass before it
+ships.
 
 ---
 
@@ -209,7 +211,13 @@ config; `npm test` is what a change should pass before it ships.
 
 ### 1. Build and start
 
+The `flights.db` bind mount needs the file to already exist — if it doesn't,
+Compose silently creates a *directory* there instead of failing, and the
+server then fails to open it as a database:
+
 ```bash
+touch flights.db
+mkdir -p flight_plans
 docker compose up --build
 ```
 
