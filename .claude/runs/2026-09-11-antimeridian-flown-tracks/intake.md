@@ -63,3 +63,43 @@ of the screen rather than a continuous line").
 
 Tier 2 — one Dispatcher + one Reviewer. Three files, one mechanical technique,
 no new contract.
+
+## Amendment 2026-09-11 — first fix was incomplete
+
+User reported "still not working for planned legs" after the first fix shipped
+(commit b37d000). Investigation (read-only query against the live `flights.db`,
+trip 1 "Circumnavegação", 24 planned legs) found a second, more fundamental bug
+that the first fix and its review both missed:
+
+`unwrapLonChain` correctly prevents a >180° jump *within* one chain, but every
+caller ran it once per leg (or per flight), each anchored to its own first
+point. Two chains that are meant to connect (leg N's last waypoint == leg N+1's
+first waypoint) can land exactly 360° apart if there's an odd number of
+antimeridian crossings between them anywhere earlier in the route — confirmed
+with real data: leg 19 (PADK→PASY) unwraps to end at lon -185.89°, leg 20
+(the next planned leg, also PADK→PASY — a duplicate-leg data quirk) starts
+its own independent unwrap at lon -176.64° raw; by leg 21 (PASY→UHPP) the
+accumulated drift lands it 360° from where leg 19 ended, a clean gap at the
+shared airport (PASY). Corrected from an earlier draft of this note, which
+attributed the 360° gap directly to the 19→21 boundary — verified by an
+independent Reviewer re-running the same query against the live `flights.db`.
+
+Fix: added `unwrapLonChains` to `client/src/utils/geo.ts` — threads one
+running reference longitude across an ordered sequence of chains (rather than
+resetting per chain) while still returning one array per input chain, so each
+leg/flight still renders as its own `Polyline`. Applied in `TripMap.tsx`
+(planned legs sorted by `seq`, and flights, each as their own threaded group)
+and `JourneyMap.tsx` (legs sorted by `seq`). `FlightMap.tsx` was not touched —
+it only ever draws one flight + one planned leg, so there's no cross-chain
+boundary to thread.
+
+Verified against trip 1's real 24 legs (read-only `better-sqlite3` query, not
+just synthetic data): after threading, every leg-to-leg boundary gap is ~0°
+except one (leg 19→20, a pre-existing duplicate-leg data quirk unrelated to
+this bug — leg 20 restarts from PADK rather than continuing from leg 19's
+PASY endpoint).
+
+This time implemented directly by the Orchestrator (not dispatched) given the
+diagnosis was already concrete; still routed through an independent Reviewer
+before merge per the non-negotiable that the Orchestrator does not review its
+own work.

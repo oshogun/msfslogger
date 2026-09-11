@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { JourneyLeg, JourneyAirport } from '../types';
-import { unwrapLonChain } from '../utils/geo';
+import { unwrapLonChains } from '../utils/geo';
 
 /**
  * Legs are tinted along a hue ramp from the first flight to the most recent, so
@@ -15,10 +15,24 @@ export function legColor(seq: number, total: number): string {
   return `hsl(${hue.toFixed(0)} 85% 60%)`;
 }
 
+// Legs are drawn as one Polyline each but represent a single ordered journey:
+// unwrapping every leg's track independently — anchored to its own first
+// point — lets leg N+1 land 360° from where leg N ended whenever there's an
+// odd number of antimeridian crossings between them. Threading continuity
+// across the whole seq-ordered sequence (unwrapLonChains) fixes that; see
+// utils/geo.ts and the same fix in TripMap.tsx.
+function sortedLegs(legs: JourneyLeg[]): JourneyLeg[] {
+  return legs.slice().sort((a, b) => a.seq - b.seq);
+}
+
+function legTrackChains(legs: JourneyLeg[]): [number, number][][] {
+  return unwrapLonChains(sortedLegs(legs).map(l => l.track as [number, number][]));
+}
+
 function FitAll({ legs }: { legs: JourneyLeg[] }) {
   const map = useMap();
   useEffect(() => {
-    const all = legs.flatMap(l => unwrapLonChain(l.track as [number, number][]));
+    const all = legTrackChains(legs).flat();
     if (all.length === 0) return;
     map.fitBounds(L.latLngBounds(all as [number, number][]), { padding: [28, 28] });
   }, [map, legs]);
@@ -37,17 +51,20 @@ export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) 
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No flights recorded yet.</p>;
   }
 
+  const ordered = sortedLegs(legs);
+  const trackChains = legTrackChains(legs);
+
   return (
-    <MapContainer style={{ height: '100%' }} zoom={4} center={legs[0].track[0] ?? [0, 0]} preferCanvas>
+    <MapContainer style={{ height: '100%' }} zoom={4} center={ordered[0].track[0] ?? [0, 0]} preferCanvas>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         maxZoom={18}
       />
 
-      {legs.map(leg => {
+      {ordered.map((leg, legIdx) => {
         const dimmed = highlightId !== null && highlightId !== leg.id;
-        const track = unwrapLonChain(leg.track as [number, number][]);
+        const track = trackChains[legIdx];
         return (
           <Polyline
             key={leg.id}

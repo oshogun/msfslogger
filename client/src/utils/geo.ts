@@ -40,3 +40,41 @@ export function unwrapLonChain(points: [number, number][]): [number, number][] {
   }
   return out;
 }
+
+/**
+ * Threads `unwrapLonChain`'s continuity across a sequence of chains that are
+ * drawn as separate polylines (one per leg, one per flight) but together
+ * represent a single ordered route. Calling `unwrapLonChain` on each chain
+ * independently only prevents a >180° jump *within* that chain — every chain
+ * starts its own reference at its own first point, so on a route with an odd
+ * number of dateline crossings between two chains (e.g. one leg ending just
+ * past the antimeridian, the next starting there), the two land exactly 360°
+ * apart even though they share an endpoint. A circumnavigation with several
+ * legs near the dateline can drift like this repeatedly, scattering chains
+ * across multiple world-copies. Threading a running reference longitude
+ * across chain boundaries — as if every chain were one continuous route —
+ * fixes that while still returning one array per input chain, so callers
+ * that render each chain as its own `Polyline` are unaffected.
+ */
+export function unwrapLonChains(chains: [number, number][][]): [number, number][][] {
+  const out: [number, number][][] = [];
+  let prevLon: number | null = null;
+  for (const chain of chains) {
+    if (chain.length === 0) {
+      out.push(chain);
+      continue;
+    }
+    const unwrapped: [number, number][] = [];
+    for (const [lat, lon0] of chain) {
+      let lon = lon0;
+      if (prevLon !== null) {
+        while (lon - prevLon > 180) lon -= 360;
+        while (lon - prevLon < -180) lon += 360;
+      }
+      unwrapped.push([lat, lon]);
+      prevLon = lon;
+    }
+    out.push(unwrapped);
+  }
+  return out;
+}

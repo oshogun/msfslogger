@@ -4,7 +4,7 @@ import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
 import type { Flight, PlannedLegWithChildren } from '../types';
 import { formatDistance } from '../utils/format';
-import { unwrapLonChain } from '../utils/geo';
+import { unwrapLonChains } from '../utils/geo';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 
@@ -28,6 +28,29 @@ const mkWaypointIcon = () =>
     html: `<div style="width:8px;height:8px;border-radius:50%;background:${PLANNED_ROUTE_COLOR};border:1px solid #fff;box-shadow:0 0 3px #000;opacity:0.9"></div>`,
   });
 
+// A trip's planned legs (and, separately, its flights) are drawn as one
+// Polyline per leg/flight but represent a single ordered route: unwrapping
+// each chain independently — anchored to its own first point — lets leg N+1
+// land 360° away from where leg N ended whenever there's an odd number of
+// antimeridian crossings between them (see unwrapLonChains in utils/geo.ts).
+// These two helpers thread continuity across the whole ordered group so
+// every leg/flight in a trip shares one reference frame.
+function sortedPlannedLegs(plannedLegs: PlannedLegWithChildren[]): PlannedLegWithChildren[] {
+  return plannedLegs.slice().sort((a, b) => a.seq - b.seq);
+}
+
+function plannedLegChains(plannedLegs: PlannedLegWithChildren[]): [number, number][][] {
+  const raw = sortedPlannedLegs(plannedLegs).map(leg =>
+    leg.waypoints.slice().sort((a, b) => a.seq - b.seq).map(w => [w.lat, w.lon] as [number, number])
+  );
+  return unwrapLonChains(raw);
+}
+
+function flightChains(flights: Flight[]): [number, number][][] {
+  const raw = flights.map(f => (f.points || []).map(p => [p.lat, p.lon] as [number, number]));
+  return unwrapLonChains(raw);
+}
+
 function procedureNote(leg: PlannedLegWithChildren): string | null {
   const parts: string[] = [];
   if (leg.sid_name) parts.push(`SID ${leg.sid_name}`);
@@ -42,11 +65,8 @@ function procedureNote(leg: PlannedLegWithChildren): string | null {
 function BoundsController({ flights, plannedLegs }: { flights: Flight[]; plannedLegs: PlannedLegWithChildren[] }) {
   const map = useMap();
   useEffect(() => {
-    const flownPoints = flights.flatMap(f => unwrapLonChain((f.points || []).map(p => [p.lat, p.lon] as [number, number])));
-    const plannedPoints = plannedLegs.flatMap(leg => {
-      const chain = leg.waypoints.slice().sort((a, b) => a.seq - b.seq).map(w => [w.lat, w.lon] as [number, number]);
-      return unwrapLonChain(chain);
-    });
+    const flownPoints = flightChains(flights).flat();
+    const plannedPoints = plannedLegChains(plannedLegs).flat();
     const allPoints = [...flownPoints, ...plannedPoints];
     if (allPoints.length === 0) return;
     map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
@@ -88,6 +108,9 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
       ? ([firstPlannedWaypoint.lat, firstPlannedWaypoint.lon] as [number, number])
       : ([0, 0] as [number, number]);
 
+  const plannedChains = plannedLegChains(plannedLegs);
+  const flightChainsArr = flightChains(flights);
+
   return (
     <MapContainer
       style={{ height: '100%' }}
@@ -108,11 +131,10 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         (design.md §6.2, DoD 9): a visible gap at the ends of an IFR leg with
         procedures is the file drawn faithfully, not a bug.
       */}
-      {plannedLegs.map((leg) => {
+      {sortedPlannedLegs(plannedLegs).map((leg, legIdx) => {
         const sortedWaypoints = leg.waypoints.slice().sort((a, b) => a.seq - b.seq);
         if (sortedWaypoints.length === 0) return null;
-        const rawChain: [number, number][] = sortedWaypoints.map(w => [w.lat, w.lon]);
-        const chain = unwrapLonChain(rawChain);
+        const chain = plannedChains[legIdx];
         const note = procedureNote(leg);
         const label =
           `Leg ${leg.seq} (planned) — ${leg.departure_ident} → ${leg.destination_ident}` +
@@ -140,7 +162,7 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         const pts = f.points || [];
         if (pts.length === 0) return null;
         const color = LEG_COLORS[i % LEG_COLORS.length];
-        const latlngs = unwrapLonChain(pts.map(p => [p.lat, p.lon] as [number, number]));
+        const latlngs = flightChainsArr[i];
         return (
           <Fragment key={f.id}>
             <Polyline positions={latlngs} pathOptions={{ color, weight: 2.5, opacity: 0.9 }}>
