@@ -1,14 +1,14 @@
-// tests/legMatcher.test.ts — src/legMatcher.ts, T-004.
+// tests/legMatcher.test.ts — tests src/legMatcher.ts.
 //
 // Two parts:
-//   1. The 24-row scenario table ported from src/inspect-legmatch.ts:143-385
-//      (design.md §8.2). Scenario data — names, coordinates, expected reason /
-//      legId / nearby / distance window — is TRANSCRIBED from that file, not
-//      re-derived. `leg()` maps to `makeCandidate()` (§4.3) and `takeoff()` is
-//      a local literal-builder, both mirroring the inspector's own helpers of
-//      the same name so the transcription stays line-for-line checkable.
-//   2. Three cases design.md §8.2 calls out as NOT in the inspector's table,
-//      plus two nearbyLegIds-shape cases (design.md acceptance criterion 5).
+//   1. The 24-row scenario table ported from src/inspect-legmatch.ts:143-385.
+//      Scenario data — names, coordinates, expected reason / legId / nearby /
+//      distance window — is TRANSCRIBED from that file, not re-derived.
+//      `leg()` maps to `makeCandidate()` and `takeoff()` is a local
+//      literal-builder, both mirroring the inspector's own helpers of the
+//      same name so the transcription stays line-for-line checkable.
+//   2. A few cases not covered by the inspector's table, plus two
+//      nearbyLegIds-shape cases.
 //
 // Nothing here imports ./db, better-sqlite3, fs, http or https — matchPlannedLeg
 // is pure (src/legMatcher.ts's own header).
@@ -24,9 +24,9 @@ import { haversineNm } from '../src/geo';
 import { makeCandidate } from './helpers';
 
 // ── Fixture coordinates — src/inspect-legmatch.ts:56-62, kept exactly as the
-// inspector wrote them so the ported distance windows below still hold
-// (design.md §8.2: "carry the inspector's own constants rather than
-// substituting" tests/helpers'). ──────────────────────────────────────────────
+// inspector wrote them so the ported distance windows below still hold:
+// carry the inspector's own constants rather than substituting tests/helpers'
+// values. ───────────────────────────────────────────────────────────────────
 
 const KSBA = { lat: 34.426201, lon: -119.841507 }; // VFR KSBA→KMRY, first Pos
 const KMRY_A = { lat: 36.586952, lon: -121.843079 }; // VFR KMRY→KSTS, first Pos
@@ -37,16 +37,16 @@ const KSFO = { lat: 37.618023, lon: -122.375519 }; // IFR KSFO→KLAX, first Pos
 const KLAX = { lat: 33.942474, lon: -118.409332 }; // IFR KSFO→KLAX, last Pos
 
 // src/inspect-legmatch.ts:66 — one arc-minute, used ONLY to reproduce the
-// ported scenarios' own inclusive distance windows. §4.6's northOfNm (exact
+// ported scenarios' own inclusive distance windows. helpers' northOfNm (exact
 // R=3440.065 arithmetic) is used below for the fresh radius-boundary tests.
 const northOf = (p: { lat: number; lon: number }, nm: number) => ({ lat: p.lat + nm / 60, lon: p.lon });
 
 const VFR_TRIP = 1;
 const IFR_TRIP = 2;
 
-// src/inspect-legmatch.ts:73-94, rebuilt on top of makeCandidate() (§4.3) per
-// design.md §8.2's mapping table — same defaults (departureIsAirport: true,
-// status: 'planned', linkedFlightId: null, aircraftType: 'C172').
+// src/inspect-legmatch.ts:73-94, rebuilt on top of makeCandidate() using the
+// same defaults (departureIsAirport: true, status: 'planned',
+// linkedFlightId: null, aircraftType: 'C172').
 function leg(
   plannedLegId: number,
   seq: number,
@@ -107,8 +107,8 @@ interface Scenario {
   distance: [number, number] | null;
 }
 
-// Transcribed verbatim from src/inspect-legmatch.ts:143-385 (design.md §8.2:
-// "that table is the specification. Port it; do not re-derive it").
+// Transcribed verbatim from src/inspect-legmatch.ts:143-385 — that table is
+// the specification; port it, do not re-derive it.
 const SCENARIOS: Scenario[] = [
   {
     name: 'exact match over the field (KSBA)',
@@ -142,7 +142,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'radiusNm override widens the same 40 nm case',
     real: true,
-    note: 'the tuning knob plan.json expects to use once after phase 4',
+    note: 'exercises the radiusNm override that widens the search radius when set explicitly',
     input: takeoff(northOf(KSBA, 40), vfrTrip(), { radiusNm: 50 }),
     reason: 'MATCHED',
     legId: 11,
@@ -165,7 +165,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'leg 1 already flown, second takeoff from KSBA',
     real: true,
-    note: 'reachable only because the loader returns flown legs too (Amendment C)',
+    note: 'reachable only because the loader returns flown legs too',
     input: takeoff(KSBA, vfrTrip({ l11: { status: 'flown', linkedFlightId: null } })),
     reason: 'LEG_ALREADY_FLOWN',
     legId: null,
@@ -184,7 +184,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'flown leg excluded, its successor still matches',
     real: true,
-    note: 'takeoff at KMRY with leg 1 flown+linked: exactly the §13.2 saving grace',
+    note: 'takeoff at KMRY with leg 1 flown+linked: excluding the flown leg is what lets its successor match',
     input: takeoff(KMRY_A, vfrTrip({ l11: { status: 'flown', linkedFlightId: 42 } })),
     reason: 'MATCHED',
     legId: 12,
@@ -212,7 +212,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'precedence: flown AND linked reports FLOWN',
     real: true,
-    note: 'the per-leg order in §13.2 step 5, not whichever check runs first',
+    note: 'a deterministic per-leg check order decides this, not whichever check runs first',
     input: takeoff(KSBA, vfrTrip({ l11: { status: 'flown', linkedFlightId: 42 } })),
     reason: 'LEG_ALREADY_FLOWN',
     legId: null,
@@ -375,10 +375,10 @@ describe('matchPlannedLeg — 24 scenarios ported from src/inspect-legmatch.ts:1
   }
 });
 
-// ── Fresh cases: design.md §8.2 names these as NOT in the inspector's 24 rows,
-// plus the AMBIGUOUS/MATCHED nearbyLegIds-shape pair (acceptance criterion 5).
+// ── Fresh cases: not covered by the inspector's 24 rows, plus the
+// AMBIGUOUS/MATCHED nearbyLegIds-shape pair.
 
-describe('matchPlannedLeg — fresh cases not in the inspector table (design.md §8.2)', () => {
+describe('matchPlannedLeg — fresh cases not in the inspector table', () => {
   it('NO_PLANNED_LEGS from an empty candidate list', () => {
     const r = matchPlannedLeg(takeoff(KSBA, []));
     expect(r.reason).toBe('NO_PLANNED_LEGS');
@@ -400,7 +400,7 @@ describe('matchPlannedLeg — fresh cases not in the inspector table (design.md 
     expect(withZeroRadius.reason).toBe('NO_LEG_IN_RADIUS');
   });
 
-  it('radius boundary: exactly DEPARTURE_RADIUS_NM matches, a hair beyond refuses (measured, never a constructed coordinate — design.md §4.6/§10.5)', () => {
+  it('radius boundary: exactly DEPARTURE_RADIUS_NM matches, a hair beyond refuses (measured, never a constructed coordinate)', () => {
     const candidate = leg(11, 1, VFR_TRIP, 'KSBA', KSBA);
     // Any takeoff point works; the measured distance IS the radius under test,
     // never assumed to equal a round number.

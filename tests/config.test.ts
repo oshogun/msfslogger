@@ -1,9 +1,9 @@
-// tests/config.test.ts — design.md §7, §11, §12 (run 2026-09-10-security-hardening).
+// tests/config.test.ts
 //
-// New file, no existing test file edited (design §19 item 5). Every loadConfig
-// call below passes a synthetic env object, never process.env. console.warn is
-// already spied and silenced by tests/setup.ts's global beforeEach — this file
-// asserts against that same spy via vi.mocked(console.warn).
+// Every loadConfig call below passes a synthetic env object, never
+// process.env. console.warn is already spied and silenced by
+// tests/setup.ts's global beforeEach — this file asserts against that same
+// spy via vi.mocked(console.warn).
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
@@ -40,7 +40,7 @@ describe('ENV_VARS', () => {
   });
 });
 
-describe('parseBooleanEnv (§7.2 truth table)', () => {
+describe('parseBooleanEnv (truth table)', () => {
   it.each([
     ['1', true],
     ['true', true],
@@ -59,7 +59,7 @@ describe('parseBooleanEnv (§7.2 truth table)', () => {
   });
 });
 
-describe('§7.3 fatal branches', () => {
+describe('fatal branches', () => {
   it('step 1: TLS pair set one-sided (cert only)', () => {
     expect(() => loadConfig(baseEnv({ TLS_CERT_FILE: '/some/cert.pem', TLS_KEY_FILE: undefined }))).toThrow(
       new ConfigError(
@@ -94,7 +94,7 @@ describe('§7.3 fatal branches', () => {
     );
   });
 
-  it('step 4: missing INGEST_TOKEN, no opt-out — the §12.2 three-line message, verbatim, newlines included', () => {
+  it('step 4: missing INGEST_TOKEN, no opt-out — the three-line message, verbatim, newlines included', () => {
     let caught: unknown;
     try {
       loadConfig({ BIND_HOST: '127.0.0.1' } as NodeJS.ProcessEnv);
@@ -126,7 +126,7 @@ describe('§7.3 fatal branches', () => {
   });
 });
 
-describe('§7.3 step 2 — TLS material, against real files in a scratch dir', () => {
+describe('step 2 — TLS material, against real files in a scratch dir', () => {
   let scratchDir: string;
 
   beforeAll(() => {
@@ -176,7 +176,7 @@ describe('§7.3 step 2 — TLS material, against real files in a scratch dir', (
     );
   });
 
-  it('(c) a real self-signed pair (design §11.5 openssl command) loads successfully', () => {
+  it('(c) a real self-signed pair (openssl-generated) loads successfully', () => {
     const certPath = path.join(scratchDir, 'msfslogger-cert.pem');
     const keyPath = path.join(scratchDir, 'msfslogger-key.pem');
 
@@ -198,7 +198,7 @@ describe('§7.3 step 2 — TLS material, against real files in a scratch dir', (
   });
 });
 
-describe('§7.3 warning branches — non-fatal, exact message via console.warn', () => {
+describe('warning branches — non-fatal, exact message via console.warn', () => {
   it('step 3, loopback: warns and does not throw', () => {
     expect(() => loadConfig({ INGEST_TOKEN: 'x'.repeat(24), BIND_HOST: '127.0.0.1' } as NodeJS.ProcessEnv)).not.toThrow();
     expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
@@ -229,7 +229,7 @@ describe('§7.3 warning branches — non-fatal, exact message via console.warn',
     );
   });
 
-  it('§12.2 opt-out with no token: starts unauthenticated and warns on every start', () => {
+  it('opt-out with no token: starts unauthenticated and warns on every start', () => {
     const config = loadConfig({
       ALLOW_UNAUTHENTICATED_INGEST: '1',
       BIND_HOST: '127.0.0.1',
@@ -242,7 +242,7 @@ describe('§7.3 warning branches — non-fatal, exact message via console.warn',
   });
 });
 
-describe('defaults (§7.1, §8.5, §10.4)', () => {
+describe('defaults', () => {
   it('loadConfig({ INGEST_TOKEN, ALLOW_PLAINTEXT_HTTP }) resolves every default', () => {
     const token = 'x'.repeat(24);
     const config = loadConfig({ INGEST_TOKEN: token, ALLOW_PLAINTEXT_HTTP: '1' } as NodeJS.ProcessEnv);
@@ -254,14 +254,10 @@ describe('defaults (§7.1, §8.5, §10.4)', () => {
     expect(config.sessionMaxAgeMs).toBe(2592000000);
     expect(config.sessionSecretFromEnv).toBeNull();
     expect(config.ingest.token).toBe(token);
-    // NOTE: the task record's acceptance criteria state
-    // `ingest.allowUnauthenticated true` for this exact input, but the frozen
-    // contract (contracts/config.ts) documents the field as "token is null
-    // when this is true" — an invariant that a non-null token here would
-    // violate. That case is INGEST_TOKEN-only (ALLOW_UNAUTHENTICATED_INGEST is
-    // not part of this env at all, so parseBooleanEnv(undefined) is false
-    // regardless). Implemented and asserted per the contract's documented
-    // invariant; flagged for the Reviewer/Orchestrator in the dispatch report.
+    // allowUnauthenticated is false whenever token is non-null: a token means
+    // authentication is not being skipped, so the two fields can never both be
+    // set. This env has ALLOW_UNAUTHENTICATED_INGEST unset entirely, so
+    // parseBooleanEnv(undefined) is false regardless of the token.
     expect(config.ingest.allowUnauthenticated).toBe(false);
   });
 });

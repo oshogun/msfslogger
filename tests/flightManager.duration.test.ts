@@ -1,4 +1,4 @@
-// tests/flightManager.duration.test.ts — src/flightManager.ts, T-008 part 2 of 3.
+// tests/flightManager.duration.test.ts — tests src/flightManager.ts, part 2 of 3.
 //
 // Track-derived duration: the recording interval, the counted/uncounted gap
 // rule, the interruption flag (pause and slew), the tail interval, and the
@@ -9,8 +9,8 @@
 // from the implementation, and never from a real wait. `duration_sec` is
 // closeFlight's 5th argument (src/flightManager.ts:284-296).
 //
-// The two flights of design.md §5.4 (measured against the real FlightManager in
-// the Designer's prototype) are reproduced verbatim as
+// The two worked flights below (measured against a reference FlightManager
+// implementation) are reproduced verbatim as
 // "worked flight (a)" and "worked flight (b)".
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -72,7 +72,7 @@ describe('FlightManager — recording interval', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 11 ────────────────────────────────────────────────────────────────
+  // ── At most one point per RECORD_INTERVAL_MS ──────────────────────────────
 
   it('records at most one point per RECORD_INTERVAL_MS', () => {
     const fm = new FlightManager();
@@ -111,7 +111,7 @@ describe('FlightManager — duration from counted gaps', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 12 — worked flight (a), design.md §5.4 ────────────────────────────
+  // ── Worked flight (a) ──────────────────────────────────────────────────────
 
   it('worked flight (a): a clean 20 s flight reports duration_sec = 20', () => {
     const fm = new FlightManager();
@@ -127,7 +127,7 @@ describe('FlightManager — duration from counted gaps', () => {
     );
   });
 
-  // ── AC 12 — a multi-point flight with a non-zero tail ────────────────────
+  // ── A multi-point flight with a non-zero tail ─────────────────────────────
 
   it('duration_sec is the counted gaps plus the tail: 5+5+5 + 3 = 18', () => {
     const fm = new FlightManager();
@@ -153,7 +153,7 @@ describe('FlightManager — duration from counted gaps', () => {
     expect(closeArgs().durationSec).toBe(6);
   });
 
-  // ── AC 13 — the MAX_COUNTED_GAP_MS boundary, both sides ──────────────────
+  // ── The MAX_COUNTED_GAP_MS boundary, both sides ───────────────────────────
 
   it('a gap of exactly MAX_COUNTED_GAP_MS is counted', () => {
     expect(MAX_COUNTED_GAP_MS).toBe(60_000);
@@ -180,7 +180,7 @@ describe('FlightManager — duration from counted gaps', () => {
     expect(closeArgs().durationSec).toBe(0);
   });
 
-  // ── AC 14 — the tail interval, all four branches ─────────────────────────
+  // ── The tail interval, all four branches ──────────────────────────────────
 
   it('the tail is counted when the flight was not interrupted and it fits the budget', () => {
     const fm = new FlightManager();
@@ -219,7 +219,7 @@ describe('FlightManager — duration from counted gaps', () => {
     expect(closeArgs().durationSec).toBe(5);
   });
 
-  // ── AC 15 — wall clock far exceeds counted time ──────────────────────────
+  // ── Wall clock far exceeds counted time ───────────────────────────────────
 
   it('a flight with one over-long gap reports only the counted time', () => {
     const fm = new FlightManager();
@@ -270,7 +270,7 @@ describe('FlightManager — interruption excludes the gap that spans it', () => 
     expect(closeArgs().durationSec).toBe(30);
   });
 
-  // ── AC 9 — a 10 s pause, well under MAX_COUNTED_GAP_MS ───────────────────
+  // ── A 10 s pause, well under MAX_COUNTED_GAP_MS ───────────────────────────
 
   it('a 10 s pause is excluded from duration_sec even though it is far under the 60 s gap budget', () => {
     const fm = new FlightManager();
@@ -289,7 +289,7 @@ describe('FlightManager — interruption excludes the gap that spans it', () => 
     expect(15_000).toBeLessThan(MAX_COUNTED_GAP_MS); // the dropped gap was never over budget
   });
 
-  // ── AC 10 — slew does exactly what a pause does ──────────────────────────
+  // ── Slew does exactly what a pause does ───────────────────────────────────
 
   it('slew (simRunning === 3) while FLYING records nothing and interrupts the following gap', () => {
     const fm = new FlightManager();
@@ -300,7 +300,7 @@ describe('FlightManager — interruption excludes the gap that spans it', () => 
     expect(fm.appState.flightState).toBe('IDLE');
   });
 
-  // ── AC 12 — worked flight (b), design.md §5.4 ────────────────────────────
+  // ── Worked flight (b) ──────────────────────────────────────────────────────
 
   it('worked flight (b): a 35 s pause leaves duration_sec = 15 on a 50 s flight', () => {
     const fm = new FlightManager();
@@ -330,11 +330,11 @@ describe('FlightManager — accumulators handed to closeFlight', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 16 ────────────────────────────────────────────────────────────────
+  // ── Distance and max accumulators only count recorded points ─────────────
 
   it('distance is rounded to 0.1 nm and sums recorded points only; maxima ignore unrecorded frames', () => {
-    // Two legs due north of KSBA. Never an arc-minute: design.md §4.6 —
-    // northOfNm uses this codebase's own R = 3440.065.
+    // Two legs due north of KSBA. Never an arc-minute: northOfNm uses this
+    // codebase's own R = 3440.065.
     const p2 = northOfNm(KSBA, 12.34);
     const p3 = northOfNm(p2, 5.28);
     const legs = haversineNm(KSBA.lat, KSBA.lon, p2.lat, p2.lon) + haversineNm(p2.lat, p2.lon, p3.lat, p3.lon);

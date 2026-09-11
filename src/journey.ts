@@ -124,7 +124,7 @@ export interface JourneyAirport {
  * `plannedRouteProgressPct`, but measured the way this note always said it had
  * to be: flown distance against the sum of the trip's own planned legs'
  * approx_distance_nm, never raw distance and never the equator. The key is
- * absent, not zero, on a trip with no planned legs (design.md §19, §20).
+ * absent, not zero, on a trip with no planned legs.
  */
 export interface Journey {
   legCount: number;
@@ -133,7 +133,7 @@ export interface Journey {
   /**
    * Flown distance over the sum of each planned leg's approx_distance_nm,
    * clamped to 0..100 — flown distance regularly overshoots the planned total
-   * since procedure legs are never in the file (design.md §6). Absent when the
+   * since procedure legs are never in the file. Absent when the
    * trip has no planned legs or their total is degenerate (0 nm); never `null`
    * or `0` in that case, so a caller cannot mistake "no plan" for "no progress".
    */

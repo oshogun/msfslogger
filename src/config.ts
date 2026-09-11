@@ -1,10 +1,8 @@
-// src/config.ts — design.md §7 (run 2026-09-10-security-hardening).
-//
 // The only module in the server that reads process.env for security-relevant
-// settings (§7.4). src/ingest.ts, src/pdfExport.ts and src/index.ts receive
+// settings. src/ingest.ts, src/pdfExport.ts and src/index.ts receive
 // values from AppConfig instead of reading env themselves. PORT,
 // EXPORT_BASE_URL, TRAFFIC_ENABLED and SIMCONNECT_* keep their existing
-// readers — untouched (§19).
+// readers — untouched.
 
 import * as fs from 'fs';
 import * as tls from 'tls';
@@ -13,15 +11,15 @@ import * as tls from 'tls';
 export interface AppConfig {
   /** PORT, default 3000. Unchanged from today. */
   port: number;
-  /** BIND_HOST, default '0.0.0.0'. Unchanged effective behaviour (§11.4). */
+  /** BIND_HOST, default '0.0.0.0'. Unchanged effective behaviour. */
   bindHost: string;
   tls: TlsConfig;
-  /** SESSION_SECRET if set; null means "load-or-create app_secret row" (§10.3). */
+  /** SESSION_SECRET if set; null means "load-or-create app_secret row". */
   sessionSecretFromEnv: string | null;
-  /** Sliding session lifetime in ms. Frozen constant, not configurable (§10.4). */
+  /** Sliding session lifetime in ms. Frozen constant, not configurable. */
   sessionMaxAgeMs: number;
   ingest: IngestConfig;
-  /** express.json({ limit }) — frozen constant '100kb' (§8.5). */
+  /** express.json({ limit }) — frozen constant '100kb'. */
   jsonBodyLimit: string;
 }
 
@@ -37,30 +35,30 @@ export type TlsConfig =
     }
   | {
       enabled: false;
-      /** true iff ALLOW_PLAINTEXT_HTTP was set truthy (§11.3). */
+      /** true iff ALLOW_PLAINTEXT_HTTP was set truthy. */
       plaintextOptOut: boolean;
     };
 
 export interface IngestConfig {
   /** INGEST_TOKEN. null iff unauthenticated ingest was explicitly opted into. */
   token: string | null;
-  /** ALLOW_UNAUTHENTICATED_INGEST truthy (§12.2). token is null when this is true. */
+  /** ALLOW_UNAUTHENTICATED_INGEST truthy. token is null when this is true. */
   allowUnauthenticated: boolean;
 }
 
-/** Every environment variable this design introduces or changes. §7.1 is the table. */
+/** Every environment variable this configuration introduces or changes. */
 export const ENV_VARS = [
-  'TLS_CERT_FILE',              // new — §11.1
-  'TLS_KEY_FILE',               // new — §11.1
-  'TLS_KEY_PASSPHRASE',         // new, optional — §11.1
-  'ALLOW_PLAINTEXT_HTTP',       // new — §11.3
-  'BIND_HOST',                  // new, default 0.0.0.0 — §11.4
-  'SESSION_SECRET',             // new, optional — §10.3
-  'ALLOW_UNAUTHENTICATED_INGEST', // new — §12.2
-  'INGEST_TOKEN',               // existing, now required by default — §12.1
+  'TLS_CERT_FILE',              // new
+  'TLS_KEY_FILE',               // new
+  'TLS_KEY_PASSPHRASE',         // new, optional
+  'ALLOW_PLAINTEXT_HTTP',       // new
+  'BIND_HOST',                  // new, default 0.0.0.0
+  'SESSION_SECRET',             // new, optional
+  'ALLOW_UNAUTHENTICATED_INGEST', // new
+  'INGEST_TOKEN',               // existing, now required by default
 ] as const;
 
-// Frozen constants (§10.4, §8.5) — not configurable, no env var.
+// Frozen constants — not configurable, no env var.
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const JSON_BODY_LIMIT = '100kb';
 const INGEST_TOKEN_MIN_LEN = 16;
@@ -72,7 +70,7 @@ const LOOPBACK_HOSTS = ['127.0.0.1', '::1', 'localhost'];
  * '1' | 'true' | 'yes' | 'on'. Unset, empty and everything else are false.
  * Deliberately NOT the inverted-list style of parseTrafficEnabled() in
  * src/ingest.ts: these flags default to OFF, so an unrecognised value must
- * fail closed (§7.2).
+ * fail closed.
  */
 export function parseBooleanEnv(value: string | undefined): boolean {
   const normalized = String(value ?? '').trim().toLowerCase();
@@ -81,7 +79,7 @@ export function parseBooleanEnv(value: string | undefined): boolean {
 
 /** A fatal misconfiguration. src/index.ts catches it, prints
  *  `[Config] ${err.message}` to stderr and exits with code 1 — before
- *  initDb(), before any listener is opened (§7.3). */
+ *  initDb(), before any listener is opened. */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -93,8 +91,8 @@ let cached: AppConfig | null = null;
 
 /**
  * Reads and validates process.env. Throws ConfigError on the first problem, in
- * the order given in §7.3. Never logs a secret value. Pure with respect to the
- * filesystem except for the TLS readability/parse check (§11.2).
+ * the order the steps below run. Never logs a secret value. Pure with respect
+ * to the filesystem except for the TLS readability/parse check.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const bindHost = env.BIND_HOST || '0.0.0.0';
@@ -189,11 +187,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ? { token: rawToken, allowUnauthenticated: false }
     : { token: null, allowUnauthenticated: true };
 
-  // §12.2 — opt-out set, no token: the server starts unauthenticated and
-  // warns on every start. Not one of the ordered fatal steps 1-7, but
-  // documented in §12.2 with the [Config] prefix baked into the message
-  // itself (unlike the plain §7.3 warnings above, which src/index.ts does
-  // not wrap).
+  // Opt-out set, no token: the server starts unauthenticated and warns on
+  // every start. Not one of the ordered fatal steps 1-7, but the message
+  // carries its own [Config] prefix baked in, unlike the plain warnings
+  // above, which src/index.ts does not wrap.
   if (!rawToken && allowUnauthenticated) {
     console.warn(
       '[Config] WARNING: ALLOW_UNAUTHENTICATED_INGEST is set - /api/ingest/* accepts data from anyone who can reach this server.'
@@ -226,7 +223,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
  * loadConfig() caches its result in a module-level singleton. getConfig()
  * returns it and throws if loadConfig() has not run — src/pdfExport.ts uses
  * this to learn the export scheme without threading config through
- * createServer() (§13.2).
+ * createServer().
  */
 export function getConfig(): AppConfig {
   if (!cached) {

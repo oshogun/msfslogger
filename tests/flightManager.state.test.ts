@@ -1,4 +1,4 @@
-// tests/flightManager.state.test.ts — src/flightManager.ts, T-008 part 1 of 3.
+// tests/flightManager.state.test.ts — tests src/flightManager.ts, part 1 of 3.
 //
 // The state machine and the pause flags: every transition IDLE <-> FLYING, the
 // two debounce counters and their reset conditions, the three out-of-band
@@ -7,17 +7,17 @@
 //
 // Duration/accumulator arithmetic lives in tests/flightManager.duration.test.ts
 // and the planned-leg seam in tests/flightManager.test.ts; the three files share
-// this same mock + fake-clock harness (design.md §5, §6) and nothing else.
+// this same mock + fake-clock harness and nothing else.
 //
-// Hermetic (design.md §10): './db' and './airports' are replaced wholesale, so
-// no native binding and no database file is ever opened, and every duration in
-// here comes from vi.advanceTimersByTime(), never from a real wait.
+// Hermetic: './db' and './airports' are replaced wholesale, so no native
+// binding and no database file is ever opened, and every duration in here
+// comes from vi.advanceTimersByTime(), never from a real wait.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SimFrame } from '../src/types';
 import { dbMock, airportsMock, resetMocks, makeFrame, T0, useFakeClock, useRealClock } from './helpers';
 
-// design.md §6.1 — the factory must resolve the harness itself at call time; it
+// The factory must resolve the harness itself at call time; it
 // may not close over a top-level const, because vi.mock() is hoisted above the
 // imports. The path is relative to THIS file and resolves to the same module id
 // src/flightManager.ts's './db' does.
@@ -31,7 +31,7 @@ import { FlightManager } from '../src/flightManager';
 const AIRBORNE_DEBOUNCE_FRAMES = 3;
 const LANDED_DEBOUNCE_FRAMES = 10;
 
-/** design.md §5.3: move the clock first, then deliver the frame that sees it. */
+/** Move the clock first, then deliver the frame that sees it. */
 const advance = (ms: number) => vi.advanceTimersByTime(ms);
 
 /** A landed frame: onGround, and below the 5 kt ground-speed test (:213). */
@@ -52,12 +52,12 @@ function feed(fm: FlightManager, n: number, over: Partial<SimFrame> = {}): void 
 
 describe('FlightManager — state machine', () => {
   beforeEach(() => {
-    resetMocks(); // design.md §6.4 — must be first; restoreMocks does not touch vi.fn()s.
+    resetMocks(); // must be first; restoreMocks does not touch vi.fn()s.
     useFakeClock();
   });
   afterEach(() => useRealClock());
 
-  // ── AC 1 — the airborne debounce is exactly 3, and it is a streak ─────────
+  // ── The airborne debounce is exactly 3, and it is a streak ────────────────
 
   it('needs exactly AIRBORNE_DEBOUNCE_FRAMES consecutive qualifying frames to start a flight', () => {
     const fm = new FlightManager();
@@ -85,7 +85,7 @@ describe('FlightManager — state machine', () => {
     expect(dbMock.insertFlight).toHaveBeenCalledTimes(1);
   });
 
-  // ── AC 2 — the three guards on the qualifying frame (:195) ────────────────
+  // ── The three guards on the qualifying frame (:195) ────────────────────────
 
   it('never starts a flight in slew, on the ground, or at or below 30 kt', () => {
     const cases: { name: string; over: Partial<SimFrame> }[] = [
@@ -113,7 +113,7 @@ describe('FlightManager — state machine', () => {
     expect(fm.appState.flightState).toBe('FLYING');
   });
 
-  // ── AC 3 — the landed debounce is exactly 10, and it is a streak ──────────
+  // ── The landed debounce is exactly 10, and it is a streak ─────────────────
 
   it('needs exactly LANDED_DEBOUNCE_FRAMES consecutive landed frames to end a flight', () => {
     const fm = new FlightManager();
@@ -141,7 +141,7 @@ describe('FlightManager — state machine', () => {
     expect(dbMock.closeFlight).toHaveBeenCalledTimes(1);
   });
 
-  // ── AC 4 — simRunning === 0 (:186) ───────────────────────────────────────
+  // ── simRunning === 0 (:186) ────────────────────────────────────────────────
 
   it('simRunning === 0 ends a FLYING flight immediately, once', () => {
     const fm = new FlightManager();
@@ -167,7 +167,7 @@ describe('FlightManager — state machine', () => {
     expect(fm.appState.lastFrame?.simRunning).toBe(0);
   });
 
-  // ── AC 5 — onCrash / onSimDisconnect ─────────────────────────────────────
+  // ── onCrash / onSimDisconnect ───────────────────────────────────────────────
 
   for (const ending of ['onCrash', 'onSimDisconnect'] as const) {
     it(`${ending}() ends a FLYING flight at the last frame's coordinates`, () => {
@@ -206,7 +206,7 @@ describe('FlightManager — state machine', () => {
     });
   }
 
-  // ── AC 6 — appState around the two transitions ───────────────────────────
+  // ── appState around the two transitions ─────────────────────────────────────
 
   it('appState follows startFlight and endFlight', () => {
     const fm = new FlightManager();
@@ -235,9 +235,9 @@ describe('FlightManager — state machine', () => {
     expect(dbMock.insertFlight).toHaveBeenCalledTimes(2);
   });
 
-  // ── AC 5/6 support — findNearestAirport is called exactly twice per flight
-  // (design.md §6.3): once in startFlight, once in endFlight, never on the
-  // frame path. A regression that moved it into recordPoint would show here.
+  // ── findNearestAirport is called exactly twice per flight: once in
+  // startFlight, once in endFlight, never on the frame path. A regression
+  // that moved it into recordPoint would show here.
 
   it('resolves the nearest airport exactly twice per flight', () => {
     airportsMock.findNearestAirport.mockReturnValue({ icao: 'KSBA', name: 'Santa Barbara Muni' });
@@ -260,7 +260,7 @@ describe('FlightManager — pause flags and suppression', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 7 — setPaused() and appState ──────────────────────────────────────
+  // ── setPaused() and appState ─────────────────────────────────────────────────
 
   it('setPaused(true, flags) publishes the flags; setPaused(false) always clears them', () => {
     const fm = new FlightManager();
@@ -282,7 +282,7 @@ describe('FlightManager — pause flags and suppression', () => {
     expect(fm.appState.pauseFlags).toBe(0);
   });
 
-  // ── AC 8 — frames delivered while paused record nothing ──────────────────
+  // ── frames delivered while paused record nothing ────────────────────────────
 
   it('records no points while paused, across several RECORD_INTERVAL_MS windows', () => {
     const fm = new FlightManager();

@@ -87,14 +87,13 @@ export function initDb(): Database.Database {
     -- Planned legs: a route imported from a Little Navmap .lnmpln file and
     -- attached to a trip, before it is flown. Must be created before the
     -- ALTER TABLE below, which adds flights.planned_leg_id REFERENCES here.
-    -- design.md §2, §3.
     CREATE TABLE IF NOT EXISTS planned_legs (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       trip_id                INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
       -- 1-based within a trip, dense on import, gappy after a delete. Every read
       -- orders by (seq, id) so the order stays total even if two rows shared a
       -- seq. Assigned in CHAIN order (destination ident -> next departure ident)
-      -- by the import handler, not multipart upload order. design.md §9.2.
+      -- by the import handler, not multipart upload order.
       seq                    INTEGER NOT NULL,
       -- 'linked' is deliberately absent: a leg is linked when a flight row
       -- points at it, so the two facts cannot drift apart.
@@ -133,10 +132,10 @@ export function initDb(): Database.Database {
       -- Procedures are stored flat because the file never contains their
       -- waypoints, so there would be nothing for a procedure-leg table to
       -- hold. Eighteen columns: a real custom approach is characterised
-      -- entirely by Type plus the Custom* values. design.md §2.2.1.
+      -- entirely by Type plus the Custom* values.
       --
       -- sid_runway is the ONLY place a departure runway appears: no real file
-      -- has ever carried a <Departure> element. design.md §5.4b, §5.4f.
+      -- has ever carried a <Departure> element.
       sid_name               TEXT,
       sid_runway             TEXT,
       sid_transition         TEXT,
@@ -147,14 +146,13 @@ export function initDb(): Database.Database {
 
       -- Three columns only: no observed file and no documentation gives a STAR
       -- a type or a custom form. An unrecognised child of <STAR> surfaces as an
-      -- UNKNOWN_ELEMENT parser warning rather than vanishing. design.md §5.4e.
+      -- UNKNOWN_ELEMENT parser warning rather than vanishing.
       star_name              TEXT,
       star_runway            TEXT,
       star_transition        TEXT,
 
       -- approach_name is an opaque label, never a fix reference: with
       -- Type=CUSTOM Little Navmap synthesizes it as ICAO+runway ("KLAX24R").
-      -- design.md §5.4g.
       approach_name          TEXT,
       approach_runway        TEXT,
       approach_transition    TEXT,
@@ -163,7 +161,7 @@ export function initDb(): Database.Database {
       approach_suffix        TEXT,
       approach_transition_type TEXT,
       -- The three Custom* values. CustomOffsetAngle is written by real Little
-      -- Navmap and appears NOWHERE in the official XSD. design.md §5.4e.
+      -- Navmap and appears NOWHERE in the official XSD.
       approach_custom_distance_nm REAL,
       approach_custom_altitude_ft REAL,
       approach_custom_offset_deg  REAL,
@@ -173,7 +171,7 @@ export function initDb(): Database.Database {
       -- Great-circle sum over the en-route waypoint chain only. Named "approx"
       -- because SID/STAR/approach legs are absent from the file, so this is
       -- always short of the real routing — never render without an "approx."
-      -- qualifier. design.md §6.
+      -- qualifier.
       approx_distance_nm     REAL    NOT NULL DEFAULT 0,
       -- Written at landing on both the 'flown' and the 'diverted' path.
       arrival_deviation_nm   REAL,
@@ -210,7 +208,7 @@ export function initDb(): Database.Database {
       lon               REAL    NOT NULL,
       -- Pos/@Alt is optional in the format, and where present it is Little
       -- Navmap's COMPUTED profile altitude, not a planned constraint. Store
-      -- it, never present it as planned. design.md §6.1.
+      -- it, never present it as planned.
       alt_ft            REAL
     );
 
@@ -233,18 +231,18 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_planned_alternates_leg  ON planned_alternates(planned_leg_id, seq);
 
     -- The single operator account. id is pinned to 1 by a CHECK so a second
-    -- account cannot be inserted by accident; design.md §6.1 explains why one
-    -- account. Written only by the set-password CLI (src/setPassword.ts).
+    -- account cannot be inserted by accident — the app supports exactly one
+    -- operator. Written only by the set-password CLI (src/setPassword.ts).
     CREATE TABLE IF NOT EXISTS auth_user (
       id            INTEGER PRIMARY KEY CHECK (id = 1),
       username      TEXT NOT NULL,
-      -- scrypt$N$r$p$<salt-b64>$<key-b64> — encoding frozen in §6.2
+      -- scrypt$N$r$p$<salt-b64>$<key-b64> — encoding frozen, do not change
       password_hash TEXT NOT NULL,
       created_at    TEXT NOT NULL,
       updated_at    TEXT NOT NULL
     );
 
-    -- express-session store backing table (§10.2). data is the JSON-serialised
+    -- express-session store backing table. data is the JSON-serialised
     -- session; expires_at is epoch milliseconds, so the sweep is an integer
     -- comparison and needs no date parsing.
     CREATE TABLE IF NOT EXISTS auth_session (
@@ -256,8 +254,7 @@ export function initDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_auth_session_expires ON auth_session(expires_at);
 
     -- Server-side secrets that the operator does not have to manage. Currently
-    -- one row: name='session_secret' (§10.3). Values are base64 of 32 random
-    -- bytes.
+    -- one row: name='session_secret'. Values are base64 of 32 random bytes.
     CREATE TABLE IF NOT EXISTS app_secret (
       name       TEXT PRIMARY KEY,
       value      TEXT NOT NULL,
@@ -291,7 +288,7 @@ export function initDb(): Database.Database {
   }
 
   // Planned-leg link columns on flights. ADD COLUMN ... REFERENCES requires a
-  // NULL default, which is why planned_leg_id has none — design.md §3.
+  // NULL default, which is why planned_leg_id has none.
   if (!cols.includes('planned_leg_id')) {
     db.exec('ALTER TABLE flights ADD COLUMN planned_leg_id INTEGER REFERENCES planned_legs(id) ON DELETE SET NULL');
   }
@@ -311,7 +308,6 @@ export function initDb(): Database.Database {
   // exists. Both are partial UNIQUE indexes and are load-bearing — they turn a
   // convention into a database guarantee. A SQLITE_CONSTRAINT from either means
   // the caller's statement order is wrong; fix the order, never the index.
-  // design.md §2.5, §3, §20.7.
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_flights_planned_leg ON flights(planned_leg_id) WHERE planned_leg_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_trips_active        ON trips(is_active)        WHERE is_active = 1;
@@ -438,7 +434,7 @@ export function getFlightPointCount(id: number): number {
 export function deleteFlight(id: number): boolean {
   // The FK is on flights.planned_leg_id, so deleting the row would drop the
   // link but leave the leg permanently 'flown'/'diverted' by a flight that no
-  // longer exists. Same idiom as deleteFlightPlanFile() below. design.md §16.
+  // longer exists. Same idiom as deleteFlightPlanFile() below.
   clearPlannedLegLink(id);
   const result = db.prepare('DELETE FROM flights WHERE id = ?').run(id);
   if (result.changes > 0) deleteFlightPlanFile(id);
@@ -504,16 +500,16 @@ export function getTripById(id: number): TripWithFlights | null {
 
   // Fully populated, unlike getTrips(): the trip page and the trip map both
   // need the whole chain on first paint, and embedding avoids a race with
-  // MapReadySignal on the print path. design.md §8.
+  // MapReadySignal on the print path.
   const plannedLegs = getPlannedLegsForTrip(id);
 
   return { ...row, flights, planned_legs: plannedLegs };
 }
 
 /**
- * A trip's name alone, for FlightManager's planned-leg live-status cache
- * (design.md §19) — that cache is built once at link time and must not pull
- * in a trip's whole flight/point history just to label it.
+ * A trip's name alone, for FlightManager's planned-leg live-status cache —
+ * that cache is built once at link time and must not pull in a trip's whole
+ * flight/point history just to label it.
  */
 export function getTripName(tripId: number): string | null {
   const row = db.prepare('SELECT name FROM trips WHERE id = ?').get(tripId) as { name: string } | undefined;
@@ -534,17 +530,17 @@ export function updateTrip(id: number, payload: TripEditPayload): boolean {
 /**
  * Flights the user put in this trip directly (assignFlightToTrip, or never
  * touched by a link) are NOT restored here — they keep their dangling
- * trip_id after the trip is gone, exactly as before this feature; that part
- * of §16 is unchanged and stays unchanged. But a flight a LINK moved into
- * this trip is different in kind: the link promised that unlinking restores
- * planned_leg_prev_trip_id, and letting the ON DELETE CASCADE / SET NULL
- * combination run unattended would break that promise silently — it clears
- * planned_leg_id but leaves trip_id dangling at the now-deleted trip and
- * discards planned_leg_prev_trip_id unread. So those flights are read and
- * restored to their prior trip_id here, in the same transaction as the
- * delete and BEFORE it runs: once the trip row is gone, the cascade has
- * already removed the planned_legs rows that make "linked into this trip"
- * findable at all. design.md §16 (amended).
+ * trip_id after the trip is gone, exactly as before this feature; that
+ * pre-existing behaviour is unchanged and stays unchanged. But a flight a
+ * LINK moved into this trip is different in kind: the link promised that
+ * unlinking restores planned_leg_prev_trip_id, and letting the ON DELETE
+ * CASCADE / SET NULL combination run unattended would break that promise
+ * silently — it clears planned_leg_id but leaves trip_id dangling at the
+ * now-deleted trip and discards planned_leg_prev_trip_id unread. So those
+ * flights are read and restored to their prior trip_id here, in the same
+ * transaction as the delete and BEFORE it runs: once the trip row is gone,
+ * the cascade has already removed the planned_legs rows that make "linked
+ * into this trip" findable at all.
  */
 export function deleteTrip(id: number): boolean {
   return db.transaction((): boolean => {
@@ -586,7 +582,7 @@ export function deleteTrip(id: number): boolean {
  *
  * Assigning a linked flight to the trip its own leg already put it in asks
  * for no change at all, so it keeps the link rather than quietly resetting a
- * 'flown' leg. design.md §16 (amended).
+ * 'flown' leg.
  */
 export function assignFlightToTrip(flightId: number, tripId: number): boolean {
   return db.transaction((): boolean => {
@@ -744,9 +740,8 @@ export function combineFlights(idA: number, idB: number): number | null {
     // carried to the combined flight: this INSERT does not carry trip_id
     // either, so a carried-over link would put the new flight in no trip
     // while claiming a leg that belongs to one. Combining is a repair
-    // operation; the user re-links by hand with the escape hatch.
-    // design.md §16, §20 item 12 (do not touch filler-point interpolation or
-    // ownDurationSec here).
+    // operation; the user re-links by hand with the escape hatch. Do not
+    // touch filler-point interpolation or ownDurationSec here.
     clearPlannedLegLink(first.id);
     clearPlannedLegLink(second.id);
 
@@ -759,12 +754,12 @@ export function combineFlights(idA: number, idB: number): number | null {
 
 // ── Planned legs ──────────────────────────────────────────────────────────────
 //
-// CRUD for the planned-leg feature (design.md). Deliberately does not import
-// anything from src/lnmpln.ts — the parser's ParsedFlightPlan shape lives
-// there and is turned into CreatePlannedLegInput by src/server.ts, the only
-// module that sees both (design.md §4). The shapes below are structurally
-// compatible with ParsedFlightPlan so no conversion boilerplate is needed at
-// the call site, but db.ts never imports the parser's types.
+// CRUD for the planned-leg feature. Deliberately does not import anything
+// from src/lnmpln.ts — the parser's ParsedFlightPlan shape lives there and is
+// turned into CreatePlannedLegInput by src/server.ts, the only module that
+// sees both. The shapes below are structurally compatible with
+// ParsedFlightPlan so no conversion boilerplate is needed at the call site,
+// but db.ts never imports the parser's types.
 //
 // Functions here never read or write flights.flight_plan_name or the
 // flight_plans/ directory — that is the unrelated PDF attachment feature.
@@ -871,7 +866,7 @@ function attachPlannedLegChildren(row: PlannedLeg & { linked_flight_id: number |
  * planned_waypoints/planned_alternates rows survive. seq = MAX(seq)+1 for the
  * trip, computed inside the transaction, so the caller controls route order
  * purely by the order it calls this (chainOrderForBatch's order, not upload
- * order). design.md §9.2, §9.2.3.
+ * order).
  */
 export function createPlannedLeg(input: CreatePlannedLegInput): number {
   return db.transaction((): number => {
@@ -986,7 +981,7 @@ export function findPlannedLegBySource(tripId: number, sha256: string): PlannedL
  * cleared and the flight's trip_id is restored from
  * planned_leg_prev_trip_id in the same transaction. Deleting a leg must never
  * leave a flight stranded in a trip it was moved into by a link that no
- * longer exists. design.md §16.
+ * longer exists.
  */
 export function deletePlannedLeg(legId: number): boolean {
   return db.transaction((): boolean => {
@@ -1013,7 +1008,7 @@ export function deletePlannedLeg(legId: number): boolean {
 
 /**
  * Full permutation, renumbered 1..N in one transaction. Caller has already
- * checked legIds is exactly this trip's set of leg ids (design.md §7.2).
+ * checked legIds is exactly this trip's set of leg ids.
  */
 export function reorderPlannedLegs(tripId: number, legIds: number[]): boolean {
   return db.transaction((): boolean => {
@@ -1027,13 +1022,13 @@ export function reorderPlannedLegs(tripId: number, legIds: number[]): boolean {
 
 /**
  * Thrown by setPlannedLegStatus() when asked to change the status of a leg
- * that a flight is still linked to (design.md §12.3, §15). A linked leg's
- * status is not the caller's to set at all — 'flown' and 'diverted' are
- * written by endFlight(), and the only way to reopen such a leg is to
- * unlink it, which is the transition §15 actually defines. The 409-vs-404
- * decision belongs to the endpoint (T-012); this class exists so the
- * endpoint can tell that refusal apart from "leg not found" (which is a
- * plain boolean `false`) and name the flight in its own error message.
+ * that a flight is still linked to. A linked leg's status is not the
+ * caller's to set at all — 'flown' and 'diverted' are written by
+ * endFlight(), and the only way to reopen such a leg is to unlink it, which
+ * is the only transition that does so. The 409-vs-404 decision belongs to
+ * the endpoint; this class exists so the endpoint can tell that
+ * refusal apart from "leg not found" (which is a plain boolean `false`) and
+ * name the flight in its own error message.
  */
 export class PlannedLegHasLinkedFlightError extends Error {
   constructor(readonly legId: number, readonly flightId: number) {
@@ -1046,8 +1041,8 @@ export class PlannedLegHasLinkedFlightError extends Error {
  * Thrown by linkFlightToPlannedLeg() when the target leg already belongs to a
  * different flight. idx_flights_planned_leg would catch this too, but that
  * constraint error can't name the offending flight — this check runs first so
- * the thrown error can, which is what lets T-012 turn it into a 409 that says
- * which flight.
+ * the thrown error can, which is what lets the endpoint turn it into a 409
+ * that says which flight.
  */
 export class PlannedLegAlreadyLinkedError extends Error {
   constructor(readonly legId: number, readonly flightId: number) {
@@ -1063,14 +1058,14 @@ export class PlannedLegAlreadyLinkedError extends Error {
  * clearing after setting would raise SQLITE_CONSTRAINT_UNIQUE the moment
  * another trip is already active; clearing first makes "at most one active
  * trip" hold at every intermediate point in the transaction, not just at
- * commit. design.md §11.2.
+ * commit.
  *
- * Setting a trip that does not exist changes nothing (§11.2) — the existence
+ * Setting a trip that does not exist changes nothing — the existence
  * check has to run BEFORE the clearing UPDATE, inside the same transaction,
  * because the clear-then-set order above means there is no later point to
  * discover the target is missing and undo it. The HTTP endpoint already
  * pre-checks existence and 404s, but this function must honour its own
- * contract for a caller that reaches it directly (T-016).
+ * contract for a caller that reaches it directly.
  */
 export function setActiveTrip(tripId: number | null): void {
   db.transaction(() => {
@@ -1097,15 +1092,14 @@ export function getActiveTripId(): number | null {
  * function has no runtime path that accepts them (the parameter type already
  * forbids it at compile time). Refuses — by throwing
  * PlannedLegHasLinkedFlightError — whenever the leg still has a linked
- * flight, regardless of which of the two statuses was requested (design.md
- * §12.3, §15). This is not just the skip guard widened: a still-linked leg
- * is either 'planned' (being flown right now) or 'flown'/'diverted' (just
- * landed) per §15, and in every one of those cases the status and the link
- * are the system's to manage, not a PATCH's — resetting a flown/diverted
- * leg to 'planned' while the link stays would destroy
- * arrival_deviation_nm and produce a state §15's transition table does not
- * define (a "landed" leg rendering as "being flown"). §15 lists exactly one
- * way back from flown/diverted to planned: unlink, which clears the
+ * flight, regardless of which of the two statuses was requested. This is
+ * not just the skip guard widened: a still-linked leg is either 'planned'
+ * (being flown right now) or 'flown'/'diverted' (just landed), and in every
+ * one of those cases the status and the link are the system's to manage,
+ * not a PATCH's — resetting a flown/diverted leg to 'planned' while the
+ * link stays would destroy arrival_deviation_nm and produce a state that
+ * has no defined meaning (a "landed" leg rendering as "being flown"). The
+ * only way back from flown/diverted to planned is: unlink, which clears the
  * deviation because the link is going away too. A skip that quietly failed
  * would likewise leave the caller believing the leg was skipped when it was
  * not.
@@ -1113,8 +1107,8 @@ export function getActiveTripId(): number | null {
  * Always clears arrival_deviation_nm alongside status, in the same statement
  * as the update, for the unlinked legs that do reach here: a leg PATCHed
  * back to 'planned' from 'flown'/'diverted' after its flight was deleted or
- * combined must not keep reading "planned, 47 nm from plan" (design.md
- * §15) — the same clearing already done by unlinkFlightFromPlannedLeg() and
+ * combined must not keep reading "planned, 47 nm from plan" — the same
+ * clearing already done by unlinkFlightFromPlannedLeg() and
  * clearPlannedLegLink(), applied uniformly on this path too.
  */
 export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped'): boolean {
@@ -1142,16 +1136,16 @@ export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped'
 /**
  * Candidates for the auto-matcher: EVERY leg of the active trip, with no
  * status filtering at all — 'flown', 'diverted', 'skipped' and already-linked
- * legs are all included. Eligibility is entirely step 5's job (design.md
- * §13.2): the matcher is what turns a 'flown' candidate into the
- * LEG_ALREADY_FLOWN reason code, a 'skipped' one into LEG_SKIPPED, and so on.
- * Filtering any status out here would make that reason code unreachable in
- * production and surface a misleading NO_LEG_IN_RADIUS instead (reviewed in
- * phase3.md, adjudication A). This query stays one indexed read with no
- * per-row business logic. ORDER BY seq ASC, id ASC because determinism of the
- * matcher's AMBIGUOUS/nearbyLegIds output depends on candidates arriving in a
- * defined order (§13.2). Returns [] when no trip is active — the JOIN on
- * is_active = 1 simply matches nothing.
+ * legs are all included. Eligibility is entirely step 5's job: the matcher
+ * is what turns a 'flown' candidate into the LEG_ALREADY_FLOWN reason code,
+ * a 'skipped' one into LEG_SKIPPED, and so on. Filtering any status out here
+ * would make that reason code unreachable in production and surface a
+ * misleading NO_LEG_IN_RADIUS instead. This query stays one indexed read
+ * with no per-row business logic.
+ * ORDER BY seq ASC, id ASC because determinism of the matcher's
+ * AMBIGUOUS/nearbyLegIds output depends on candidates arriving in a defined
+ * order. Returns [] when no trip is active — the JOIN on is_active = 1
+ * simply matches nothing.
  */
 export function getPlannedLegCandidatesForActiveTrip(): LegMatchCandidate[] {
   type Row = {
@@ -1196,7 +1190,7 @@ export function getPlannedLegCandidatesForActiveTrip(): LegMatchCandidate[] {
  * The flight's link, and nothing else. getFlightById() would answer this too,
  * but it returns FlightWithPoints and so loads every flight_points row to
  * read one integer — thousands of them on a long haul at a 5 s recording
- * interval. endFlight() (T-016) asks this question on its way out, including
+ * interval. endFlight() asks this question on its way out, including
  * from onCrash() and onSimDisconnect(), which is the worst moment to allocate
  * a track nobody reads.
  *
@@ -1219,16 +1213,16 @@ export function getFlightPlannedLegId(flightId: number): number | null {
  * the new one, in this same transaction — so planned_leg_prev_trip_id ends up
  * holding the flight's ORIGINAL trip, never a trip the old link itself
  * assigned. Throws PlannedLegAlreadyLinkedError if the target leg already
- * belongs to a different flight. design.md §12.2.
+ * belongs to a different flight.
  *
  * Linking a flight to the leg it ALREADY holds is a no-op, not a
- * re-target: §12.2 defines re-targeting as putting a DIFFERENT leg onto an
+ * re-target: re-targeting means putting a DIFFERENT leg onto an
  * already-linked flight, and running the unlink-then-link dance anyway would
  * silently reset a 'flown'/'diverted' leg back to 'planned' and discard its
  * recorded arrival_deviation_nm for a request that asked for no change. This
- * guard has to live here rather than in the endpoint: T-016 calls this
- * function directly with source: 'auto', bypassing any endpoint-level check
- * entirely (phase3.md, adjudication B).
+ * guard has to live here rather than in the endpoint: the auto-matcher calls
+ * this function directly with source: 'auto', bypassing any endpoint-level
+ * check entirely.
  *
  * `source` is NOT applied on that no-op path either, which the signature
  * invites you to expect. It records how the link came about, and a same-leg
@@ -1285,8 +1279,7 @@ export function linkFlightToPlannedLeg(flightId: number, legId: number, source: 
  * Restores trip_id from planned_leg_prev_trip_id, then NULLs all three
  * planned_leg_* columns, and resets the leg to 'planned' with
  * arrival_deviation_nm cleared — this is how the user reopens a
- * 'flown'/'diverted' leg (design.md §15). Returns false when the flight has
- * no link.
+ * 'flown'/'diverted' leg. Returns false when the flight has no link.
  */
 export function unlinkFlightFromPlannedLeg(flightId: number): boolean {
   return db.transaction((): boolean => {
@@ -1319,7 +1312,7 @@ export function unlinkFlightFromPlannedLeg(flightId: number): boolean {
  * for both source flights), where no row is left for a restored trip_id to
  * mean anything on; and assignFlightToTrip()/removeFlightFromTrip(), which
  * are themselves setting trip_id to something the user just chose and would
- * only have to overwrite the restored value. design.md §16.
+ * only have to overwrite the restored value.
  */
 export function clearPlannedLegLink(flightId: number): void {
   db.transaction(() => {
@@ -1343,9 +1336,9 @@ export function clearPlannedLegLink(flightId: number): void {
 }
 
 /**
- * Called by endFlight() (T-016) for a linked flight, after closeFlight().
+ * Called by endFlight() for a linked flight, after closeFlight().
  * arrival_deviation_nm is written on both the 'flown' and 'diverted' path —
- * the link is kept either way; a diversion never auto-unlinks. design.md §14.
+ * the link is kept either way; a diversion never auto-unlinks.
  */
 export function recordPlannedLegArrival(legId: number, status: 'flown' | 'diverted', deviationNm: number): void {
   db.prepare(
@@ -1357,7 +1350,7 @@ export function recordPlannedLegArrival(legId: number, status: 'flown' | 'divert
  * Thrown by setPlannedLegHandOutcome() when the leg stopped qualifying
  * between the endpoint's decision and this transaction — e.g. a concurrent
  * PUT /api/flights/:id/planned-leg {plannedLegId: null} unlinked the flight
- * in the window between the endpoint's read and this write. design.md §4.3.
+ * in the window between the endpoint's read and this write.
  *
  * This is NOT a second copy of the gate: it re-asserts only the three
  * persistent invariants this transaction reads anyway (still linked, still
@@ -1376,20 +1369,20 @@ export class PlannedLegHandCloseConflictError extends Error {
  * The hand-driven sibling of recordPlannedLegArrival(): writes the status and
  * the deviation a hand close-out (src/plannedLegClose.ts, decideHandClose())
  * decided, instead of the touchdown measurement endFlight() writes. Never
- * writes 'diverted' — the touchdown rule is not mirrored here (design.md
- * §3.4). The link itself is never touched: after the reverse transition,
+ * writes 'diverted' — the touchdown rule is not mirrored here. The link
+ * itself is never touched: after the reverse transition,
  * flights.planned_leg_id and flights.planned_leg_link_source are exactly
  * what they were (frozen decision 3).
  *
  * Both columns move in one UPDATE inside one db.transaction(), preceded by a
- * re-read of the three invariants above — the atomic re-assertion design.md
- * §4.3 requires. Returns false when the leg row does not exist or the UPDATE
+ * re-read of the three invariants above — the atomic re-assertion this
+ * requires. Returns false when the leg row does not exist or the UPDATE
  * changed nothing; throws PlannedLegHandCloseConflictError when an invariant
  * no longer holds.
  *
  * CALLER SET: exactly one — PUT /api/flights/:id/planned-leg-status in
  * src/server.ts, after decideHandClose() has returned `allowed: true`. Any
- * new caller must go through decideHandClose() first (design.md risk R-5).
+ * new caller must go through decideHandClose() first.
  */
 export function setPlannedLegHandOutcome(
   legId: number,
@@ -1427,8 +1420,7 @@ export function setPlannedLegHandOutcome(
 // ── Auth: operator account, sessions, app secrets ─────────────────────────────
 //
 // The only database access the auth stack performs. Three tables, none of which
-// references or is referenced by anything else in the schema
-// (run 2026-09-10-security-hardening, design.md §4, §5).
+// references or is referenced by anything else in the schema.
 
 /** The single operator row. `id` is pinned to 1 by a CHECK constraint. */
 export interface AuthUserRow {
@@ -1439,7 +1431,7 @@ export interface AuthUserRow {
   updated_at: string;
 }
 
-/** null when the deployment has no operator account yet (design.md §6.4). */
+/** null when the deployment has no operator account yet. */
 export function getAuthUser(): AuthUserRow | null {
   const row = db.prepare('SELECT id, username, password_hash, created_at, updated_at FROM auth_user WHERE id = 1')
     .get() as AuthUserRow | undefined;
@@ -1448,8 +1440,8 @@ export function getAuthUser(): AuthUserRow | null {
 
 /**
  * Inserts or updates row id=1. Used only by the set-password CLI
- * (src/setPassword.ts). created_at survives a password change; updated_at does
- * not — design.md §6.5.
+ * (src/setPassword.ts). created_at survives a password change; updated_at
+ * does not.
  */
 export function setAuthUser(username: string, passwordHash: string): void {
   const now = new Date().toISOString();
@@ -1471,7 +1463,7 @@ export function getAppSecret(name: string): string | null {
 /**
  * Returns the stored secret, generating and storing one on first call. The
  * read and the insert share one transaction, so two callers in the same process
- * cannot produce two secrets (design.md §16.4).
+ * cannot produce two secrets.
  */
 export function getOrCreateAppSecret(name: string, generate: () => string): string {
   return db.transaction((): string => {
@@ -1505,7 +1497,7 @@ export function sessionDestroy(sid: string): void {
   db.prepare('DELETE FROM auth_session WHERE sid = ?').run(sid);
 }
 
-/** Deletes every row with expires_at <= now. Returns the number deleted (§10.5). */
+/** Deletes every row with expires_at <= now. Returns the number deleted. */
 export function sessionSweep(now: number): number {
   return db.prepare('DELETE FROM auth_session WHERE expires_at <= ?').run(now).changes;
 }

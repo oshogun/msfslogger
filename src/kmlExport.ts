@@ -4,18 +4,18 @@
 // ./server, ./index or ./types and performs no I/O — no fs, no http, no
 // better-sqlite3 — so it is a pure module in the style of src/geo.ts and
 // src/lnmpln.ts: liftable into a test with no other source file, and safely
-// importable by src/inspect-kml.ts without a database. design.md §5.1.
+// importable by src/inspect-kml.ts without a database.
 //
 // The input types below are declared structurally rather than imported from
 // ./types: FlightWithPoints is structurally assignable to KmlFlight (every
 // field here exists on Flight with the same type, and FlightPoint is a
 // superset of KmlPoint), so src/server.ts can pass getFlightById(id)! and
-// trip.flights straight in with no cast and no mapping. design.md §5.1.
+// trip.flights straight in with no cast and no mapping.
 //
 // Nothing here throws. There is no input this module rejects: null metadata,
-// zero points and an empty flight array all have defined output (design.md
-// §6). No mutable module-level state, no clock, no randomness — the same
-// input always produces a byte-identical string.
+// zero points and an empty flight array all have defined output. No mutable
+// module-level state, no clock, no randomness — the same input always
+// produces a byte-identical string.
 
 // ── Input types (structural; FlightWithPoints from ./types satisfies KmlFlight) ──
 
@@ -23,7 +23,7 @@
 export interface KmlPoint {
   lat: number;
   lon: number;
-  /** Feet MSL, as stored. Converted to metres on output — design §4.5. */
+  /** Feet MSL, as stored. Converted to metres on output. */
   altitude_ft: number;
 }
 
@@ -41,30 +41,30 @@ export interface KmlFlight {
   points: KmlPoint[];
 }
 
-/** Body of POST /api/flights/export.kml — design §2.3. Imported by src/server.ts. */
+/** Body of POST /api/flights/export.kml. Imported by src/server.ts. */
 export interface KmlFlightSetRequest {
   ids: number[];
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/** design §2.3 — maximum ids accepted by the flight-set endpoint. */
+/** Maximum ids accepted by the flight-set endpoint. */
 export const MAX_FLIGHT_SET_IDS = 100;
 
-/** design §4.7 — per-flight coordinate cap before decimation kicks in. */
+/** Per-flight coordinate cap before decimation kicks in. */
 export const MAX_TRACK_POINTS = 5000;
 
-/** design §4.5 — international foot. */
+/** International foot. */
 export const FT_TO_M = 0.3048;
 
 /**
- * design §4.4 — the client's leg palette (client/src/pages/Home.tsx:154),
- * converted from CSS #rrggbb to KML's aabbggrr byte order at full opacity.
- * Index i is used by the Placemark at output position i, mod 5.
+ * The client's leg palette (client/src/pages/Home.tsx:154), converted from
+ * CSS #rrggbb to KML's aabbggrr byte order at full opacity. Index i is used
+ * by the Placemark at output position i, mod 5.
  */
 const STYLE_COLORS_AABBGGRR = ['fffaa560', 'ff99d334', 'ff0b9ef5', 'fffa8ba7', 'ff7171f8'];
 
-// ── Escaping (design §4.6) ────────────────────────────────────────────────────
+// ── Escaping ───────────────────────────────────────────────────────────────
 
 /**
  * The single escaping rule; applied at every interpolation point. `&` is
@@ -91,7 +91,7 @@ export function escapeXml(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
-// ── Decimation (design §4.7) ──────────────────────────────────────────────────
+// ── Decimation ─────────────────────────────────────────────────────────────
 
 /**
  * Below or at `max`, every point is emitted unchanged. Above it, a stride is
@@ -109,7 +109,7 @@ export function decimateTrack<T>(points: T[], max: number = MAX_TRACK_POINTS): T
   return out;
 }
 
-// ── Label and description (design §4.3) ───────────────────────────────────────
+// ── Label and description ──────────────────────────────────────────────────
 
 /** `new Date(start_time).toISOString().slice(0,10)`, or 'unknown date'. */
 function dateStamp(startTime: string): string {
@@ -170,9 +170,9 @@ function buildTimeSpan(flight: KmlFlight): string | null {
   return `<TimeSpan>${begin}${end}</TimeSpan>`;
 }
 
-// ── Coordinates and geometry (design §4.5, §6.1, §6.2) ────────────────────────
+// ── Coordinates and geometry ───────────────────────────────────────────────
 
-/** `lon,lat,alt`, no spaces, metres altitude. Worked example: design §4.5. */
+/** `lon,lat,alt`, no spaces, metres altitude. */
 function formatCoordinate(p: KmlPoint): string {
   const lon = p.lon.toFixed(6);
   const lat = p.lat.toFixed(6);
@@ -181,9 +181,9 @@ function formatCoordinate(p: KmlPoint): string {
 }
 
 /**
- * Zero points → no geometry element at all (design §6.1). One point → a
- * `<Point>` (§6.2). Two or more → a `<LineString>` (§4.1). `indent` is the
- * whitespace the geometry's own opening/closing tags sit at.
+ * Zero points → no geometry element at all. One point → a `<Point>`. Two or
+ * more → a `<LineString>`. `indent` is the whitespace the geometry's own
+ * opening/closing tags sit at.
  */
 function renderGeometry(points: KmlPoint[], indent: string): string {
   if (points.length === 0) return '';
@@ -208,7 +208,7 @@ function renderGeometry(points: KmlPoint[], indent: string): string {
   ].join('\n');
 }
 
-// ── Placemark, Folder, Styles (design §4.2, §4.4) ─────────────────────────────
+// ── Placemark, Folder, Styles ──────────────────────────────────────────────
 
 /**
  * Element order inside `<Placemark>` follows the KML 2.2 XSD Feature
@@ -255,7 +255,7 @@ function renderStyles(): string {
   ).join('\n');
 }
 
-/** design §4.2 sort: start_time ascending, ties broken by id ascending. Does not mutate the input. */
+/** Sort: start_time ascending, ties broken by id ascending. Does not mutate the input. */
 function sortFlights(flights: KmlFlight[]): KmlFlight[] {
   return [...flights].sort((a, b) => {
     if (a.start_time < b.start_time) return -1;
@@ -279,11 +279,11 @@ function renderDocument(name: string, body: string[]): string {
   ].join('\n');
 }
 
-// ── Generators (design §4.2, §5.1) ────────────────────────────────────────────
+// ── Generators ─────────────────────────────────────────────────────────────
 
 /**
- * One flight, no Folder wrapper. design §4.2 case A.
- * A flight with zero points yields a geometry-less Placemark (§6.1).
+ * One flight, no Folder wrapper.
+ * A flight with zero points yields a geometry-less Placemark.
  */
 export function buildFlightKml(flight: KmlFlight): string {
   const name = `Flight ${flightLabel(flight)}`;
@@ -291,8 +291,8 @@ export function buildFlightKml(flight: KmlFlight): string {
 }
 
 /**
- * An arbitrary set of flights, one Folder each. design §4.2 case B.
- * Sorts by start_time asc, id asc; does NOT de-duplicate (the caller does, §2.3).
+ * An arbitrary set of flights, one Folder each.
+ * Sorts by start_time asc, id asc; does NOT de-duplicate (the caller does).
  */
 export function buildFlightSetKml(flights: KmlFlight[]): string {
   const sorted = sortFlights(flights);
@@ -301,7 +301,7 @@ export function buildFlightSetKml(flights: KmlFlight[]): string {
 }
 
 /**
- * A whole trip, one Folder per flight. design §4.2 case C.
+ * A whole trip, one Folder per flight.
  * `tripName` becomes the Document <name>, escaped.
  */
 export function buildTripKml(tripName: string, flights: KmlFlight[]): string {

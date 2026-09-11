@@ -1,13 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
 
-/** The express-session cookie name (design.md §10.1). Read here and by
- *  whoever configures the session middleware (T-007) so the two never drift. */
+/** The express-session cookie name. Read here and by whoever configures the
+ *  session middleware so the two never drift. */
 export const SESSION_COOKIE_NAME = 'msfslogger.sid';
 
 /**
- * 401 gate for every /api route except /api/auth/* and /api/ingest/* (§8.2,
- * mounted as `app.use('/api', requireAuth)` after those two are registered —
- * see §8.3). Body verbatim from contracts/samples/gated-401.json.
+ * 401 gate for every /api route except /api/auth/* and /api/ingest/*,
+ * mounted as `app.use('/api', requireAuth)` after those two are registered.
+ * Body verbatim from contracts/samples/gated-401.json.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.session && req.session.user) {
@@ -18,9 +18,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 /**
- * CSRF defence in depth, on top of SameSite=Lax (§16.3). The primary defence
- * is the cookie policy; this is the second layer for a browser or a future
- * cookie policy where Lax is not what was assumed.
+ * CSRF defence in depth, on top of SameSite=Lax. The primary defence is the
+ * cookie policy; this is the second layer for a browser or a future cookie
+ * policy where Lax is not what was assumed.
  */
 export function requireSameOrigin(req: Request, res: Response, next: NextFunction): void {
   // Step 1 — safe methods never mutate; the gated exports are GETs and must
@@ -68,8 +68,8 @@ interface ThrottleEntry {
 }
 
 /**
- * Fixed-window login throttle, keyed on client IP only (§16.2). In-memory,
- * lost on restart — acceptable, since a restart is an operator action and the
+ * Fixed-window login throttle, keyed on client IP only. In-memory, lost on
+ * restart — acceptable, since a restart is an operator action and the
  * attacker gains at most one more window.
  */
 export class LoginThrottle {
@@ -119,8 +119,8 @@ export class LoginThrottle {
 /**
  * Parses req.headers.cookie for the msfslogger.sid pair, returning the value
  * exactly as it appears in the header — still percent-encoded, since
- * express-session decodes it itself (§13.2). undefined when there is no
- * cookie header or no matching pair.
+ * express-session decodes it itself. undefined when there is no cookie
+ * header or no matching pair.
  */
 export function sessionCookieFrom(req: Request): { name: string; value: string } | undefined {
   const header = req.headers.cookie;

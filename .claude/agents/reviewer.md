@@ -48,6 +48,12 @@ independently and which ones you could not, with the reason.
 6. **Scope** — every changed file is inside the task's `allowed_paths`. A file
    outside them is a finding regardless of how good the change is.
 7. **Style** — the new code reads like the code around it.
+8. **No run citations in comments.** A new or edited comment must not point at
+   `.claude/runs/`, a run-id, `design.md`, a `§`-numbered section, an
+   "Amendment" label, `plan.json`, a task id (`T-NNN`), or a phase/review file
+   (`phase3.md`, `reviews/phase-2.md`). That is a finding even if the citation
+   is accurate today — it makes the comment depend on a document the next
+   reader of `src/`, `client/src/`, or `tests/` has no way to know exists.
 
 ## How to work safely
 

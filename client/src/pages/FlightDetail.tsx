@@ -9,10 +9,10 @@ import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed, coo
 import type { Flight, PlannedLegWithChildren, Trip } from '../types';
 
 /**
- * The three procedure lines design.md §18 specifies verbatim, e.g.
+ * The three procedure lines rendered verbatim, e.g.
  * "SID WESLA5 · 28L · SUSEY" / "STAR IRNMN2 · 24R · BURGL" / "APP KLAX24R · 24R".
  * Where approach_type is CUSTOM the name is a synthesized label rather than a
- * published procedure (§5.4g), so the line says so rather than presenting it
+ * published procedure, so the line says so rather than presenting it
  * as a real fix.
  */
 function procedureLine(label: string, parts: (string | null)[]): string {
@@ -53,7 +53,7 @@ export function FlightDetail() {
   const [includePlan, setIncludePlan] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Planned-leg link (design.md §12, §18) ────────────────────────────────
+  // ── Planned-leg link ──────────────────────────────────────────────────
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
   const [plannedTripName, setPlannedTripName] = useState<string | null>(null);
   const [plannedLegLoading, setPlannedLegLoading] = useState(false);
@@ -77,9 +77,9 @@ export function FlightDetail() {
 
   // Fetches the linked leg (and its trip's name) whenever the link changes —
   // including right after Unlink, so the section disappears without a manual
-  // reload. GET /api/planned-legs/:legId already returns PlannedLegWithChildren
-  // (design.md §12.1); the trip's name is not on that payload, so GET
-  // /api/trips supplies it — no server change is needed or permitted here.
+  // reload. GET /api/planned-legs/:legId already returns PlannedLegWithChildren;
+  // the trip's name is not on that payload, so GET /api/trips supplies it —
+  // no server change is needed or permitted here.
   useEffect(() => {
     const legId = flight?.planned_leg_id ?? null;
     if (legId == null) {
@@ -130,11 +130,11 @@ export function FlightDetail() {
     }
   }
 
-  // Closes a hand-linked leg by hand, or reopens it (design.md §5.1, §8.4).
-  // No confirm() in either direction: the next click is the exact reverse
-  // (§8.3). The 200 is the updated leg, so setPlannedLeg() — not setFlight():
-  // no column on `flights` moves either way (§7) — re-renders the badge and the
-  // landing note with no refetch and no reload.
+  // Closes a hand-linked leg by hand, or reopens it. No confirm() in either
+  // direction: the next click is the exact reverse. The 200 is the updated
+  // leg, so setPlannedLeg() — not setFlight(): no column on `flights` moves
+  // either way — re-renders the badge and the landing note with no refetch
+  // and no reload.
   async function handleMarkPlannedLeg(target: 'flown' | 'planned') {
     setMarkBusy(true);
     setMarkError('');
@@ -311,9 +311,9 @@ export function FlightDetail() {
                 Planned cruise {formatAlt(plannedLeg.cruise_alt_ft)} ft · approx.{' '}
                 {formatDistance(plannedLeg.approx_distance_nm)} nm
               </p>
-              {/* design.md §14 (T-018 F-3): the flight itself is `flight` —
-                  no second fetch to resolve it. Null on every leg not yet
-                  flown and every leg imported before this phase (§18). */}
+              {/* The flight itself is `flight` — no second fetch to resolve
+                  it. Null on every leg not yet flown and every leg imported
+                  before this phase. */}
               {plannedLegLandingNote(plannedLeg, flight) && (
                 <p className={`flight-plan-status${plannedLeg.status === 'diverted' ? ' td-planned-meta-diverted' : ''}`}>
                   {plannedLegLandingNote(plannedLeg, flight)}
@@ -331,9 +331,9 @@ export function FlightDetail() {
               ))}
               <div className="flight-actions" style={{ marginTop: '0.6rem' }}>
                 {(() => {
-                  // design.md §8.1 — a hand-copy of the server gate in design.md §1.1. The client
-                  // cannot import src/plannedLegClose.ts; if these two ever disagree, the server
-                  // wins and the user sees a 409.
+                  // A hand-copy of the server gate. The client cannot import
+                  // src/plannedLegClose.ts; if these two ever disagree, the
+                  // server wins and the user sees a 409.
                   const handCloseEligible =
                     flight.planned_leg_link_source === 'manual' &&
                     flight.end_time !== null &&

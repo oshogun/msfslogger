@@ -1,16 +1,15 @@
-// tests/lnmpln.test.ts — the route-matching surface of src/lnmpln.ts (T-006).
+// tests/lnmpln.test.ts — the route-matching surface of src/lnmpln.ts.
 //
-// Scope, per design.md §8.4: parseLnmpln and chainOrderForBatch, only for what
-// feeds route matching — endpoints, waypoints, whether the departure is an
-// airport, and leg ordering. Not every warning code in the 982-line parser.
+// Scope: parseLnmpln and chainOrderForBatch, only for what feeds route
+// matching — endpoints, waypoints, whether the departure is an airport, and
+// leg ordering. Not every warning code in the 982-line parser.
 //
 // Fixtures are the committed ones under samples/lnmpln/ — real Little Navmap
 // exports and the synthetic bad-*/route-matching family. Nothing here writes a
-// fixture or globs samples/lnmpln/ for its *inputs* (design.md §8.4, §10.4):
-// every file is named explicitly. Expected values are transcribed from
-// .claude/runs/2026-09-09-vitest-unit-tests/contracts/lnmpln-fixtures.json,
-// which was measured by running the real parser over every committed fixture —
-// reproduce with `npx ts-node src/inspect-lnmpln.ts 'samples/lnmpln/*.lnmpln'`.
+// fixture or globs samples/lnmpln/ for its *inputs*: every file is named
+// explicitly. Expected values were measured by running the real parser over
+// every committed fixture — reproduce with
+// `npx ts-node src/inspect-lnmpln.ts 'samples/lnmpln/*.lnmpln'`.
 
 import fs from 'fs';
 import path from 'path';
@@ -25,7 +24,7 @@ import {
 } from '../src/lnmpln';
 
 // ── Fixture paths, resolved from the repo root regardless of process cwd ──────
-// (design.md §2.1, §10.4 — never depend on cwd.)
+// (never depend on cwd.)
 
 const REAL_ROOT = path.resolve(__dirname, '../samples/lnmpln');
 const SYNTHETIC_ROOT = path.join(REAL_ROOT, 'synthetic');
@@ -201,7 +200,7 @@ describe('parseLnmpln: string and Buffer input', () => {
     expect(withBom[1]).toBe(0xbb);
     expect(withBom[2]).toBe(0xbf);
     // The non-BOM equivalent: the same bytes with the 3-byte UTF-8 BOM removed
-    // in memory. Nothing is written to disk (design.md §10.3).
+    // in memory. Nothing is written to disk.
     const withoutBom = withBom.subarray(3);
 
     const bomPlan = parseLnmpln(withBom, 'bom.lnmpln');
@@ -314,7 +313,7 @@ describe('chainOrderForBatch', () => {
     expect(result).toEqual({ order: [0, 1], resolved: false, reason: 'SNIPPET_IN_BATCH' });
   });
 
-  it('a chain that starts uniquely but hits a dead end partway through: BROKEN_CHAIN (no committed fixture pair; built in-memory, design.md §8.4)', () => {
+  it('a chain that starts uniquely but hits a dead end partway through: BROKEN_CHAIN (no committed fixture pair; built in-memory)', () => {
     // Two legs: KAAA -> KAAA (a self-loop, so KAAA is not a usable head — it is
     // its own destination) and KCCC -> KDDD, unrelated. KCCC never appears as
     // anyone's destination, so it is the unique head; chaining then looks for a

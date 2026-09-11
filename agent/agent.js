@@ -9,8 +9,7 @@ const {
 } = require('node-simconnect');
 
 // Pure, dependency-free logic (buildTrafficBatch, TRAFFIC_ENABLED,
-// trafficRadiusM parsing) lives in agent/traffic.js — design.md
-// (run 2026-09-08-ai-traffic-map) §3.8, Amendment #3. It has no require of
+// trafficRadiusM parsing) lives in agent/traffic.js, which has no require of
 // node-simconnect or anything else.
 const { buildTrafficBatch, TRAFFIC_ENABLED, trafficRadiusM } = require('./traffic.js');
 
@@ -65,7 +64,7 @@ const RECONNECT_MAX_DELAY_MS = 60000;
 const DEF_FLIGHT_DATA = 0;
 const REQ_FLIGHT_DATA = 0;
 
-// AI traffic — distinct data definition and request ids (design.md §1.2, §3.2, §3.3).
+// AI traffic — distinct data definition and request ids.
 const DEF_TRAFFIC = 1;
 const REQ_TRAFFIC = 1;
 const TRAFFIC_SWEEP_MS = 2000;
@@ -78,7 +77,7 @@ const EVT_PAUSE_EX1 = 5;
 
 const OBJECT_USER = 0;
 
-// AI traffic — module-level sweep state, shared across reconnects (§3.4, §3.6).
+// AI traffic — module-level sweep state, shared across reconnects.
 let userObjectId = null;
 let userLat = null;
 let userLon = null;
@@ -136,10 +135,10 @@ function sendEvent(type) {
   return postJson('/api/ingest/event', { type });
 }
 
-// AI traffic — decode one simObjectDataByType record (§3.2 read order) and
-// post an assembled batch. A failed post is swallowed inside postJson, so a
-// traffic push can never throw back into the SimConnect event handler and
-// never interferes with the frame push or the reconnect logic.
+// AI traffic — decode one simObjectDataByType record and post an assembled
+// batch. A failed post is swallowed inside postJson, so a traffic push can
+// never throw back into the SimConnect event handler and never interferes
+// with the frame push or the reconnect logic.
 function decodeTrafficRecord(objectID, data) {
   const lat              = data.readFloat64();
   const lon              = data.readFloat64();
@@ -201,7 +200,7 @@ async function tryConnect() {
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'IS SLEW ACTIVE',             'bool',             SimConnectDataType.INT32);
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'TITLE',                      null,               SimConnectDataType.STRING256);
 
-    // AI traffic data definition (§3.2) — distinct id, registered only when
+    // AI traffic data definition — distinct id, registered only when
     // enabled. Read order below must match registration order exactly, same
     // rule as the flight-data definition above.
     if (TRAFFIC_ENABLED) {
@@ -260,9 +259,9 @@ async function tryConnect() {
 
       postJson('/api/ingest/frame', frame);
 
-      // AI traffic (§3.4, §3.6) — the user's own object id/position, and the
-      // throttled re-issue of the traffic sweep, both driven off this same
-      // 1 Hz tick rather than a separate timer.
+      // AI traffic — the user's own object id/position, and the throttled
+      // re-issue of the traffic sweep, both driven off this same 1 Hz tick
+      // rather than a separate timer.
       userObjectId = objectID;
       userLat = lat;
       userLon = lon;

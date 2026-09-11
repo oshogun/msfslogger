@@ -2,13 +2,13 @@ import type { TrafficObject } from './types';
 
 /**
  * In-memory AI-traffic store and the pure functions the traffic ingest path
- * shares. design.md (run 2026-09-08-ai-traffic-map) §2.4 and §5.
+ * shares.
  *
  * No express, no db, no timer of its own — everything here is callable from a
  * plain script (see src/inspect-traffic.ts).
  */
 
-// ── Rounding — part of the wire contract, §2.4 ───────────────────────────────
+// ── Rounding — part of the wire contract ─────────────────────────────────────
 // Stored once at ingest, before the store ever sees a record. The formulas
 // must be implemented exactly as written so an inspector can predict the
 // output; do not "simplify" them.
@@ -17,12 +17,12 @@ export const roundCoord = (x: number): number => Math.round(x * 1e6) / 1e6; // 6
 export const roundAlt = (x: number): number => Math.round(x); // whole feet
 
 // Rounds to one decimal FIRST, wraps in the integer domain SECOND — both
-// orderings matter (§2.4): rounding first closes the output range to
+// orderings matter: rounding first closes the output range to
 // [0, 360) with no "360.0" exception, and wrapping over integer tenths avoids
 // the float residue that `-12.2 + 360` would produce.
 export const normHeading = (h: number): number => (((Math.round(h * 10) % 3600) + 3600) % 3600) / 10;
 
-// ── Great-circle distance — §5.5 ─────────────────────────────────────────────
+// ── Great-circle distance ────────────────────────────────────────────────────
 // Haversine, R = 6371000 m, written out so two implementations agree bit for
 // bit. Only the *ordering* of distances is ever used, never the value.
 
@@ -36,19 +36,19 @@ export function distanceM(aLat: number, aLon: number, bLat: number, bLon: number
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-// ── Frozen constants — §1.2 ───────────────────────────────────────────────────
+// ── Frozen constants ──────────────────────────────────────────────────────────
 
-/** Hard cap on objects the server keeps and exposes. §5.5. */
+/** Hard cap on objects the server keeps and exposes. */
 export const MAX_RETAINED_OBJECTS = 100;
 
-/** Age past which the whole retained set is discarded. §5.4. Deliberately
- *  equal to src/ingest.ts's existing STALE_TIMEOUT_MS. */
+/** Age past which the whole retained set is discarded. Deliberately equal to
+ *  src/ingest.ts's existing STALE_TIMEOUT_MS. */
 export const TRAFFIC_STALE_MS = 10_000;
 
 /**
- * The retention cap, §5.5. Applied by the ingest route (§4.6 step 4) after
- * de-duplication and before TrafficStore.replace(). A pure function so
- * src/inspect-traffic.ts can drive it directly, independent of HTTP.
+ * The retention cap. Applied by the ingest route after de-duplication and
+ * before TrafficStore.replace(). A pure function so src/inspect-traffic.ts
+ * can drive it directly, independent of HTTP.
  *
  * If `objects` already fits within the cap, it is returned as-is and
  * `lastFrame` is never read — no distance is computed for a batch that
@@ -72,14 +72,14 @@ export function applyRetentionCap(
 }
 
 /**
- * §5.1. One instance, created inside createServer() in src/server.ts, passed
- * to createIngestRouter(flightManager, trafficStore) and closed over by the
+ * One instance, created inside createServer() in src/server.ts, passed to
+ * createIngestRouter(flightManager, trafficStore) and closed over by the
  * /api/status handler. Not a module-level singleton, so a scratch server (or
  * this inspector) starts empty.
  *
- * §5.2, the central rule: every accepted batch replaces the entire retained
- * set. The store keeps no history and no per-object timestamps — there is no
- * code path in which it holds an object that was not in the most recently
+ * The central rule: every accepted batch replaces the entire retained set.
+ * The store keeps no history and no per-object timestamps — there is no code
+ * path in which it holds an object that was not in the most recently
  * accepted batch.
  */
 export class TrafficStore {
@@ -93,7 +93,7 @@ export class TrafficStore {
   }
 
   /**
-   * §5.4. The retained SET is stale, as a unit, when
+   * The retained SET is stale, as a unit, when
    * `now - receivedAt > TRAFFIC_STALE_MS` — strictly greater, so exactly
    * TRAFFIC_STALE_MS is still fresh. Evaluated lazily, here, on every read;
    * no setInterval anywhere prunes the store. A stale read empties the

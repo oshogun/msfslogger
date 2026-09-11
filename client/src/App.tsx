@@ -43,12 +43,12 @@ export function App() {
       <Routes>
         {/*
           /login and the print routes are kept outside AppShell and outside
-          RequireAuth on purpose (design.md §14.4): Login must not mount
-          Header, whose useStatus hook polls /api/status forever — that would
-          401-loop on a page shown specifically to an anonymous visitor. The
-          print routes stay public HTML so a mid-render 401 during a PDF
-          export surfaces as window.__EXPORT_ERROR__, never a redirect that
-          would render the login page into the PDF (§13.4).
+          RequireAuth on purpose: Login must not mount Header, whose useStatus
+          hook polls /api/status forever — that would 401-loop on a page
+          shown specifically to an anonymous visitor. The print routes stay
+          public HTML so a mid-render 401 during a PDF export surfaces as
+          window.__EXPORT_ERROR__, never a redirect that would render the
+          login page into the PDF.
         */}
         <Route path="/login" element={<Login />} />
         <Route path="/print/flight/:id" element={<PrintFlight />} />

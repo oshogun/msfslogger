@@ -45,7 +45,7 @@ export interface Flight {
   arrival_icao: string | null;
   arrival_name: string | null;
   flight_plan_name: string | null;
-  /** The planned leg this flight is attached to, or null. See design.md §12. */
+  /** The planned leg this flight is attached to, or null. */
   planned_leg_id: number | null;
   planned_leg_link_source: 'auto' | 'manual' | null;
   /** The trip_id held immediately before an auto/manual link; restored on unlink. */
@@ -109,16 +109,15 @@ export interface FlightWithPoints extends Flight {
 //
 // A planned leg is a route imported from a Little Navmap .lnmpln file and
 // attached to a trip, before it is flown. Not to be confused with the existing
-// PDF "flight plan" attachment (flights.flight_plan_name) — see design.md §1.
+// PDF "flight plan" attachment (flights.flight_plan_name).
 // Row types persisted by src/db.ts; the parser's own output shape lives in
-// src/lnmpln.ts and is never imported here (design.md §4).
+// src/lnmpln.ts and is never imported here.
 
 /**
  * 'linked' is deliberately absent: a leg is linked when a flight row points at
  * it, so the two facts cannot drift apart. 'diverted' is set by the system
  * only; 'flown' is set at touchdown, or — reversibly — by hand on a still
- * 'planned' leg whose flight was linked manually and has already ended
- * (2026-09-07 design.md §1).
+ * 'planned' leg whose flight was linked manually and has already ended.
  */
 export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
 
@@ -136,7 +135,7 @@ export interface PlannedLeg {
   departure_lon: number;
   /** 0 | 1. When 0, departure_ident is not an airport code. */
   departure_is_airport: number;
-  /** <Departure> in the file: commonly absent (NULL) — see design.md §5.4b. */
+  /** <Departure> in the file: commonly absent (NULL). */
   departure_start: string | null;
   departure_start_type: string | null;
   departure_pos_lat: number | null;
@@ -156,7 +155,7 @@ export interface PlannedLeg {
   aircraft_type: string | null;
 
   sid_name: string | null;
-  /** The only source of a departure runway; see design.md §5.4f. */
+  /** The only source of a departure runway. */
   sid_runway: string | null;
   sid_transition: string | null;
   /** 'CUSTOMDEPART' for the manual's custom-departure form; NULL otherwise. */
@@ -182,7 +181,7 @@ export interface PlannedLeg {
   waypoint_count: number;
   alternate_count: number;
   /** Great-circle sum over the en-route waypoint chain. Always render with an
-   *  "approx." qualifier — procedure legs are never in the file. design.md §6. */
+   *  "approx." qualifier — procedure legs are never in the file. */
   approx_distance_nm: number;
   /** Written at landing on both the 'flown' and the 'diverted' path. */
   arrival_deviation_nm: number | null;
@@ -213,7 +212,7 @@ export interface PlannedWaypoint {
   /**
    * Little Navmap's COMPUTED profile altitude, not a planned constraint. Never
    * render it as a planned or crossing altitude — cruise_alt_ft is the leg's
-   * planned altitude. See design.md §6.1.
+   * planned altitude.
    */
   alt_ft: number | null;
 }
@@ -242,7 +241,7 @@ export interface PlannedLegWithChildren extends PlannedLeg {
 }
 
 /**
- * GET /api/status's `plannedLeg` key (design.md §19). Computed, camelCase.
+ * GET /api/status's `plannedLeg` key. Computed, camelCase.
  * Present only while flightState === 'FLYING' and the current flight is
  * linked to a planned leg; the endpoint omits the key entirely otherwise, so
  * this never appears as a null field.
@@ -261,8 +260,8 @@ export interface PlannedLegLiveStatus {
 // ── Auto-match candidate ──────────────────────────────────────────────────────
 //
 // The payload getPlannedLegCandidatesForActiveTrip() (src/db.ts) hands to
-// src/legMatcher.ts's matchPlannedLeg() (T-015). CamelCase because it is a
-// computed payload flattened for the matcher, not a row (design.md §17).
+// src/legMatcher.ts's matchPlannedLeg(). CamelCase because it is a
+// computed payload flattened for the matcher, not a row.
 // Mirrors contracts/planned-legs.d.ts.
 
 /** One candidate leg, flattened by the caller from the DB row. No I/O in here. */
@@ -288,7 +287,6 @@ export interface LegMatchCandidate {
 // GET /api/status's `traffic` key). Mirrored byte-identically in
 // client/src/types.ts; neither file imports from the other, matching how
 // SimFrame / StatusFrame are already mirrored in this project.
-// design.md (run 2026-09-08-ai-traffic-map) §2.1.
 export interface TrafficObject {
   id: number;
   lat: number;
@@ -300,28 +298,28 @@ export interface TrafficObject {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 //
-// Wire shapes for the operator login of run 2026-09-10-security-hardening
-// (design.md §4.4, §9). Mirrored byte-identically in client/src/types.ts;
-// neither file imports from the other, matching how SimFrame / StatusFrame and
-// TrafficObject are already mirrored in this project.
+// Wire shapes for the operator login. Mirrored byte-identically in
+// client/src/types.ts; neither file imports from the other, matching how
+// SimFrame / StatusFrame and TrafficObject are already mirrored in this
+// project.
 
 /** What a logged-in session holds. Persisted inside auth_session.data. */
 export interface SessionUser {
   username: string;
 }
 
-/** POST /api/auth/login request body (§9.1). */
+/** POST /api/auth/login request body. */
 export interface LoginRequest {
   username: string;
   password: string;
 }
 
-/** POST /api/auth/login 200 body (§9.1). */
+/** POST /api/auth/login 200 body. */
 export interface LoginResponse {
   user: SessionUser;
 }
 
-/** GET /api/auth/session 200 body (§9.3). Always 200, never 401. */
+/** GET /api/auth/session 200 body. Always 200, never 401. */
 export type SessionResponse =
   | { authenticated: true; user: SessionUser }
   | { authenticated: false; user: null };

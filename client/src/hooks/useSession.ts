@@ -17,9 +17,8 @@ const SessionContext = createContext<SessionState | null>(null);
 
 /**
  * Mounted once at the top of App so RequireAuth and Sidebar's logout control
- * see the same value (design.md §14.3). Calls GET /api/auth/session once on
- * mount; login/logout update the same in-memory state rather than triggering
- * a second round trip.
+ * see the same value. Calls GET /api/auth/session once on mount; login/logout
+ * update the same in-memory state rather than triggering a second round trip.
  */
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<'loading' | 'authenticated' | 'anonymous'>('loading');
@@ -63,8 +62,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch {
-      // logout is idempotent server-side (design.md §9.3); the client state
-      // is cleared regardless of how the request landed.
+      // logout is idempotent server-side; the client state is cleared
+      // regardless of how the request landed.
     }
     setUser(null);
     setStatus('anonymous');

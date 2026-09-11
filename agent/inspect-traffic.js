@@ -14,18 +14,18 @@
 //
 // ── Why the "expected" column is transcribed, not derived ────────────────────
 //
-// Every expected value below is copied BY HAND from design.md (run
-// 2026-09-08-ai-traffic-map) §9.2's truth table (rows A1-A28), the same rule
-// src/inspect-traffic.ts follows for §9.1. None of it is computed by calling
-// buildTrafficBatch to derive what the answer "should" be. If a row here is
-// ever found to disagree with design.md's own table, that is a question for
-// the design, not something to quietly reconcile in this file.
+// Every expected value below is copied BY HAND from the truth table (rows
+// A1-A28) that this harness and src/inspect-traffic.ts both follow. None of
+// it is computed by calling buildTrafficBatch to derive what the answer
+// "should" be. If a row here is ever found to disagree with the truth table,
+// that is a question for the design, not something to quietly reconcile in
+// this file.
 //
 // Because TRAFFIC_ENABLED/trafficRadiusM (rows A20-A26) are parsed once, at
 // module load, from process.env, this file re-requires a fresh copy of
 // agent/traffic.js under a patched env for each of those rows (Node's require
-// cache is bypassed via cache-busting, §9.2 note below) rather than trying to
-// mutate an already-parsed module-level constant.
+// cache is bypassed via cache-busting) rather than trying to mutate an
+// already-parsed module-level constant.
 
 const path = require('path');
 const trafficPath = require.resolve('./traffic.js');
@@ -71,7 +71,7 @@ function sameBatch(a, b) {
     x.altitudeFt === b[i].altitudeFt && x.headingDeg === b[i].headingDeg && x.onGround === b[i].onGround);
 }
 
-// §9.2 baseline: userObjectId = 1, user at (47.4500, -122.3000).
+// Baseline: userObjectId = 1, user at (47.4500, -122.3000).
 const USER_ID = 1;
 const USER_LAT = 47.45;
 const USER_LON = -122.3;
@@ -91,11 +91,11 @@ function obj(id, overrides = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §9.2 — agent batch assembly (design.md, run 2026-09-08-ai-traffic-map)
+// Agent batch assembly
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runBatchRows() {
-  console.log('── Agent batch assembly — buildTrafficBatch() (agent/traffic.js) — design.md §9.2');
+  console.log('── Agent batch assembly — buildTrafficBatch() (agent/traffic.js)');
   console.log('');
 
   const { buildTrafficBatch } = loadTrafficWithEnv({ TRAFFIC_ENABLED: undefined });
@@ -256,11 +256,11 @@ function runBatchRows() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §9.2 — env-var parsing (TRAFFIC_ENABLED, TRAFFIC_RADIUS_M)
+// Env-var parsing (TRAFFIC_ENABLED, TRAFFIC_RADIUS_M)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runEnvRows() {
-  console.log('── Env-var parsing — TRAFFIC_ENABLED / trafficRadiusM (agent/traffic.js) — design.md §9.2, §3.5');
+  console.log('── Env-var parsing — TRAFFIC_ENABLED / trafficRadiusM (agent/traffic.js)');
   console.log('');
 
   // A20 — TRAFFIC_ENABLED=off: disabled.
@@ -330,7 +330,7 @@ function main() {
   runEnvRows();
 
   if (failures.length === 0) {
-    console.log(`${rowCount} rows (design.md §9.2, A1-A26; A27/A28 are SimConnect-event-handler behaviour in agent/agent.js and are not exercised here), 0 failures`);
+    console.log(`${rowCount} rows (A1-A26; A27/A28 are SimConnect-event-handler behaviour in agent/agent.js and are not exercised here), 0 failures`);
   } else {
     for (const f of failures) console.error(f);
     console.error('');

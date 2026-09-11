@@ -9,23 +9,22 @@
 //
 // ── Why the "expected" column is transcribed, not derived ────────────────────
 //
-// Every expected verdict below is copied BY HAND from design.md
-// (run 2026-09-07-manual-mark-flown) §1.3's 24-row truth table, §1.5's two
-// cases outside the grid, and §6.5's six named rows. None of it is computed
-// by calling decideHandClose() or by restating its rule in a second function
-// — an inspector that derives "expected" from the implementation proves
-// nothing, because a bug shared by both sides would agree with itself. If a
-// row here is ever found to disagree with the design's own table, that is a
-// question for the design, not something to quietly reconcile in this file.
+// Every expected verdict below is transcribed BY HAND: the 24-row truth
+// table, the two cases outside the grid, and the six named rows. None of it
+// is computed by calling decideHandClose() or by restating its rule in a
+// second function — an inspector that derives "expected" from the
+// implementation proves nothing, because a bug shared by both sides would
+// agree with itself. If a row here is ever found to disagree with the
+// frozen table it was transcribed from, that is a question for the spec,
+// not something to quietly reconcile in this file.
 //
 // ── Sections ──────────────────────────────────────────────────────────────────
 //
-// 1. GATE_TABLE       — the 24 rows of §1.3, both directions (48 verdicts).
-// 2. OUTSIDE_THE_GRID  — §1.5's two cases (planned_leg_id NULL; leg missing).
-// 3. NAMED_SCENARIOS  — the six rows (a)-(f) T-002's acceptance criteria name,
-//                       using the live flight 56 / leg 12 coordinates and the
-//                       antimeridian / far-diversion pairs design.md §6.5 and
-//                       §12 (E2) fix.
+// 1. GATE_TABLE       — the 24-row truth table, both directions (48 verdicts).
+// 2. OUTSIDE_THE_GRID  — the two cases outside it (planned_leg_id NULL; leg missing).
+// 3. NAMED_SCENARIOS  — the six required rows (a)-(f), using the live flight
+//                       56 / leg 12 coordinates and the
+//                       antimeridian / far-diversion pairs.
 // 4. ROUNDING_BOUNDARY — one row at an x.x5 nm boundary where
 //                       Math.round(x*10)/10 and Number(x.toFixed(1)) actually
 //                       disagree, proving the module uses the frozen
@@ -44,15 +43,15 @@ import {
 // ── Fixture coordinates ───────────────────────────────────────────────────────
 //
 // Real: flight 56's stored arrival position and leg 12's stored destination
-// (PAJN), read read-only out of the live flights.db by design.md §12 (E1) —
-// design.md's own evidence log fixes the expected deviation at 0.3 nm.
+// (PAJN), read read-only out of the live flights.db. The recorded evidence
+// fixes the expected deviation at 0.3 nm.
 const FLIGHT_56_ARRIVAL = { lat: 58.35728796183394, lon: -134.58627965717702 };
 const LEG_12_DEST = { lat: 58.354721, lon: -134.578491 };
 
 // Synthetic: an antimeridian pair, 179°E vs 179°W — 2° of longitude, not
 // 358° — and a ~120 nm far diversion off leg 12's real destination. Both
-// values are design.md §12 (E2)'s actual prototypes/haversine-parity.js
-// output, rounded per §3.2, not a hand calculation.
+// values are the actual prototypes/haversine-parity.js output, rounded to
+// one decimal place, not a hand calculation.
 const ANTIMERIDIAN_ARRIVAL = { lat: 0, lon: 179 };
 const ANTIMERIDIAN_DEST = { lat: 0, lon: -179 };
 const FAR_DIVERSION_DEST = { lat: 56.3, lon: -134.0 };
@@ -81,7 +80,7 @@ const padL = (s: string, n: number) => (s.length >= n ? s : ' '.repeat(n - s.len
 const failures: string[] = [];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 1. GATE_TABLE — design.md §1.3, 24 rows, both directions
+// 1. GATE_TABLE — 24 rows, both directions
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface GateRow {
@@ -94,8 +93,8 @@ interface GateRow {
   expPlanned: ExpectedVerdict;
 }
 
-// Transcribed BY HAND from design.md's 24-row table (§1.3). Column order and
-// values match that table row for row.
+// Transcribed BY HAND from the frozen 24-row table. Column order and values
+// match that table row for row.
 const GATE_TABLE: GateRow[] = [
   { row: 1,  linkSource: 'manual', ended: true,  legStatus: 'planned',  reachableToday: 'yes — flight 56 -> leg 12',                  expFlown: ALLOW,                     expPlanned: refuse('LEG_NOT_FLOWN') },
   { row: 2,  linkSource: 'manual', ended: true,  legStatus: 'flown',    reachableToday: 'yes — flights 47 -> leg 4, 52 -> leg 10',     expFlown: refuse('LEG_NOT_PLANNED'), expPlanned: ALLOW },
@@ -124,7 +123,7 @@ const GATE_TABLE: GateRow[] = [
 ];
 
 // Fixed flight/leg ids for the 24-row table — arbitrary, but constant, so the
-// frozen message text (design.md §5.3) can be checked verbatim.
+// frozen message text can be checked verbatim.
 const TABLE_FLIGHT_ID = 900;
 const TABLE_LEG_ID = 500;
 
@@ -175,7 +174,7 @@ function expectedMessage(flightId: number, legId: number, legStatus: string, v: 
 }
 
 function runGateTable(): void {
-  console.log(`── design.md §1.3 — 24-row gate table, both directions (${GATE_TABLE.length * 2} verdicts)`);
+  console.log(`── 24-row gate table, both directions (${GATE_TABLE.length * 2} verdicts)`);
   console.log('');
   console.log(
     `   ${pad('#', 4)}${pad('link', 8)}${pad('flight', 8)}${pad('leg', 10)}${pad('expected →flown', 20)}${pad('actual →flown', 20)}${pad('expected →planned', 20)}${pad('actual →planned', 20)}ok`,
@@ -219,7 +218,7 @@ function runGateTable(): void {
   }
   console.log('');
 
-  // The two ALLOW cells (§1.3: exactly two out of forty-eight) get their
+  // The two ALLOW cells (exactly two out of forty-eight) get their
   // deviation checked too — row 1 →flown (measured), row 2 →planned (cleared).
   const row1 = GATE_TABLE.find((r) => r.row === 1)!;
   const row1Decision = decideHandClose('flown', buildTableFlight(row1), buildTableLeg(row1));
@@ -237,11 +236,11 @@ function runGateTable(): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 2. OUTSIDE_THE_GRID — design.md §1.5's two cases
+// 2. OUTSIDE_THE_GRID — the two cases outside the grid
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runOutsideTheGrid(): void {
-  console.log('── design.md §1.5 — the two cases outside the 24-row grid');
+  console.log('── the two cases outside the 24-row grid');
   console.log('');
 
   // Case 1: flights.planned_leg_id IS NULL. Design's own example body is
@@ -261,18 +260,18 @@ function runOutsideTheGrid(): void {
     const ok = !actual.allowed && actual.reason === 'NOT_LINKED' && actual.message === want;
     console.log(`   case 1 (planned_leg_id NULL), request '${requested}': expected 409 NOT_LINKED "${want}"`);
     console.log(`           actual: ${fmtActual(actual)}${!actual.allowed ? ` "${actual.message}"` : ''}  ${ok ? '✓' : '✗'}`);
-    if (!ok) failures.push(`   ✗ §1.5 case 1, request '${requested}': got ${JSON.stringify(actual)}`);
+    if (!ok) failures.push(`   ✗ outside-the-grid case 1, request '${requested}': got ${JSON.stringify(actual)}`);
   }
 
   // Case 2: planned_leg_id IS set but getPlannedLegById() returned undefined
   // (the leg row vanished — unreachable in practice, ON DELETE SET NULL, but
-  // the handler must answer rather than dereference undefined, §1.5). At the
-  // HTTP layer T-004's endpoint intercepts this shape BEFORE ever calling
-  // decideHandClose() and answers 404 'Planned leg not found' (design.md
-  // §5.4 step 4) — this module never produces a 404, it has no such reason
-  // code. Called anyway (leg=null, planned_leg_id set) it falls into the same
-  // branch as "not linked at all" per §9 step 1, which is the honest, no-crash
-  // fallback this row demonstrates.
+  // the handler must answer rather than dereference undefined). At the HTTP
+  // layer the endpoint intercepts this shape BEFORE ever calling
+  // decideHandClose() and answers 404 'Planned leg not found' — this module
+  // never produces a 404, it has no such reason code. Called anyway
+  // (leg=null, planned_leg_id set) it falls into the same branch as "not
+  // linked at all", which is the honest, no-crash fallback this row
+  // demonstrates.
   const linkedButLegMissingFlight: HandCloseFlight = {
     ...unlinkedFlight,
     planned_leg_id: 12,
@@ -284,15 +283,15 @@ function runOutsideTheGrid(): void {
   console.log(
     `   case 2 (planned_leg_id=12 set, leg row missing), request 'flown': module-level fallback ` +
       `expected 409 NOT_LINKED "${want2}" (the HTTP layer answers 404 'Planned leg not found' before ` +
-      `reaching this function at all — design.md §5.4 step 4, §1.5)`,
+      `reaching this function at all)`,
   );
   console.log(`           actual: ${fmtActual(actual2)}${!actual2.allowed ? ` "${actual2.message}"` : ''}  ${ok2 ? '✓' : '✗'}`);
-  if (!ok2) failures.push(`   ✗ §1.5 case 2: got ${JSON.stringify(actual2)}`);
+  if (!ok2) failures.push(`   ✗ outside-the-grid case 2: got ${JSON.stringify(actual2)}`);
   console.log('');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. NAMED_SCENARIOS — the six rows T-002's acceptance criteria name
+// 3. NAMED_SCENARIOS — the six required rows
 // ═══════════════════════════════════════════════════════════════════════════
 
 interface NamedScenario {
@@ -330,7 +329,7 @@ const NAMED_SCENARIOS: NamedScenario[] = [
     expected: ALLOW,
     expectedDeviation: 0.3,
     expectedStatus: 'flown',
-    note: 'design.md §12 (E1): recomputed deviation for this exact pair is 0.3 nm',
+    note: 'recomputed deviation for this exact pair is 0.3 nm',
   },
   {
     label: '(b) same flight, auto link instead of manual',
@@ -356,7 +355,7 @@ const NAMED_SCENARIOS: NamedScenario[] = [
     expected: ALLOW,
     expectedDeviation: null,
     expectedStatus: 'flown',
-    note: "design.md §3.3's NULL policy: store arrival_deviation_nm = NULL, still set the requested status",
+    note: 'the NULL policy: store arrival_deviation_nm = NULL, still set the requested status',
   },
   {
     label: '(e) antimeridian: arrival 179°E vs destination 179°W',
@@ -376,12 +375,12 @@ const NAMED_SCENARIOS: NamedScenario[] = [
     expected: ALLOW,
     expectedDeviation: 124.8,
     expectedStatus: 'flown',
-    note: "status is 'flown', NEVER 'diverted' — the frozen decision (design.md §3.4) — however large the deviation",
+    note: "status is 'flown', NEVER 'diverted' — the frozen decision — however large the deviation",
   },
 ];
 
 function runNamedScenarios(): void {
-  console.log('── design.md §6.5 — six named rows T-002 must cover');
+  console.log('── six required named rows');
   console.log('');
   for (const s of NAMED_SCENARIOS) {
     const actual = decideHandClose(s.requested, s.flight, s.leg);
@@ -418,7 +417,7 @@ function runNamedScenarios(): void {
 // 4. ROUNDING_BOUNDARY — an x.x5 nm boundary where the two roundings diverge
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// design.md §3.2 freezes the rounding as `Math.round(deviationNm * 10) / 10`,
+// The rounding is frozen as `Math.round(deviationNm * 10) / 10`,
 // character-identical to src/flightManager.ts:463, and explicitly rules out
 // `toFixed(1)` / `Number(x.toFixed(1))` / a `round(x, 1)` helper as look-alikes
 // that can disagree. This row is constructed (by binary search over a due-north
@@ -457,11 +456,11 @@ function runRoundingBoundary(): void {
   // must use the first one, never the second.
   const rawViaModule = direct; // already rounded by the frozen expression
   const raw = 0.14999999999999999445; // the double both roundings start from
-  const roundExpr = Math.round(raw * 10) / 10; // design.md §3.2's frozen expression
+  const roundExpr = Math.round(raw * 10) / 10; // the frozen expression
   const toFixedExpr = Number(raw.toFixed(1)); // the look-alike the design rules out
 
   console.log(`   raw distance (double)        : ${raw}`);
-  console.log(`   Math.round(raw*10)/10        : ${roundExpr}  <- design.md §3.2, src/flightManager.ts:463`);
+  console.log(`   Math.round(raw*10)/10        : ${roundExpr}  <- the frozen expression, src/flightManager.ts:463`);
   console.log(`   Number(raw.toFixed(1))       : ${toFixedExpr}  <- NOT used; shown to prove the two disagree here`);
   console.log(`   handCloseDeviationNm() actual : ${rawViaModule}`);
   console.log(`   decideHandClose() deviationNm: ${decision.allowed ? decision.deviationNm : 'n/a (refused)'}`);

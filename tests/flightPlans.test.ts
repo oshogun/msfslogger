@@ -1,9 +1,9 @@
-// tests/flightPlans.test.ts — src/flightPlans.ts, T-004.
+// tests/flightPlans.test.ts — src/flightPlans.ts.
 //
 // Only isPdfBuffer() and flightPlanPath() are pure — no fs I/O. Everything
 // else in src/flightPlans.ts (ensureFlightPlansDir, saveFlightPlanFile,
 // deleteFlightPlanFile, copyFlightPlanFile) touches fs and is out of scope
-// per design.md §10.3. This file does not import 'fs'.
+// for this file. This file does not import 'fs'.
 
 import { describe, expect, it } from 'vitest';
 import * as path from 'path';

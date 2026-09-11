@@ -275,9 +275,8 @@ export function AllFlights() {
                                 page (TripDetail) — surfaced here too so a trip left active
                                 for weeks is discoverable from the landing page, not just
                                 discovered the hard way when a flight attaches to the wrong
-                                leg (design.md §11, plan.json T-013 risk note). Reuses the
-                                is_active already embedded in this same GET /api/trips
-                                response — no second call. */}
+                                leg. Reuses the is_active already embedded in this same
+                                GET /api/trips response — no second call. */}
                             {trip.is_active === 1 && <span className="badge badge-active-trip">Active</span>}
                           </div>
                           <div className="trip-row-stats">

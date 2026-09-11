@@ -9,14 +9,13 @@ import {
 } from './auth/password';
 
 /**
- * `npm run set-password` — creates or resets the single operator account
- * (run 2026-09-10-security-hardening, design.md §6.4).
+ * `npm run set-password` — creates or resets the single operator account.
  *
  * Compiled into dist/ with everything else, so it also runs in the production
  * Docker image, which has no dev dependencies and no ts-node. It opens its own
  * connection to flights.db and is safe to run while the server holds the
  * database open in WAL mode — the change takes effect on the next login
- * attempt, with no restart (design.md §5.4).
+ * attempt, with no restart.
  *
  * The password is only ever read from the terminal or from stdin, never from
  * argv: an argument is visible in `ps` and in shell history.
@@ -40,7 +39,7 @@ function parseUsername(argv: string[]): string {
       continue;
     }
     // Deliberately rejected rather than read: an argument is visible in `ps`
-    // and lands in shell history (design.md §6.4).
+    // and lands in shell history.
     if (arg === '--password' || arg.startsWith('--password=')) {
       fail(`This tool never takes a password as an argument — it would be visible in \`ps\` and in shell history.\n${USAGE}`);
     }

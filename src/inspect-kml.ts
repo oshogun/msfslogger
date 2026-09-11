@@ -2,8 +2,8 @@
 // ── KML export inspector ──────────────────────────────────────────────────────
 //
 // A read-only CLI over src/kmlExport.ts. It exists because the KML export has
-// no route yet (T-004) and no UI: this is how the document shape is checked
-// against real rows, with no server running. design.md §5.3.
+// no route yet and no UI: this is how the document shape is checked
+// against real rows, with no server running.
 //
 //   npx ts-node src/inspect-kml.ts --db <path-to-flights.db> --flight 63
 //   npx ts-node src/inspect-kml.ts --db <dir-containing-a-copy> --trip 7
@@ -85,7 +85,7 @@ function parseArgs(argv: string[]): Args | null {
     return { dbPath, outFile, scope: { kind: flag.kind, id } };
   }
 
-  // --flights id,id,… — same first-occurrence-wins de-dup as design §2.3.
+  // --flights id,id,… — same first-occurrence-wins de-dup as the flight-set endpoint.
   const ids: number[] = [];
   const seen = new Set<number>();
   const parts = flag.raw.split(',').map((p) => p.trim()).filter((p) => p !== '');
@@ -116,8 +116,8 @@ function main(): void {
   const resolved = path.resolve(args.dbPath);
   const targetDir = path.basename(resolved) === 'flights.db' ? path.dirname(resolved) : resolved;
   process.chdir(targetDir);
-  // Printed to stderr, per design §5.3, so the operator can see which file was
-  // opened before anything that could write to it runs.
+  // Printed to stderr so the operator can see which file was opened before
+  // anything that could write to it runs.
   console.error(`opening database: ${path.join(targetDir, 'flights.db')}`);
 
   // The first import of './db' in this process — see the header comment.

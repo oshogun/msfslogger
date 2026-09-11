@@ -27,7 +27,7 @@ import { createAuthRouter } from './auth/routes';
 // Multer's own defaults are `fields: Infinity` and `fieldSize: 1MB`, so a
 // multipart request could otherwise carry unbounded non-file fields. A
 // legitimate PDF upload sends one file and no fields; the .lnmpln import sends
-// at most 25 files and one field (allow_duplicates). design.md §8.5.
+// at most 25 files and one field (allow_duplicates).
 const MAX_FLIGHT_PLAN_BYTES = 20 * 1024 * 1024;
 const MAX_UPLOAD_FIELDS = 5;
 const MAX_UPLOAD_FIELD_BYTES = 8192;
@@ -45,7 +45,7 @@ const upload = multer({
 // ── LNMPLN import ──────────────────────────────────────────────────────────
 // A separate multer instance, deliberately: a real .lnmpln plan is a few KB of
 // XML, so it gets its own, much smaller, limit rather than sharing
-// MAX_FLIGHT_PLAN_BYTES (20 MB, PDFs). design.md §7.1, §20 item 2.
+// MAX_FLIGHT_PLAN_BYTES (20 MB, PDFs).
 const MAX_LNMPLN_BYTES = 512 * 1024;
 const MAX_LNMPLN_FILES = 25;
 const uploadLnmpln = multer({
@@ -63,7 +63,7 @@ const uploadLnmpln = multer({
  * Content sniffing for an uploaded .lnmpln: after BOM stripping and
  * trimStart(), the bytes must begin with '<'. The extension is not trusted and
  * not required. Mirrors the parser's own BOM handling so a file that passes
- * here is never rejected by the parser for the same reason. design.md §7.1.
+ * here is never rejected by the parser for the same reason.
  */
 function looksLikeXml(buf: Buffer): boolean {
   let text = buf.toString('utf8');
@@ -104,7 +104,7 @@ function sendPdf(res: express.Response, pdf: Buffer, filename: string): void {
   res.end(pdf);
 }
 
-/** Same header-sanitising rule as sendPdf() — design.md (run 2026-09-09-kml-export) §3.5. */
+/** Same header-sanitising rule as sendPdf(). */
 function sendKml(res: express.Response, kml: string, filename: string): void {
   const safeName = filename.replace(/["\\\r\n/]/g, '_');
   const buf = Buffer.from(kml, 'utf8');
@@ -147,33 +147,30 @@ export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
   const config = getConfig();
 
-  // Middleware order is behaviour, and this order is frozen — design.md §8.3
-  // positions 1-10. Anything registered after app.use('/api', requireAuth)
-  // below is gated by default, including routes added later.
+  // Middleware order is behaviour, and this order is frozen. Anything
+  // registered after app.use('/api', requireAuth) below is gated by default,
+  // including routes added later.
   app.use(express.json({ limit: config.jsonBodyLimit }));
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
   // One instance per server (not a module-level singleton), so a scratch
   // server starts empty. Never persisted, never written to flights.db.
-  // design.md (run 2026-09-08-ai-traffic-map) §5.1.
   const trafficStore = new TrafficStore();
 
   // Deliberately above the session middleware: the agent never sends a cookie,
-  // and an ingest request must never allocate or touch the session store
-  // (design.md §8.3 position 3, §8.4). Authenticated by INGEST_TOKEN instead
-  // (§12).
+  // and an ingest request must never allocate or touch the session store.
+  // Authenticated by INGEST_TOKEN instead.
   app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest));
 
   // SESSION_SECRET when the operator set one, otherwise a random 32-byte secret
   // created on first run and stored in app_secret. There is no hard-coded
-  // fallback anywhere: the server either finds a secret or makes one
-  // (design.md §10.3).
+  // fallback anywhere: the server either finds a secret or makes one.
   const sessionSecret = config.sessionSecretFromEnv
     ?? getOrCreateAppSecret('session_secret', () => randomBytes(32).toString('base64'));
 
   // `trust proxy` is deliberately NOT set: X-Forwarded-For stays ignored, so a
   // spoofed header cannot poison the login throttle's key, and req.protocol
-  // reflects the real connection (design.md §10.1, §16.2).
+  // reflects the real connection.
   app.use(session({
     name: SESSION_COOKIE_NAME,
     secret: sessionSecret,
@@ -186,7 +183,7 @@ export function createServer(flightManager: FlightManager): express.Express {
       sameSite: 'lax',
       // Tied to TLS, never hard-coded: a browser will not send a Secure cookie
       // over plaintext HTTP, and a non-Secure one would cross the network in
-      // the clear on a TLS deployment (design.md §10.6).
+      // the clear on a TLS deployment.
       secure: config.tls.enabled,
       path: '/',
       maxAge: config.sessionMaxAgeMs,
@@ -194,14 +191,14 @@ export function createServer(flightManager: FlightManager): express.Express {
   }));
 
   // CSRF defence in depth behind SameSite=Lax; skips GET/HEAD/OPTIONS, non-/api
-  // paths and /api/ingest/* (design.md §16.3).
+  // paths and /api/ingest/*.
   app.use(requireSameOrigin);
 
-  // Public by name — it cannot require a session to create one (design.md §8.1).
+  // Public by name — it cannot require a session to create one.
   app.use('/api/auth', createAuthRouter());
 
   // The gate. One mount, not per-handler decoration, so every /api route below
-  // — and any unmatched /api path — is 401 without a session (design.md §8.1).
+  // — and any unmatched /api path — is 401 without a session.
   app.use('/api', requireAuth);
 
   app.get('/api/status', (_req, res) => {
@@ -209,13 +206,12 @@ export function createServer(flightManager: FlightManager): express.Express {
     // Only while FLYING, and only when the flight is actually linked — every
     // other case must leave the response byte-identical to before this key
     // existed, so it is spread in rather than ever sent as a literal null.
-    // design.md §19.
     const plannedLeg = flightState === 'FLYING' && lastFrame
       ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
       : null;
-    // Present iff non-empty (design.md §6.2, §6.4) — never null, never [],
-    // absent instead, so an unchanged AppState serialises byte-identically to
-    // before this key existed. Same conditional-spread idiom as plannedLeg.
+    // Present iff non-empty — never null, never [], absent instead, so an
+    // unchanged AppState serialises byte-identically to before this key
+    // existed. Same conditional-spread idiom as plannedLeg.
     const traffic = trafficStore.read();
     res.json({
       connected,
@@ -383,9 +379,9 @@ export function createServer(flightManager: FlightManager): express.Express {
   // ── Active trip ────────────────────────────────────────────────────────────
   // /api/active-trip is a new top-level prefix, chosen precisely so it cannot
   // collide with anything — in particular so it never sits as a literal in the
-  // :id slot of the destructive DELETE /api/trips/:id. design.md §11.3, §20
-  // item 15. The payload is camelCase because it is a computed view (which
-  // trip, if any, is active), not a row (design.md §17).
+  // :id slot of the destructive DELETE /api/trips/:id. The payload is
+  // camelCase because it is a computed view (which trip, if any, is active),
+  // not a row.
 
   app.get('/api/active-trip', (_req, res) => {
     try {
@@ -522,7 +518,7 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   // ── Planned legs ───────────────────────────────────────────────────────────
   // Registered after ── Trips ── and before ── PDF export ──, so every literal
-  // route here stays ahead of app.get('*'). design.md §7.3.
+  // route here stays ahead of app.get('*').
 
   app.post('/api/trips/:id/planned-legs', uploadLnmpln.array('lnmpln', MAX_LNMPLN_FILES), (req, res) => {
     const tripId = parseInt(req.params.id, 10);
@@ -602,8 +598,8 @@ export function createServer(flightManager: FlightManager): express.Express {
       }
 
       // F-2: a warning means the parser tolerated something worth a human's
-      // attention (design.md §5.4e) — log it at import time, since nothing
-      // downstream of a successful import currently does.
+      // attention — log it at import time, since nothing downstream of a
+      // successful import currently does.
       for (const w of plan.warnings) {
         console.warn(`[LNMPLN] ${filename}: ${w.code}: ${w.message}`);
       }
@@ -702,7 +698,7 @@ export function createServer(flightManager: FlightManager): express.Express {
 
     // 'flown' and 'diverted' are set by the system only — by landing within
     // ARRIVAL_RADIUS_NM of the planned destination — so a client asking for
-    // either is a 400, not a state a PATCH can request. design.md §15.
+    // either is a 400, not a state a PATCH can request.
     const { status } = req.body as { status?: unknown };
     if (status !== 'planned' && status !== 'skipped') {
       res.status(400).json({ error: "status must be 'planned' or 'skipped'" }); return;
@@ -725,7 +721,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // Deliberately NOT restricted to the active trip: any unflown planned leg of
   // ANY trip can be linked by hand, since this is the escape hatch for a bad
   // (or missing) auto-match and must not be constrained by the mechanism it
-  // exists to correct. design.md §12.3.
+  // exists to correct.
 
   app.put('/api/flights/:id/planned-leg', (req, res) => {
     const id = parseInt(req.params.id, 10);
@@ -750,8 +746,8 @@ export function createServer(flightManager: FlightManager): express.Express {
         linkFlightToPlannedLeg(id, plannedLegId as number, 'manual');
       }
       // A manual link/unlink bypasses FlightManager entirely, so its live-status
-      // cache (design.md §19) would otherwise keep whatever autoLinkPlannedLeg
-      // last set for this flight. A no-op unless `id` is the flight in progress.
+      // cache would otherwise keep whatever autoLinkPlannedLeg last set for
+      // this flight. A no-op unless `id` is the flight in progress.
       flightManager.refreshPlannedLegForFlight(id);
       res.json(getFlightById(id));
     } catch (err) {
@@ -767,19 +763,19 @@ export function createServer(flightManager: FlightManager): express.Express {
   // after the flight had already landed. Flight-scoped rather than a widened
   // PATCH /api/planned-legs/:legId: three of the four columns the gate reads
   // live on `flights`, and this way that PATCH — including F-1's 409 on every
-  // linked leg — is left literally unchanged. design.md §5.1, §5.2, §5.6.
+  // linked leg — is left literally unchanged.
   //
   // This handler is the whole gate: decideHandClose() refuses here everything
   // the client merely hides. Deliberately no flightManager.refreshPlannedLegForFlight()
   // — the gate demands end_time IS NOT NULL, so the flight is never the one in
-  // progress and the call could only ever be a no-op. design.md §5.7.
+  // progress and the call could only ever be a no-op.
   app.put('/api/flights/:id/planned-leg-status', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
 
     // Checked before the flight 404, matching PATCH /api/planned-legs/:legId: a
     // malformed body is a 400 whether or not the flight exists. 'diverted' and
-    // 'skipped' are not settable here in either direction. design.md §5.4, §1.7.
+    // 'skipped' are not settable here in either direction.
     const { status } = req.body as { status?: unknown };
     if (status !== 'flown' && status !== 'planned') {
       res.status(400).json({ error: "status must be 'flown' or 'planned'" }); return;
@@ -790,7 +786,7 @@ export function createServer(flightManager: FlightManager): express.Express {
 
     // planned_leg_id set with the row gone is unreachable (the FK is
     // ON DELETE SET NULL) but is a genuinely missing named resource, so it is a
-    // 404 here rather than one of the gate's 409s. design.md §1.5.
+    // 404 here rather than one of the gate's 409s.
     const leg = flight.planned_leg_id == null ? null : getPlannedLegById(flight.planned_leg_id);
     if (flight.planned_leg_id != null && !leg) {
       res.status(404).json({ error: 'Planned leg not found' }); return;
@@ -802,7 +798,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     try {
       // The writer re-asserts linked/manual/ended inside its transaction, so a
       // concurrent unlink between the decision above and the UPDATE throws
-      // rather than writing. design.md §4.3.
+      // rather than writing.
       const updated = setPlannedLegHandOutcome(decision.legId, decision.status, decision.deviationNm);
       if (!updated) { res.status(404).json({ error: 'Planned leg not found' }); return; }
 
@@ -843,7 +839,7 @@ export function createServer(flightManager: FlightManager): express.Express {
 
     try {
       // The print page fetches its data from the gated /api, so the headless
-      // render carries this caller's own session cookie (design.md §13.2).
+      // render carries this caller's own session cookie.
       let pdf = await renderPdf(`/print/flight/${id}${localeParams(req)}`, { sessionCookie: sessionCookieFrom(req) });
       if (flight.flight_plan_name && includePlans(req)) {
         pdf = await appendPdfs(pdf, [flightPlanPath(id)]);
@@ -863,7 +859,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (!trip) { res.status(404).json({ error: 'Trip not found' }); return; }
 
     try {
-      // Same as the flight export above — design.md §13.2.
+      // Same as the flight export above.
       let pdf = await renderPdf(`/print/trip/${id}${localeParams(req)}`, { sessionCookie: sessionCookieFrom(req) });
       const attachments = includePlans(req)
         ? trip.flights.filter(f => f.flight_plan_name).map(f => flightPlanPath(f.id))
@@ -916,12 +912,12 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   // The flight-set scope: an arbitrary list of ids in the body, not a single
   // resource in the path, so it cannot live at GET /api/flights/:id/export.kml
-  // — design.md (run 2026-09-09-kml-export) §2.3 explains why this is a POST.
+  // — that is why this is a POST.
   app.post('/api/flights/export.kml', (req, res) => {
     const { ids } = (req.body ?? {}) as KmlFlightSetRequest;
 
     // Checks run in this order — shape, then emptiness, then cap, then
-    // per-element integer check — design.md (run 2026-09-09-kml-export) §2.4.
+    // per-element integer check.
     if (!Array.isArray(ids)) {
       res.status(400).json({ error: 'ids must be an array of integers' });
       return;
@@ -970,7 +966,7 @@ export function createServer(flightManager: FlightManager): express.Express {
       if (err.code === 'LIMIT_FILE_SIZE') {
         // err.field distinguishes which multer instance hit its limit: the
         // shared PDF message would be wrong (and misleadingly large) for an
-        // oversized .lnmpln. design.md §7.1, §20 item 2.
+        // oversized .lnmpln.
         const message = err.field === 'lnmpln'
           ? `File too large (max ${MAX_LNMPLN_BYTES / 1024}KB)`
           : `File too large (max ${MAX_FLIGHT_PLAN_BYTES / (1024 * 1024)}MB)`;

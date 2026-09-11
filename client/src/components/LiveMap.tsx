@@ -13,9 +13,9 @@ function makeAircraftIcon(headingDeg: number) {
   });
 }
 
-// AI traffic icon, distinct from the user's own (design.md §7.2): smaller,
-// coloured by onGround, translucent, no drop-shadow depth cue, and no
-// zIndexOffset — the user's own aircraft always renders on top of these.
+// AI traffic icon, distinct from the user's own: smaller, coloured by
+// onGround, translucent, no drop-shadow depth cue, and no zIndexOffset — the
+// user's own aircraft always renders on top of these.
 function makeTrafficIcon(headingDeg: number, onGround: boolean) {
   const color = onGround ? '#9ca3af' : '#fbbf24';
   return L.divIcon({
@@ -73,12 +73,11 @@ function LiveMapController({ status }: { status: Status }) {
   });
 
   // AI traffic: a separate effect keyed on [status], deliberately independent
-  // of the own-aircraft guards above (design.md §7.3) so a null-island or
-  // missing-frame case never blocks traffic from rendering. Markers are
-  // moved, never recreated, while an id persists; an id absent from the
-  // latest batch is removed, not merely hidden. Never calls setView/panTo/
-  // flyTo/fitBounds/setZoom/invalidateSize — the viewport is owned
-  // exclusively by the effect above (§7.5).
+  // of the own-aircraft guards above so a null-island or missing-frame case
+  // never blocks traffic from rendering. Markers are moved, never recreated,
+  // while an id persists; an id absent from the latest batch is removed, not
+  // merely hidden. Never calls setView/panTo/flyTo/fitBounds/setZoom/
+  // invalidateSize — the viewport is owned exclusively by the effect above.
   useEffect(() => {
     const traffic: TrafficObject[] = status.traffic ?? [];
     const seen = new Set<number>();

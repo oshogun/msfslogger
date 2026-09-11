@@ -1,8 +1,7 @@
 import crypto from 'crypto';
 
 /**
- * Password hashing for the single operator account
- * (run 2026-09-10-security-hardening, design.md §6.2).
+ * Password hashing for the single operator account.
  *
  * Pure: no database, no express, no I/O. scrypt from node:crypto rather than
  * bcrypt or argon2 because both of those are native addons, and this machine
@@ -10,16 +9,17 @@ import crypto from 'crypto';
  * adding a second doubles that failure mode for no security gain here.
  */
 
-/** Frozen scrypt parameters. Changing them is a design amendment (§6.2). */
+/** Frozen scrypt parameters. Changing them needs a deliberate decision — the
+ *  hash format carries N/r/p forward so old rows still verify. */
 export const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keylen: 32, saltlen: 16 } as const;
 
-/** Minimum/maximum accepted password length in UTF-16 code units (§6.3). */
+/** Minimum/maximum accepted password length in UTF-16 code units. */
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 200;
 export const USERNAME_MAX_LENGTH = 64;
 
 /**
- * Returns `scrypt$N$r$p$<salt-b64>$<key-b64>` (§6.2). The parameters travel
+ * Returns `scrypt$N$r$p$<salt-b64>$<key-b64>`. The parameters travel
  * with the hash, so they can be raised later without a migration: an old row
  * still verifies against its own N/r/p.
  */
@@ -35,8 +35,8 @@ export function hashPassword(password: string): string {
 
 /**
  * Constant-time verification. Returns false — never throws — for a malformed
- * or unknown-scheme `stored` value (§6.2, §16.1): a corrupt row must be a
- * failed login, not a 500.
+ * or unknown-scheme `stored` value: a corrupt row must be a failed login, not
+ * a 500.
  */
 export function verifyPassword(password: string, stored: string): boolean {
   try {
@@ -68,7 +68,7 @@ export function verifyPassword(password: string, stored: string): boolean {
 /**
  * A fixed, module-level hash of a random throwaway password, used to spend the
  * same ~45 ms when the username does not match, so a wrong username and a
- * wrong password are indistinguishable by timing (§16.1). Nothing can verify
- * against it: the password it was derived from is discarded here and now.
+ * wrong password are indistinguishable by timing. Nothing can verify against
+ * it: the password it was derived from is discarded here and now.
  */
 export const DUMMY_PASSWORD_HASH: string = hashPassword(crypto.randomBytes(32).toString('base64'));

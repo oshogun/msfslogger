@@ -1,11 +1,11 @@
-// tests/helpers.test.ts — self-test for tests/helpers/index.ts (T-002).
+// tests/helpers.test.ts — self-test for tests/helpers/index.ts.
 //
 // Proves each builder returns an object satisfying the real type it claims to
 // build, that per-field overrides apply without disturbing the rest of the
 // defaults, that the dbMock stubs cover every ./db import src/flightManager.ts
 // makes and record their call arguments, and that resetMocks() re-installs
-// default implementations even after vitest's restoreMocks strips them
-// (design.md §6.4 — the trap this module exists to avoid).
+// default implementations even after vitest's restoreMocks strips them —
+// the trap this module exists to avoid.
 
 import { describe, expect, it, vi } from 'vitest';
 import type { SimFrame, LegMatchCandidate, PlannedLegWithChildren } from '../src/types';
@@ -17,7 +17,7 @@ import {
 } from './helpers';
 
 describe('makeFrame', () => {
-  it('returns a SimFrame with every field at its §4.2 default', () => {
+  it('returns a SimFrame with every field at its default', () => {
     const f: SimFrame = makeFrame();
     expect(f).toEqual({
       lat: 34.426201,
@@ -41,7 +41,7 @@ describe('makeFrame', () => {
 });
 
 describe('makeCandidate', () => {
-  it('returns a LegMatchCandidate with every field at its §4.3 default', () => {
+  it('returns a LegMatchCandidate with every field at its default', () => {
     const c: LegMatchCandidate = makeCandidate();
     expect(c).toEqual({
       plannedLegId: 11,
@@ -75,7 +75,7 @@ describe('makeCandidate', () => {
 });
 
 describe('makeHandCloseFlight / makeHandCloseLeg', () => {
-  it('makeHandCloseFlight returns a HandCloseFlight with every field at its §4.4 default', () => {
+  it('makeHandCloseFlight returns a HandCloseFlight with every field at its default', () => {
     const flight: HandCloseFlight = makeHandCloseFlight();
     expect(flight).toEqual({
       id: 900,
@@ -93,7 +93,7 @@ describe('makeHandCloseFlight / makeHandCloseLeg', () => {
     expect(flight).toEqual({ ...makeHandCloseFlight(), planned_leg_link_source: 'auto' });
   });
 
-  it('makeHandCloseLeg returns a HandCloseLeg with every field at its §4.4 default', () => {
+  it('makeHandCloseLeg returns a HandCloseLeg with every field at its default', () => {
     const leg: HandCloseLeg = makeHandCloseLeg();
     expect(leg).toEqual({
       id: 500,
@@ -111,7 +111,7 @@ describe('makeHandCloseFlight / makeHandCloseLeg', () => {
 });
 
 describe('makePlannedLegWithChildren', () => {
-  it('returns a complete, type-valid PlannedLegWithChildren at its §4.5 defaults', () => {
+  it('returns a complete, type-valid PlannedLegWithChildren at its defaults', () => {
     const leg: PlannedLegWithChildren = makePlannedLegWithChildren();
     expect(leg.id).toBe(11);
     expect(leg.trip_id).toBe(1);
@@ -122,7 +122,7 @@ describe('makePlannedLegWithChildren', () => {
     expect(leg.linked_flight_id).toBeNull();
     expect(leg.alternates).toEqual([]);
     // Every "remaining" field (departure_start*, departure_pos_*, sid_*,
-    // star_*, approach_*, remarks) defaults to null per §4.5.
+    // star_*, approach_*, remarks) defaults to null.
     expect(leg.departure_start).toBeNull();
     expect(leg.departure_pos_lat).toBeNull();
     expect(leg.sid_name).toBeNull();
@@ -180,7 +180,7 @@ describe('dbMock', () => {
     }
   });
 
-  it('default stub behaviour matches §6.2', () => {
+  it('default stub behaviour matches the documented defaults for each ./db import', () => {
     resetMocks();
     expect(dbMock.insertFlight('Cessna 172', 1, 2, '2026-09-09T12:00:00.000Z')).toBe(1);
     expect(dbMock.insertFlight('Cessna 172', 1, 2, '2026-09-09T12:00:00.000Z')).toBe(2);
@@ -207,7 +207,7 @@ describe('dbMock', () => {
     expect(nextFlightId()).toBe(2);
   });
 
-  it('vi.restoreAllMocks() (what config restoreMocks: true runs) does NOT touch a plain vi.fn() (§6.4 trap, verified against @vitest/spy)', () => {
+  it('vi.restoreAllMocks() (what config restoreMocks: true runs) does NOT touch a plain vi.fn() (the restoreMocks trap, verified against @vitest/spy)', () => {
     // dbMock's functions are plain vi.fn()s, not vi.spyOn() spies, so
     // vitest's restoreMocks: true — which calls vi.restoreAllMocks() — is a
     // no-op on them: it restores only vi.spyOn() spies. This is exactly why
@@ -236,7 +236,7 @@ describe('dbMock', () => {
 });
 
 describe('airportsMock', () => {
-  it('stubs findNearestAirport and initAirports per §6.3', () => {
+  it('stubs findNearestAirport and initAirports', () => {
     resetMocks();
     expect(airportsMock.findNearestAirport(0, 0)).toBeNull();
     return expect(airportsMock.initAirports()).resolves.toBeUndefined();

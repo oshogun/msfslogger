@@ -1,7 +1,6 @@
 /**
  * Thrown by apiFetch/download when the server answers 401. Distinguishable by
  * `instanceof`, so a caller can tell "logged out" from "request failed".
- * design.md §14.2.
  */
 export class UnauthorizedError extends Error {
   readonly status = 401 as const;
@@ -13,8 +12,8 @@ export class UnauthorizedError extends Error {
 }
 
 /**
- * Registered once by <RequireAuth> (§14.3), so a mid-session expiry bounces
- * the operator to /login. Never registered on a /print/* route (§13.4).
+ * Registered once by <RequireAuth>, so a mid-session expiry bounces the
+ * operator to /login. Never registered on a /print/* route.
  */
 let unauthorizedHandler: (() => void) | null = null;
 
@@ -99,12 +98,12 @@ export async function downloadPdf(
   await download(`${path}?${params}`, fallbackName);
 }
 
-/** GET a .kml endpoint (§2.1, §2.2). No query parameters are sent. */
+/** GET a .kml endpoint. No query parameters are sent. */
 export async function downloadKml(path: string, fallbackName: string): Promise<void> {
   await download(path, fallbackName);
 }
 
-/** POST /api/flights/export.kml with {ids} (§2.3). */
+/** POST /api/flights/export.kml with {ids}. */
 export async function downloadFlightSetKml(ids: number[]): Promise<void> {
   await download('/api/flights/export.kml', `flights-${ids.length}.kml`, {
     method: 'POST',

@@ -1,7 +1,7 @@
 #!/usr/bin/env ts-node
 // ── AI-traffic store/ingest scenario harness ─────────────────────────────────
 //
-// A CLI over src/trafficStore.ts (TrafficStore, applyRetentionCap, the §2.4
+// A CLI over src/trafficStore.ts (TrafficStore, applyRetentionCap, the
 // rounding formulas) and, for the handful of rows that are genuinely about
 // the HTTP layer (auth, the TRAFFIC_ENABLED kill switch, the connected flag),
 // over src/ingest.ts's createIngestRouter() run against an ephemeral,
@@ -12,37 +12,37 @@
 //
 // ── Why the "expected" column is transcribed, not derived ────────────────────
 //
-// Every expected value below is copied BY HAND from design.md (run
-// 2026-09-08-ai-traffic-map) §9.1's 36-row truth table, or from §8's worked
-// example (§8.1's raw batch and §8.2's rounded response, both reproduced
-// verbatim as fixtures). None of it is computed by calling trafficStore.ts's
-// own roundCoord/roundAlt/normHeading/distanceM to derive what the answer
-// "should" be, and none of it is a restatement of applyRetentionCap's rule in
-// a second sorting function — an inspector that derives "expected" from the
-// implementation proves nothing, because a bug shared by both sides would
-// agree with itself. Where a row's fixture needs distance *ordering* rather
-// than a literal number (S9), the fixture is built so the ordering is a plain
-// geometric fact (points spaced along one meridian, so great-circle distance
-// is monotonic in the latitude offset) rather than something read off
-// distanceM's own output. If a row here is ever found to disagree with
-// design.md's own table, that is a question for the design, not something to
-// quietly reconcile in this file.
+// Every expected value below is transcribed BY HAND: the 36-row truth table,
+// and the worked example (the raw batch and its rounded response, both
+// reproduced verbatim as fixtures). None of it is computed by calling
+// trafficStore.ts's own roundCoord/roundAlt/normHeading/distanceM to derive
+// what the answer "should" be, and none of it is a restatement of
+// applyRetentionCap's rule in a second sorting function — an inspector that
+// derives "expected" from the implementation proves nothing, because a bug
+// shared by both sides would agree with itself. Where a row's fixture needs
+// distance *ordering* rather than a literal number (S9), the fixture is
+// built so the ordering is a plain geometric fact (points spaced along one
+// meridian, so great-circle distance is monotonic in the latitude offset)
+// rather than something read off distanceM's own output. If a row here is
+// ever found to disagree with the frozen truth table, that is a question
+// for the spec, not something to quietly reconcile in this file.
 //
 // ── Sections ──────────────────────────────────────────────────────────────────
 //
 // A. VALIDATION_ROWS  — buildTrafficObjects() (src/ingest.ts): body shape,
 //                        per-element validation, rounding/normalisation,
-//                        de-duplication. §9.1 S7, S11, S13-S28.
+//                        de-duplication. S7, S11, S13-S28.
 // B. PRUNING_ROWS      — applyRetentionCap() (src/trafficStore.ts): the
 //                        retention cap and its distance-ordering rule.
-//                        §9.1 S8-S10, S12.
+//                        S8-S10, S12.
 // C. STORE_ROWS        — TrafficStore directly: snapshot semantics and lazy
 //                        staleness, including the exact worked example of
-//                        §8.1/§8.2 end to end. §9.1 S1-S6, S34, S35.
+//                        the raw batch and its rounded response end to end.
+//                        S1-S6, S34, S35.
 // D. HTTP_ROWS         — createIngestRouter() behind a real (ephemeral,
 //                        loopback-only) express app: auth, the server-side
 //                        kill switch, and the connected-flag guarantee.
-//                        §9.1 S29-S33.
+//                        S29-S33.
 // E. STATIC_ROWS       — a structural check of src/server.ts's route
 //                        registration order, standing in for the one row
 //                        (S36) that is entirely about server.ts's existing,
@@ -126,10 +126,10 @@ function makeRawBatch(n: number, opts: { latBase?: number; lonBase?: number; lat
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §8 worked example — transcribed verbatim, reused by S1
+// Worked example — transcribed verbatim, reused by S1
 // ═══════════════════════════════════════════════════════════════════════════
 
-// §8.1, at full double precision, exactly as the agent would post it.
+// The raw batch, at full double precision, exactly as the agent would post it.
 const WORKED_RAW_BATCH: unknown = {
   objects: [
     { id: 12, lat: 47.44982716239, lon: -122.3091455117, altitudeFt: 4325.68359375, headingDeg: 158.4472999572, onGround: false },
@@ -138,7 +138,7 @@ const WORKED_RAW_BATCH: unknown = {
   ],
 };
 
-// §8.2's `traffic` array, transcribed verbatim.
+// The worked example's `traffic` array, transcribed verbatim.
 const WORKED_EXPECTED_TRAFFIC: TrafficObject[] = [
   { id: 12, lat: 47.449827, lon: -122.309146, altitudeFt: 4326, headingDeg: 158.4, onGround: false },
   { id: 13, lat: 47.531005, lon: -122.200591, altitudeFt: 11250, headingDeg: 12.5, onGround: false },
@@ -146,7 +146,7 @@ const WORKED_EXPECTED_TRAFFIC: TrafficObject[] = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// A. VALIDATION_ROWS — buildTrafficObjects() — §9.1 S7, S11, S13-S28
+// A. VALIDATION_ROWS — buildTrafficObjects() — S7, S11, S13-S28
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runValidationRows(): void {
@@ -335,7 +335,7 @@ function runValidationRows(): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B. PRUNING_ROWS — applyRetentionCap() — §9.1 S8-S10, S12
+// B. PRUNING_ROWS — applyRetentionCap() — S8-S10, S12
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runPruningRows(): void {
@@ -409,14 +409,14 @@ function runPruningRows(): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// C. STORE_ROWS — TrafficStore directly — §9.1 S1-S6, S34, S35
+// C. STORE_ROWS — TrafficStore directly — S1-S6, S34, S35
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runStoreRows(): void {
   console.log('── C. Snapshot semantics and lazy staleness — TrafficStore (src/trafficStore.ts)');
   console.log('');
 
-  // S1 — the §8 worked example end to end: raw batch in, rounded traffic out,
+  // S1 — the worked example end to end: raw batch in, rounded traffic out,
   // read immediately.
   {
     const built = buildTrafficObjects(WORKED_RAW_BATCH);
@@ -424,7 +424,7 @@ function runStoreRows(): void {
     if (built.ok) withFakeNow(1_000_000, () => store.replace(built.objects));
     const read = store.read(1_000_000);
     const ok = built.ok && sameObjects(read, WORKED_EXPECTED_TRAFFIC);
-    printRow('S1', 'Batch of 3 valid objects (§8.1), read immediately', `204; traffic = ${fmtObjects(WORKED_EXPECTED_TRAFFIC)} (§8.2)`, ok, `read = ${fmtObjects(read)}`);
+    printRow('S1', 'Batch of 3 valid objects (worked example), read immediately', `204; traffic = ${fmtObjects(WORKED_EXPECTED_TRAFFIC)}`, ok, `read = ${fmtObjects(read)}`);
   }
 
   // S2/S3/S4 — staleness boundary: strictly greater than TRAFFIC_STALE_MS
@@ -518,7 +518,7 @@ function runStoreRows(): void {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // D. HTTP_ROWS — createIngestRouter() over an ephemeral express app —
-//    §9.1 S29-S33
+//    S29-S33
 // ═══════════════════════════════════════════════════════════════════════════
 
 function makeStubFlightManager(): FlightManager {
@@ -531,14 +531,14 @@ function makeStubFlightManager(): FlightManager {
       paused: false,
       pauseFlags: 0,
     },
-    // §4.7: the traffic route must call neither. Throwing turns any violation
+    // The traffic route must call neither. Throwing turns any violation
     // into a synchronous exception inside the route handler, which express
     // turns into a 500 — a loud, unmistakable failure of any row below.
     onFrame: () => {
-      throw new Error('onFrame must not be called by the traffic route (design.md §4.7)');
+      throw new Error('onFrame must not be called by the traffic route');
     },
     onSimDisconnect: () => {
-      throw new Error('onSimDisconnect must not be called by the traffic route (design.md §4.7)');
+      throw new Error('onSimDisconnect must not be called by the traffic route');
     },
   };
   return stub as unknown as FlightManager;
@@ -559,7 +559,7 @@ async function withRouterServer(
   const flightManager = makeStubFlightManager();
   const app = express();
   app.use(express.json());
-  // §12.4: createIngestRouter() now takes an IngestConfig. Rebuilt here from
+  // createIngestRouter() takes an IngestConfig. Rebuilt here from
   // process.env.INGEST_TOKEN (after the envOverrides loop above) so it tracks
   // the same semantics loadConfig() would derive — token set -> authenticated,
   // token unset -> unauthenticated — preserving every scenario's behaviour.
@@ -673,7 +673,7 @@ async function runHttpRows(): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// E. STATIC_ROWS — src/server.ts route-registration order — §9.1 S36
+// E. STATIC_ROWS — src/server.ts route-registration order — S36
 // ═══════════════════════════════════════════════════════════════════════════
 
 function runStaticRows(): void {
@@ -685,8 +685,8 @@ function runStaticRows(): void {
   // app.get('*', ...) AFTER every API route, ingest included. This run does
   // not change that ordering; checked structurally rather than by running
   // the whole server (which would need a built client/dist and would import
-  // src/db.ts) — the design's own §9.1 note calls this "existing behaviour,
-  // unrelated to and unchanged by this run".
+  // src/db.ts) — this is existing behaviour, unrelated to and unchanged by
+  // this run.
   const serverSrc = fs.readFileSync(path.join(__dirname, 'server.ts'), 'utf8');
   const ingestMountIdx = serverSrc.indexOf("app.use('/api/ingest'");
   const catchAllIdx = serverSrc.indexOf("app.get('*'");
@@ -712,7 +712,7 @@ async function main(): Promise<void> {
   runStaticRows();
 
   if (failures.length === 0) {
-    console.log(`${rowCount} rows (design.md §9.1, S1-S36), 0 failures`);
+    console.log(`${rowCount} rows (S1-S36), 0 failures`);
   } else {
     for (const f of failures) console.error(f);
     console.error('');

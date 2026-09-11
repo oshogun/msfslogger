@@ -1,10 +1,10 @@
-// tests/plannedLegClose.test.ts — src/plannedLegClose.ts, T-004.
+// tests/plannedLegClose.test.ts — src/plannedLegClose.ts.
 //
-// The 24-row gate table (design.md of run 2026-09-07-manual-mark-flown §1.3)
-// is transcribed verbatim from src/inspect-manual-mark.ts:99-124, both
-// directions (48 verdicts). Message strings are transcribed character for
-// character from src/plannedLegClose.ts:103, 112-113, 121, 130-131, 139-141
-// and asserted with `toBe`, never `toContain` (design.md §8.3).
+// The 24-row gate table is transcribed verbatim from
+// src/inspect-manual-mark.ts:99-124, both directions (48 verdicts). Message
+// strings are transcribed character for character from
+// src/plannedLegClose.ts:103, 112-113, 121, 130-131, 139-141 and asserted with
+// `toBe`, never `toContain`.
 //
 // Nothing here imports ./db, better-sqlite3, fs, http or https — decideHandClose
 // and handCloseDeviationNm are pure (src/plannedLegClose.ts's own header).
@@ -19,8 +19,8 @@ import {
 import { makeHandCloseFlight, makeHandCloseLeg } from './helpers';
 
 // makeHandCloseFlight()/makeHandCloseLeg() default to id 900 / 500 — the same
-// ids src/inspect-manual-mark.ts:128-129 uses for the gate table, "so the
-// transcribed strings match without editing" (design.md §4.4).
+// ids src/inspect-manual-mark.ts:128-129 uses for the gate table, so the
+// transcribed strings match without editing.
 const TABLE_FLIGHT_ID = 900;
 const TABLE_LEG_ID = 500;
 
@@ -136,7 +136,7 @@ describe('decideHandClose — 24-row gate table, both directions (48 verdicts), 
 //    always linked by construction), so covered separately here.
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('decideHandClose — NOT_LINKED (design.md §1.5)', () => {
+describe('decideHandClose — NOT_LINKED', () => {
   it('refuses NOT_LINKED when planned_leg_id is null and leg is null', () => {
     const flight = makeHandCloseFlight({ planned_leg_id: null, planned_leg_link_source: null });
     const result = decideHandClose('flown', flight, null);
@@ -159,10 +159,9 @@ describe('decideHandClose — NOT_LINKED (design.md §1.5)', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 3. Refusal ORDER — normative, design.md of run 2026-09-07-manual-mark-flown
-//    §1.2: NOT_LINKED · LINK_NOT_MANUAL · FLIGHT_NOT_ENDED · LEG_NOT_PLANNED/
-//    LEG_NOT_FLOWN. Each test below trips two conditions at once so the
-//    earlier-listed code must win.
+// 3. Refusal ORDER — normative: NOT_LINKED · LINK_NOT_MANUAL · FLIGHT_NOT_ENDED
+//    · LEG_NOT_PLANNED/LEG_NOT_FLOWN. Each test below trips two conditions at
+//    once so the earlier-listed code must win.
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('decideHandClose — refusal order is pinned (earliest applicable check wins)', () => {
@@ -255,8 +254,8 @@ describe('handCloseDeviationNm', () => {
     const leg = { destination_lat: 0.0024983152722295506, destination_lon: 0 };
 
     const raw = 0.14999999999999999445;
-    expect(Math.round(raw * 10) / 10).toBe(0.2); // the frozen expression, design.md §3.2
-    expect(Number(raw.toFixed(1))).toBe(0.1); // the look-alike the design explicitly rules out
+    expect(Math.round(raw * 10) / 10).toBe(0.2); // the frozen expression
+    expect(Number(raw.toFixed(1))).toBe(0.1); // the look-alike that was explicitly ruled out
 
     expect(handCloseDeviationNm(flight, leg)).toBe(0.2);
   });

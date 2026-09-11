@@ -10,13 +10,13 @@ import { createServer } from './server';
 
 // Configuration is read and validated before anything else — before the
 // database is opened, before any listener — so a misconfigured deployment
-// writes nothing (design.md §7.3, §12.2).
+// writes nothing.
 let config;
 try {
   config = loadConfig();
 } catch (err) {
   if (err instanceof ConfigError) {
-    // Some ConfigError messages (e.g. the missing-INGEST_TOKEN one, §12.2)
+    // Some ConfigError messages (e.g. the missing-INGEST_TOKEN one)
     // already carry a `[Config] ` prefix on every line; others are a single
     // unprefixed line. Prefix only the lines that don't already have it, so
     // stderr always ends up as one `[Config] ` line per sentence.
@@ -32,7 +32,7 @@ initDb();
 console.log('[DB] Database ready');
 
 // The server refuses to start with no operator account — there is no HTTP
-// setup flow (design.md §6.4).
+// setup flow.
 const authUser = getAuthUser();
 if (!authUser) {
   console.error('[Auth] Refusing to start: no operator account exists.');
@@ -41,8 +41,7 @@ if (!authUser) {
 }
 
 // Sweep expired sessions once at startup, then every 6 hours. The interval is
-// unref'd so it never holds the process open at shutdown (design.md §10.5,
-// §19 item 11).
+// unref'd so it never holds the process open at shutdown.
 const sweptAtStartup = sessionSweep(Date.now());
 if (sweptAtStartup > 0) {
   console.log(`[Auth] Swept ${sweptAtStartup} expired sessions`);
@@ -67,8 +66,7 @@ console.log('[Ingest] Waiting for agent data on /api/ingest');
 const app = createServer(flightManager);
 
 // One port, one protocol: HTTPS when TLS is configured, plaintext HTTP
-// otherwise. There is no second listener redirecting HTTP to HTTPS
-// (design.md §11.4).
+// otherwise. There is no second listener redirecting HTTP to HTTPS.
 let server: http.Server | https.Server;
 if (config.tls.enabled) {
   const key = fs.readFileSync(config.tls.keyFile);

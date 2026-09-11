@@ -8,7 +8,7 @@ import { useSession } from '../hooks/useSession';
 /**
  * Wraps <AppShell/>. Renders nothing while status === 'loading', redirects to
  * /login when 'anonymous', renders children when 'authenticated'.
- * /login, /print/flight/:id and /print/trip/:id are NOT wrapped (§13.4, §14.4).
+ * /login, /print/flight/:id and /print/trip/:id are NOT wrapped.
  *
  * Registers the module-level 401 handler on mount and clears it on unmount, so
  * a mid-session expiry (any gated /api call answering 401) bounces the

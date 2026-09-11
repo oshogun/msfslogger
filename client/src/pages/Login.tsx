@@ -13,7 +13,7 @@ interface LocationState {
  * redirect carried, defaulting to '/'. On 401 renders the server's message
  * verbatim ('Invalid username or password'); on 429 renders the server's
  * message including retryAfterSec. Never distinguishes unknown-user from
- * wrong-password, because the server does not either (design.md §9.2, §14.1).
+ * wrong-password, because the server does not either.
  */
 export function Login() {
   const session = useSession();
@@ -36,7 +36,7 @@ export function Login() {
     } catch (err) {
       // The server's message is rendered verbatim, whatever it is — an
       // "Invalid username or password" 401 or a "Too many login attempts..."
-      // 429 look the same here, deliberately (§9.2, §14.1).
+      // 429 look the same here, deliberately.
       setError((err as Error).message);
     } finally {
       setSubmitting(false);

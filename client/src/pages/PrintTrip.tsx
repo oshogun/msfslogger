@@ -47,7 +47,7 @@ export function PrintTrip() {
   // hasPlannedWaypoints check, so this count never disagrees with whether the
   // map (and its MapReadySignal) actually mounts. A trip with only planned
   // legs and no flights would otherwise be counted as one map short, and the
-  // export would hang waiting for a signal that never fires (design.md §19).
+  // export would hang waiting for a signal that never fires.
   const showOverviewMap = legsWithPoints.length > 0 || hasPlannedWaypoints;
   const expectedMaps = (showOverviewMap ? 1 : 0) + legsWithPoints.length;
   const signalMapReady = useExportReady(trip !== null, expectedMaps);
@@ -142,10 +142,10 @@ export function PrintTrip() {
                 }
 
                 // An imported, unflown planned leg — a different thing from a
-                // PDF flight plan attached to a flight (design.md §1). Plain
-                // text rather than the dashboard's dark badge chips, which
-                // are illegible on this page's white background; no move/link/
-                // skip/delete controls, since the export is read-only.
+                // PDF flight plan attached to a flight. Plain text rather
+                // than the dashboard's dark badge chips, which are illegible
+                // on this page's white background; no move/link/skip/delete
+                // controls, since the export is read-only.
                 const leg = row.leg;
                 const badge = plannedLegBadge(leg.status);
                 return (

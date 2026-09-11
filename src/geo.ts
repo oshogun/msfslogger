@@ -8,8 +8,8 @@
 //
 // They are NOT migrated as part of the planned-leg feature: doing so would put an
 // unrelated edit into the flight state machine and the distance accumulator, the
-// two places where a regression is most expensive. See design.md §4.1 and §20
-// item 21. What this module guarantees is that no *new* copy gets written:
+// two places where a regression is most expensive. What this module guarantees
+// is that no *new* copy gets written:
 // src/lnmpln.ts and src/legMatcher.ts must both stay free of ./db and ./airports
 // imports, so neither could have borrowed one of the existing copies anyway.
 

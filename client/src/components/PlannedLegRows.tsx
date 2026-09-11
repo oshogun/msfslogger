@@ -2,12 +2,13 @@ import type { Flight, PlannedLeg, PlannedLegWithChildren, PlannedLegStatus } fro
 import { coordStr, formatAlt, formatDate, formatDistance } from '../utils/format';
 
 /**
- * The four-label badge vocabulary is design.md §15's table, verbatim.
- * 'linked' has deliberately no badge of its own (§15): a leg that is linked
- * but not yet landed still has status 'planned', so it reads as 'Planned'
- * until FlightManager sets 'flown'/'diverted' at touchdown. Exported: T-017
- * (the flight detail page) needs the identical vocabulary on a linked
- * flight's own page, so this is the shared home for it, not TripDetail.tsx.
+ * The four-label badge vocabulary below is used verbatim wherever a planned
+ * leg's status is shown. 'linked' has deliberately no badge of its own: a
+ * leg that is linked but not yet landed still has status 'planned', so it
+ * reads as 'Planned' until FlightManager sets 'flown'/'diverted' at
+ * touchdown. Exported: the flight detail page needs the identical
+ * vocabulary on a linked flight's own page, so this is the shared home for
+ * it, not TripDetail.tsx.
  */
 export function plannedLegBadge(status: PlannedLegStatus): { label: string; className: string } {
   switch (status) {
@@ -19,23 +20,23 @@ export function plannedLegBadge(status: PlannedLegStatus): { label: string; clas
 }
 
 /**
- * The landing outcome design.md §14 specifies and T-018's review (F-3) found
- * rendered nowhere: `arrival_deviation_nm` is written on both the 'flown' and
- * the 'diverted' path, so this is the one place that turns the number into
- * words for every consumer (the trip page's leg row, the ghost row, and
- * FlightDetail's Planned Leg section) rather than each inventing its own.
+ * The landing outcome implied by `arrival_deviation_nm` was rendered
+ * nowhere: it's written on both the 'flown' and the 'diverted' path, so
+ * this is the one place that turns the number into words for every
+ * consumer (the trip page's leg row, the ghost row, and FlightDetail's
+ * Planned Leg section) rather than each inventing its own.
  *
  * Returns null whenever there is nothing to show: every leg not yet flown and
  * every leg imported before this phase has `arrival_deviation_nm === null`,
- * and that must render exactly as it did before (§18's last bullet).
+ * and that must render exactly as it did before.
  *
  * `flight` is the linked flight if the caller already has it in hand (it
  * always does — TripDetail.tsx's merged row already holds `f`, FlightDetail's
  * page already holds `flight` — this never triggers a new request). Only the
- * arrival fields §14 asks for are read, so a Pick is enough. When `flight` is
+ * arrival fields this needs are read, so a Pick is enough. When `flight` is
  * omitted (the ghost row never carries a linked flight, since a leg with a
- * link is never an "unflown" row — design.md §9.3), the coordinate fallback
- * degrades to '—' rather than inventing an ICAO.
+ * link is never an "unflown" row), the coordinate fallback degrades to '—'
+ * rather than inventing an ICAO.
  */
 export function plannedLegLandingNote(
   leg: Pick<PlannedLeg, 'status' | 'arrival_deviation_nm' | 'destination_ident'>,
@@ -57,8 +58,8 @@ export function plannedLegLandingNote(
 
 /**
  * How a planned leg interleaves with flown flights in the trip's legs table.
- * Pure, client-side. design.md §9.3 — this is the frozen rule, not a fresh
- * design: reproduced here rather than reinvented.
+ * Pure, client-side. This is the frozen rule, not a fresh design: reproduced
+ * here rather than reinvented.
  *
  *   1. The flown spine is `flights`, in the order the caller supplies it.
  *      `trip.flights` already arrives ordered by start_time ASC — exactly the
@@ -72,7 +73,7 @@ export function plannedLegLandingNote(
  *   3. Unflown legs that land in the same slot are ordered by seq ASC, id ASC.
  *
  * A trip with zero planned legs must produce byte-identical output to the
- * flights-only mapping that existed before this feature (§9.3, §18).
+ * flights-only mapping that existed before this feature.
  */
 export type MergedTripRow =
   | { kind: 'flight'; flight: Flight; flightIndex: number }
@@ -129,9 +130,9 @@ interface GhostLegRowProps {
   canMoveDown: boolean;
   busy: boolean;
 
-  // Link-a-flight (design.md §12.3): TripDetail.tsx owns the open/closed
-  // flag, the fetched candidate list and every busy/error flag — this stays
-  // presentational and only renders what it's handed.
+  // Link-a-flight: TripDetail.tsx owns the open/closed flag, the fetched
+  // candidate list and every busy/error flag — this stays presentational
+  // and only renders what it's handed.
   linkPickerOpen: boolean;
   onToggleLinkPicker: () => void;
   linkBusy: boolean;
@@ -142,7 +143,7 @@ interface GhostLegRowProps {
   onLinkFlightChoiceChange: (flightId: number) => void;
   onConfirmLink: () => void;
 
-  // Skip / unskip (design.md §15).
+  // Skip / unskip.
   skipBusy: boolean;
   skipError?: string;
   onToggleSkip: () => void;
@@ -150,7 +151,7 @@ interface GhostLegRowProps {
 
 /**
  * One planned leg rendered as a dimmed, dashed "ghost row" in the existing
- * legs table (design.md §18). Never claims an invented ICAO: a snippet's
+ * legs table. Never claims an invented ICAO: a snippet's
  * departure/destination idents are shown exactly as parsed (they are real
  * values from the file, e.g. a USER waypoint like "WP1"), with a Snippet
  * badge so the reader never mistakes them for airport codes.
@@ -191,8 +192,8 @@ export function GhostLegRow({
           <div className="td-planned-meta">
             {formatAlt(leg.cruise_alt_ft)} ft cruise · {leg.waypoint_count} wpt{leg.waypoint_count !== 1 ? 's' : ''}
           </div>
-          {/* A ghost row never carries a linked flight (design.md §9.3: a
-              linked leg is never "unflown"), so arrival_deviation_nm is null
+          {/* A ghost row never carries a linked flight (a linked leg is
+              never "unflown"), so arrival_deviation_nm is null
               here in every reachable case today. Rendered anyway so this row
               degrades the same way as the other two consumers if that ever
               changes, rather than silently dropping the fact. */}

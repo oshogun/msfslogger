@@ -7,14 +7,14 @@
 //
 // This module is deliberately free of ./db, ./types and fs. It takes a string or
 // a Buffer and returns a value, so the CLI inspector and the import route can
-// both drive it and neither needs a database. design.md §4, §5.
+// both drive it and neither needs a database.
 //
 // The single most important rule in here is that the official XSD is a guide and
 // not an authority on completeness: Little Navmap demonstrably writes elements
 // its own published schema never declares (<CustomOffsetAngle> is in a real file
 // and in no version of the schema). So everything is read by tag name, nothing
 // is validated against the schema, and an element we do not recognise produces an
-// UNKNOWN_ELEMENT *warning* — never a rejection. design.md §5.4e, §20 item 27.
+// UNKNOWN_ELEMENT *warning* — never a rejection.
 
 import { XMLParser } from 'fast-xml-parser';
 import { haversineNm } from './geo';
@@ -55,7 +55,7 @@ export type LnmplnWarningCode =
    * An element the parser did not recognise. NOT an error — see the header
    * comment. The message names up to ten unconsumed paths, which is how a field
    * that turns out to matter becomes visible on the first import of a file that
-   * carries it, rather than years later. design.md §5.4e.
+   * carries it, rather than years later.
    */
   | 'UNKNOWN_ELEMENT';
 
@@ -87,7 +87,7 @@ export interface ParsedWaypoint {
   /**
    * 1-based document order across every <Waypoints> block. A waypoint is
    * identified by (leg, seq) and NEVER by ident: real files number their user
-   * waypoints WP1/WP2/WP3 in every leg. design.md §5.4c.
+   * waypoints WP1/WP2/WP3 in every leg.
    */
   seq: number;
   ident: string;
@@ -104,7 +104,7 @@ export interface ParsedWaypoint {
   /**
    * Little Navmap's COMPUTED profile altitude, not a planned constraint. Never
    * render it as a crossing restriction; cruiseAltFt is the leg's planned
-   * altitude. design.md §6.1.
+   * altitude.
    */
   altFt: number | null;
 }
@@ -135,7 +135,7 @@ export interface ParsedEndpoint {
 /**
  * The <Departure> element: where the plan starts on the field. Absent from four
  * of four real files, so nothing may depend on it — not the matcher, not the
- * map, not the leg row. design.md §5.4b.
+ * map, not the leg row.
  */
 export interface ParsedDeparture {
   pos: ParsedPos | null;
@@ -151,7 +151,7 @@ export interface ParsedDeparture {
  * A flat projection of <Procedures>. Eighteen fields: a real custom approach is
  * characterised entirely by Type plus the Custom* values, and dropping any of
  * them loses the approach. Procedure LEGS are never modelled — the file never
- * contains them. design.md §2.2.1, §20 item 28.
+ * contains them.
  */
 export interface ParsedProcedures {
   sidName: string | null;
@@ -169,7 +169,6 @@ export interface ParsedProcedures {
   /**
    * Opaque label. With approachType 'CUSTOM' it is a synthesized ICAO+runway
    * ("KLAX24R") and is NOT a fix reference — never resolve or join on it.
-   * design.md §5.4g.
    */
   approachName: string | null;
   approachRunway: string | null;
@@ -211,11 +210,11 @@ export interface ParsedFlightPlan {
    * <SimData> and <NavData Cycle="…">, verbatim. Provenance only, and read per
    * file precisely so that nothing caches or assumes them: cycles genuinely
    * differ between legs of one logbook (2609 in the real IFR plan, 1801 in the
-   * VFR trio). Nothing may compare them across legs. design.md §5.4h.
+   * VFR trio). Nothing may compare them across legs.
    *
    * Beyond the fields frozen in contracts/planned-legs.d.ts, and additive: they
-   * are not persisted by any column in §2.2. They exist because T-002's
-   * definition of done requires the cycle to be read per file, and because
+   * are not persisted by any database column. They exist because the cycle
+   * must be read per file, and because
    * silently not reading <SimData>/<NavData> would make every real file emit a
    * spurious UNKNOWN_ELEMENT warning.
    */
@@ -238,7 +237,6 @@ export interface ParsedFlightPlan {
    * KSFO→KLAX plan stores 293.5 nm against a 293.2 nm direct great circle: the
    * stored "route" is the straight line, because all of its shape lives in
    * WESLA5.SUSEY and IRNMN2.BURGL. No correction factor may be applied.
-   * design.md §6.
    */
   approxDistanceNm: number;
   /**
@@ -251,7 +249,7 @@ export interface ParsedFlightPlan {
   warnings: LnmplnWarning[];
 }
 
-// ── Parser configuration (frozen — design.md §5.1) ────────────────────────────
+// ── Parser configuration (frozen) ─────────────────────────────────────────────
 //
 // Do not set preserveOrder: it returns a positional shape, which is the very
 // thing "parse by tag name, never by position" exists to avoid.
@@ -288,8 +286,8 @@ const parser = new XMLParser({
 // ── Known element names ───────────────────────────────────────────────────────
 //
 // "Known" means recognised, not necessarily stored: FileVersion and Documentation
-// are listed and deliberately unread, because §5.4a forbids branching on, warning
-// about or rejecting a file for its FileVersion. Anything NOT on these lists
+// are listed and deliberately unread, because this parser must never branch on,
+// warn about or reject a file for its FileVersion. Anything NOT on these lists
 // produces an UNKNOWN_ELEMENT warning — the mechanism that would have caught
 // <CustomOffsetAngle> the day the first IFR plan arrived. Adding a name here is
 // how a newly-understood element stops being reported.
@@ -436,7 +434,7 @@ function readRemark(node: XmlNode | undefined, where: string, warn: Warnings): s
  * Collects child element names this parser does not recognise. Attributes (@_),
  * the #text pseudo-key and the root's xsi attributes are excluded; the caller
  * caps the collection at ten paths so a wildly unexpected file cannot produce an
- * unbounded message. design.md §5.4e.
+ * unbounded message.
  */
 function scanUnknown(node: XmlNode | undefined, known: Set<string>, path: string, out: string[]): void {
   if (node === undefined) return;
@@ -761,7 +759,7 @@ export function parseLnmpln(input: string | Buffer, sourceFilename?: string): Pa
 
   // Provenance only. FileVersion is deliberately not read and never branched on:
   // the real files say 1.2, the manual says 1.0, and a version check would have
-  // rejected every genuine file this project has seen. design.md §5.4a.
+  // rejected every genuine file this project has seen.
   const programName = toText(header?.['ProgramName']);
   const programVersion = toText(header?.['ProgramVersion']);
   const sourceProgram = [programName, programVersion].filter((s) => s !== null).join(' ') || null;
@@ -823,7 +821,7 @@ export function parseLnmpln(input: string | Buffer, sourceFilename?: string): Pa
       procedures.starName ? `the ${procedures.starName} arrival` : null,
       // The type is worth naming when it is a real one (ILS, RNAV, VOR). CUSTOM
       // is Little Navmap's own marker for a synthesized runway extension, and
-      // the name is then just ICAO+runway (§5.4g) — printing "the CUSTOM
+      // the name is then just ICAO+runway — printing "the CUSTOM
       // KLAX24R approach" would show the reader an implementation detail.
       procedures.approachName
         ? `the ${[procedures.approachType === 'CUSTOM' ? null : procedures.approachType, procedures.approachName]
@@ -895,7 +893,7 @@ export function parseLnmpln(input: string | Buffer, sourceFilename?: string): Pa
 /**
  * Why a batch was or was not chain-sorted. Batch-level, and deliberately a
  * SEPARATE enum from LnmplnWarningCode: those are per-file parser warnings, this
- * is one verdict about the whole import. design.md §9.2.1.
+ * is one verdict about the whole import.
  */
 export type BatchChainReason =
   | 'CHAINED'
@@ -931,11 +929,11 @@ export interface BatchChainOrder {
  * airport-to-airport, exactly one head, exactly one successor at each step, all
  * legs consumed. A round trip (A→B, B→A) has zero heads and falls back — that
  * case is the reason the rule is written this way, not an oversight, and no
- * tie-break may be added to rescue it (§20 item 26). On any refusal the order is
- * the identity and the caller keeps upload order.
+ * tie-break may be added to rescue it. On any refusal the order is the identity
+ * and the caller keeps upload order.
  *
  * Pure, and batch-local: it never sees, reorders or renumbers legs already in the
- * trip. design.md §9.2.1, §9.2.3.
+ * trip.
  */
 export function chainOrderForBatch(plans: ParsedFlightPlan[]): BatchChainOrder {
   const identity = plans.map((_, i) => i);
@@ -943,14 +941,14 @@ export function chainOrderForBatch(plans: ParsedFlightPlan[]): BatchChainOrder {
   // Fewer than two legs IS resolved — trivially, but genuinely: the one order
   // that exists is the route order. Reporting it as unresolved would set a trap
   // for the caller, whose obvious implementation warns whenever `resolved` is
-  // false, and importing a single plan is the commonest import there is. §9.2.1
-  // item 5 says SINGLE_LEG carries no warning; returning true is what makes the
-  // data structure enforce that rather than the caller remembering to.
+  // false, and importing a single plan is the commonest import there is.
+  // SINGLE_LEG carries no warning; returning true is what makes the data
+  // structure enforce that rather than the caller remembering to.
   if (plans.length < 2) return { order: identity, resolved: true, reason: 'SINGLE_LEG' };
 
   // Eligibility. Chaining on non-airport idents would match unrelated legs
   // together: the real files number their USER waypoints WP1/WP2/WP3 in every
-  // single leg, so a snippet endpoint is not a usable join key. §5.4c.
+  // single leg, so a snippet endpoint is not a usable join key.
   for (const p of plans) {
     if (!p.departure.isAirport || !p.destination.isAirport) {
       return { order: identity, resolved: false, reason: 'SNIPPET_IN_BATCH' };

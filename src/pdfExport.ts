@@ -14,7 +14,7 @@ let idleTimer: NodeJS.Timeout | null = null;
 // several at once is a real memory spike on a small box.
 let queue: Promise<unknown> = Promise.resolve();
 
-/** The session cookie forwarded into the headless render (design.md §13.2). */
+/** The session cookie forwarded into the headless render. */
 export interface RenderOptions {
   sessionCookie?: { name: string; value: string };
 }
@@ -23,8 +23,7 @@ function baseUrl(): string {
   // Overridable so dev can point at the Vite server (:5173) instead of the
   // Express server, which only ever serves the last built client/dist. The
   // override keeps its precedence; only the derived default changed, and only
-  // to follow the scheme the server is actually listening on (design.md §13.2,
-  // §19 item 9).
+  // to follow the scheme the server is actually listening on.
   const scheme = () => (getConfig().tls.enabled ? 'https' : 'http');
   return process.env.EXPORT_BASE_URL ?? `${scheme()}://127.0.0.1:${process.env.PORT ?? '3000'}`;
 }
@@ -37,7 +36,7 @@ async function getBrowser(): Promise<Browser> {
       // certificate is typically self-signed and issued for the LAN name
       // rather than 127.0.0.1. Both would abort the navigation otherwise, and
       // the browser only ever loads our own pages — the same rationale as
-      // --no-sandbox below. design.md §13.3.
+      // --no-sandbox below.
       acceptInsecureCerts: true,
       // Ubuntu 24.04's AppArmor policy blocks unprivileged user namespaces,
       // which breaks Chromium's sandbox. We only ever load our own localhost
@@ -109,7 +108,6 @@ async function renderOnce(path: string, opts: RenderOptions = {}): Promise<Buffe
     // "Authentication required". It goes in through the cookie jar and never
     // as a blanket extra request header: this scopes it to our own host, so it
     // is not attached to the OSM tile requests the print maps make.
-    // design.md §13.2.
     if (opts.sessionCookie) {
       const u = new URL(base);
       await page.setCookie({

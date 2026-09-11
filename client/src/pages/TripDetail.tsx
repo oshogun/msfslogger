@@ -9,7 +9,7 @@ import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/
 import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
-// Client-side windowing of the legs table (plan.json T-001): 20 rows per
+// Client-side windowing of the legs table: 20 rows per
 // page over the array interleaveTripRows already produces, no backend change.
 const LEGS_PER_PAGE = 20;
 
@@ -45,7 +45,7 @@ export function TripDetail() {
   const [reorderError, setReorderError] = useState('');
   const [reorderingLegId, setReorderingLegId] = useState<number | null>(null);
 
-  // Active-trip toggle (design.md §11).
+  // Active-trip toggle.
   const [activeBusy, setActiveBusy] = useState(false);
   const [activeError, setActiveError] = useState('');
 
@@ -57,9 +57,9 @@ export function TripDetail() {
   const [linkBusyLegId, setLinkBusyLegId] = useState<number | null>(null);
   const [linkErrorByLeg, setLinkErrorByLeg] = useState<Record<number, string>>({});
 
-  // Link a flight, initiated from a flight row: pick a leg (any trip, per
-  // T-012's deliberate non-restriction — this is also how a mislinked flight
-  // is re-targeted to a different leg, design.md §12.2).
+  // Link a flight, initiated from a flight row: pick a leg (any trip,
+  // deliberately not restricted to the flight's current trip — this is also
+  // how a mislinked flight is re-targeted to a different leg).
   const [linkingFlightId, setLinkingFlightId] = useState<number | null>(null);
   const [linkLegChoice, setLinkLegChoice] = useState<number | ''>('');
   const [linkableLegs, setLinkableLegs] = useState<{ tripName: string; leg: PlannedLegWithChildren }[] | null>(null);
@@ -100,10 +100,10 @@ export function TripDetail() {
     setSearchParams(params, { replace: true });
   }
 
-  // Mirrors setView exactly (plan.json T-001 §4): replace: true both matches
-  // the ?view= precedent and gives the required Back behaviour, since leaving
-  // the page for /flight/:id and pressing Back returns to the URL that still
-  // carries ?page=N.
+  // Mirrors setView exactly: replace: true both matches the ?view= precedent
+  // and gives the required Back behaviour, since leaving the page for
+  // /flight/:id and pressing Back returns to the URL that still carries
+  // ?page=N.
   function setPage(n: number) {
     const params = new URLSearchParams(searchParams);
     if (n === 1) params.delete('page');
@@ -178,7 +178,7 @@ export function TripDetail() {
   }
 
   /**
-   * Imports one or more .lnmpln files as planned legs (design.md §7.1). Uses a
+   * Imports one or more .lnmpln files as planned legs. Uses a
    * raw fetch rather than apiFetch: on both success (201) and a "some/all files
    * rejected" failure (400) the body is the same rich shape — { imported,
    * batch, results } — and results[] must be rendered either way so a rejected
@@ -213,8 +213,8 @@ export function TripDetail() {
       }
 
       setImportResults(body.results);
-      // The chain-resolution warning (design.md §9.2): non-blocking, the import
-      // already succeeded and the legs exist — this only explains the order.
+      // The chain-resolution warning is non-blocking: the import already
+      // succeeded and the legs exist — this only explains the order.
       if (body.batch && body.batch.ordering === 'upload') {
         setImportNotice(
           `Import order was taken from upload order (${body.batch.reason}), not the route — ` +
@@ -244,7 +244,7 @@ export function TripDetail() {
   }
 
   /**
-   * Reorders planned legs via the full-permutation PATCH (design.md §7.2): the
+   * Reorders planned legs via the full-permutation PATCH: the
    * ↑/↓ control swaps this leg with its immediate neighbour in the trip's
    * complete `seq ASC, id ASC` ordering (flown-linked legs included, even
    * though only unflown ones render as ghost rows) and sends the whole
@@ -312,8 +312,8 @@ export function TripDetail() {
   }
 
   /**
-   * The leg picker is deliberately not scoped to this trip (design.md §12.3):
-   * manual linking is the escape hatch and must reach any unflown leg of any
+   * The leg picker is deliberately not scoped to this trip: manual linking
+   * is the escape hatch and must reach any unflown leg of any
    * trip, so this fans out to every trip's own planned-legs endpoint rather
    * than reading trip.planned_legs, which only ever holds this page's trip.
    */
@@ -331,7 +331,7 @@ export function TripDetail() {
     }
   }
 
-  /** Shared by both link directions: same PUT either way (design.md §12.3). */
+  /** Shared by both link directions: same PUT either way. */
   async function linkFlightToLeg(flightId: number, legId: number) {
     await apiFetch<Flight>(`/api/flights/${flightId}/planned-leg`, {
       method: 'PUT',
@@ -355,8 +355,8 @@ export function TripDetail() {
       setLinkingLegId(null);
       setLinkFlightChoice('');
     } catch (err) {
-      // A 409 double-link names the offending flight (design.md §12.3) —
-      // surfaced verbatim, inline, rather than a generic failure toast.
+      // A 409 double-link names the offending flight — surfaced verbatim,
+      // inline, rather than a generic failure toast.
       setLinkErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
     } finally {
       setLinkBusyLegId(null);
@@ -429,11 +429,11 @@ export function TripDetail() {
 
   const planCount = trip.flights.filter(f => f.flight_plan_name).length;
   // trip.planned_legs is always [] for a trip with no imported plans, so this
-  // is a no-op for every trip that predates this feature (design.md §9.3, §18).
+  // is a no-op for every trip that predates this feature.
   const mergedRows = interleaveTripRows(trip.flights, trip.planned_legs);
-  // Windowing (plan.json T-001 §2-3): a missing, non-numeric, zero, negative
-  // or too-large ?page= clamps silently rather than throwing or rendering an
-  // empty table, and never rewrites the URL on its own.
+  // Windowing: a missing, non-numeric, zero, negative or too-large ?page=
+  // clamps silently rather than throwing or rendering an empty table, and
+  // never rewrites the URL on its own.
   const pageCount = Math.max(1, Math.ceil(mergedRows.length / LEGS_PER_PAGE));
   const page = clamp(parseInt(searchParams.get('page') ?? '1', 10) || 1, 1, pageCount);
   const pageRows = mergedRows.slice((page - 1) * LEGS_PER_PAGE, page * LEGS_PER_PAGE);
@@ -441,7 +441,7 @@ export function TripDetail() {
   const legByIdForFlights = new Map(trip.planned_legs.map(l => [l.id, l] as const));
   // The "Link to leg" escape hatch only appears once this trip actually uses
   // the planned-leg feature — otherwise a trip untouched by this feature must
-  // render exactly as it did before (design.md §18, plan.json T-013 DoD).
+  // render exactly as it did before.
   const showLinkToLeg = trip.planned_legs.length > 0;
   // The active-trip control shares that same gate, widened by one clause: an
   // active trip that has since lost every planned leg (all deleted) must
@@ -450,10 +450,9 @@ export function TripDetail() {
   //
   // Gating (rather than always showing) is deliberate, not just cosmetic: an
   // active trip with no planned legs is not merely unused, it is INERT — the
-  // matcher refuses with NO_PLANNED_LEGS before distance is even computed
-  // (design.md §13.2 step 2) — so offering the control on a trip that has
-  // never seen a .lnmpln import would invite setting state with no effect.
-  // T-014 F-4.
+  // matcher refuses with NO_PLANNED_LEGS before distance is even computed —
+  // so offering the control on a trip that has never seen a .lnmpln import
+  // would invite setting state with no effect.
   const showActiveTripControl = showLinkToLeg || trip.is_active === 1;
 
   const stats = [
@@ -476,8 +475,8 @@ export function TripDetail() {
       {/*
         Gated on showActiveTripControl (see its definition above): a trip with
         no planned legs and not active renders exactly as it did before this
-        feature (design.md §18's last bullet, T-013 DoD 8) — the control
-        appears exactly when it starts to be able to mean something. T-014 F-4.
+        feature — the control appears exactly when it starts to be able to
+        mean something.
       */}
       {showActiveTripControl && (
         <div className="active-trip-row">
@@ -586,8 +585,8 @@ export function TripDetail() {
               <li key={`${r.filename}-error`} className="import-result-error">{r.filename}: {r.error}</li>
             ))}
             {/* F-2: a successful import can still carry parser warnings (e.g.
-                UNKNOWN_ELEMENT) — design.md §5.4e only works as a safety net if
-                a human actually sees them, so show them without implying the
+                UNKNOWN_ELEMENT) — this only works as a safety net if a human
+                actually sees them, so show them without implying the
                 import failed. */}
             {importResults.filter((r): r is typeof r & { warnings: NonNullable<typeof r.warnings> } =>
               r.status === 'imported' && !!r.warnings && r.warnings.length > 0
@@ -604,8 +603,7 @@ export function TripDetail() {
       <div className="legs-section">
         <div className="section-title">Legs</div>
         {/*
-          Round-1 fix (reviews/phase-2.md Finding 1): the legs table has an
-          intrinsic min-width wider than narrow viewports can give it inside
+          The legs table has an intrinsic min-width wider than narrow viewports can give it inside
           .app-main's flex layout. Wrapping it in its own overflow-x:auto
           container lets the TABLE scroll internally instead of the whole
           document blowing out sideways — the standard fix for a wide table
@@ -669,9 +667,9 @@ export function TripDetail() {
                 const i = row.flightIndex;
                 const linkedLeg = f.planned_leg_id != null ? legByIdForFlights.get(f.planned_leg_id) : undefined;
                 const linkedBadge = linkedLeg ? plannedLegBadge(linkedLeg.status) : null;
-                // design.md §14 (T-018 F-3): the flight itself IS the linked
-                // flight, already in hand as `f` — no second fetch, exactly
-                // the mapping this row already uses for the badge above.
+                // The flight itself IS the linked flight, already in hand as
+                // `f` — no second fetch, exactly the mapping this row
+                // already uses for the badge above.
                 const landingNote = linkedLeg ? plannedLegLandingNote(linkedLeg, f) : null;
                 const unlinkBusy = unlinkBusyFlightId === f.id;
                 const unlinkErr = unlinkErrorByFlight[f.id];

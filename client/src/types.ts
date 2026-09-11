@@ -1,24 +1,24 @@
 // ── Auth ──────────────────────────────────────────────────────────────────
 //
-// Mirrors src/types.ts byte-identically (design.md §4.4). Hand-maintained;
-// there is no shared package and this run does not introduce one.
+// Mirrors src/types.ts byte-identically. Hand-maintained; there is no
+// shared package and this run does not introduce one.
 
 export interface SessionUser {
   username: string;
 }
 
-/** POST /api/auth/login request body (§9.1). */
+/** POST /api/auth/login request body. */
 export interface LoginRequest {
   username: string;
   password: string;
 }
 
-/** POST /api/auth/login 200 body (§9.1). */
+/** POST /api/auth/login 200 body. */
 export interface LoginResponse {
   user: SessionUser;
 }
 
-/** GET /api/auth/session 200 body (§9.3). Always 200, never 401. */
+/** GET /api/auth/session 200 body. Always 200, never 401. */
 export type SessionResponse =
   | { authenticated: true; user: SessionUser }
   | { authenticated: false; user: null };
@@ -52,7 +52,7 @@ export interface Flight {
   notes: string | null;
   trip_id: number | null;
   flight_plan_name: string | null;
-  /** The planned leg this flight is attached to, or null. design.md §12. */
+  /** The planned leg this flight is attached to, or null. */
   planned_leg_id: number | null;
   planned_leg_link_source: 'auto' | 'manual' | null;
   /** The trip_id held immediately before an auto/manual link; restored on unlink. */
@@ -80,14 +80,13 @@ export interface Trip {
 // Mirrors src/types.ts and src/lnmpln.ts field-for-field, including
 // nullability. This file is hand-maintained and nothing checks it against the
 // server automatically beyond tools/check-type-mirror.js — keep it in sync by
-// hand. design.md §17.
+// hand.
 
 /**
  * 'linked' is deliberately absent: a leg is linked when a flight row points at
  * it, so the two facts cannot drift apart. 'diverted' is set by the system
  * only; 'flown' is set at touchdown, or — reversibly — by hand on a still
- * 'planned' leg whose flight was linked manually and has already ended
- * (2026-09-07 design.md §1).
+ * 'planned' leg whose flight was linked manually and has already ended.
  */
 export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
 
@@ -105,7 +104,7 @@ export interface PlannedLeg {
   departure_lon: number;
   /** 0 | 1. When 0, departure_ident is not an airport code. */
   departure_is_airport: number;
-  /** <Departure> in the file: commonly absent (NULL) — see design.md §5.4b. */
+  /** <Departure> in the file: commonly absent (NULL). */
   departure_start: string | null;
   departure_start_type: string | null;
   departure_pos_lat: number | null;
@@ -125,7 +124,7 @@ export interface PlannedLeg {
   aircraft_type: string | null;
 
   sid_name: string | null;
-  /** The only source of a departure runway; see design.md §5.4f. */
+  /** The only source of a departure runway. */
   sid_runway: string | null;
   sid_transition: string | null;
   /** 'CUSTOMDEPART' for the manual's custom-departure form; NULL otherwise. */
@@ -151,7 +150,7 @@ export interface PlannedLeg {
   waypoint_count: number;
   alternate_count: number;
   /** Great-circle sum over the en-route waypoint chain. Always render with an
-   *  "approx." qualifier — procedure legs are never in the file. design.md §6. */
+   *  "approx." qualifier — procedure legs are never in the file. */
   approx_distance_nm: number;
   /** Written at landing on both the 'flown' and the 'diverted' path. */
   arrival_deviation_nm: number | null;
@@ -182,7 +181,7 @@ export interface PlannedWaypoint {
   /**
    * Little Navmap's COMPUTED profile altitude, not a planned constraint. Never
    * render it as a planned or crossing altitude — cruise_alt_ft is the leg's
-   * planned altitude. See design.md §6.1.
+   * planned altitude.
    */
   alt_ft: number | null;
 }
@@ -219,7 +218,7 @@ export interface LnmplnWarning {
 
 /**
  * Why a batch was or was not chain-sorted. src/lnmpln.ts BatchChainReason,
- * mirrored. design.md §9.2.1.
+ * mirrored.
  */
 export type BatchChainReason =
   | 'CHAINED'
@@ -248,7 +247,7 @@ export interface PlannedLegImportResponse {
   /** One entry per uploaded file, in UPLOAD order, so an error maps to the file picked. */
   results: PlannedLegImportResult[];
   /**
-   * Which ordering was used for `imported`, and why. design.md §9.2.
+   * Which ordering was used for `imported`, and why.
    *
    * Absent when nothing was imported: a chain verdict over zero legs says
    * nothing, so the server omits it rather than reporting a spurious one
@@ -257,7 +256,7 @@ export interface PlannedLegImportResponse {
   batch?: { ordering: 'chain' | 'upload'; reason: BatchChainReason };
 }
 
-/** GET and PUT /api/active-trip (future phase; declared here per design.md §17). */
+/** GET and PUT /api/active-trip (future phase; declared here ahead of the endpoint). */
 export interface ActiveTrip {
   tripId: number | null;
   name: string | null;
@@ -265,9 +264,9 @@ export interface ActiveTrip {
 
 /**
  * Mirrors src/types.ts TrafficObject byte-identically (neither file imports
- * from the other, same as StatusFrame / SimFrame). design.md (run
- * 2026-09-08-ai-traffic-map) §2.1. All six fields are always present on this
- * wire — onGround is only optional on the agent's ingest wire, never here.
+ * from the other, same as StatusFrame / SimFrame). All six fields are always
+ * present on this wire — onGround is only optional on the agent's ingest
+ * wire, never here.
  */
 export interface TrafficObject {
   id: number;
@@ -292,7 +291,7 @@ export interface StatusFrame {
 /**
  * Mirrors src/types.ts PlannedLegLiveStatus. Present on Status only while
  * flightState === 'FLYING' and the flight is linked to a planned leg — absent,
- * never null, the rest of the time (design.md §19).
+ * never null, the rest of the time.
  */
 export interface PlannedLegLiveStatus {
   plannedLegId: number;
@@ -315,7 +314,7 @@ export interface Status {
   /** Raw MSFS Pause_EX1 bitmask: 1 full, 2 with-sound, 4 active, 8 sim. */
   pauseFlags: number;
   plannedLeg?: PlannedLegLiveStatus;
-  /** Present iff non-empty, mirroring plannedLeg. design.md §6.2, §6.4. */
+  /** Present iff non-empty, mirroring plannedLeg. */
   traffic?: TrafficObject[];
 }
 
@@ -343,7 +342,7 @@ export interface Journey {
   legCount: number;
   totalDistanceNm: number;
   totalDurationSec: number;
-  /** Absent, not zero, when the trip has no planned legs. design.md §19, §20. */
+  /** Absent, not zero, when the trip has no planned legs. */
   plannedRouteProgressPct?: number;
   aircraftCount: number;
   aircraft: { name: string; legs: number; distanceNm: number }[];

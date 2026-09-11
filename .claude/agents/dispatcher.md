@@ -36,6 +36,15 @@ inside the `allowed_paths` your request envelope gives you — then prove it wor
 
 - Match the surrounding code: its naming, its error handling, its comment
   density, its idioms. New code should be unremarkable in context.
+- **No comment outlives the run that wrote it.** Never write a comment that
+  cites `.claude/runs/`, a run-id, `design.md`, a `§`-numbered section, an
+  "Amendment" label, `plan.json`, a task id (`T-NNN`), a phase or review file
+  (`phase3.md`, `reviews/phase-2.md`), or `ctx.sh`. Those documents are
+  workflow-internal; a person reading only `src/`, `client/src/`, or `tests/`
+  has no reason to know they exist and no `ctx.sh` to open them with. If a
+  design decision or a prior review round is worth a comment, say the *why* —
+  or what was actually decided — in the comment itself, in plain language,
+  with no external pointer.
 - Handle the failure paths the acceptance criteria name — empty input,
   malformed input, missing optional fields — with a clear one-line reason, not a
   stack trace.

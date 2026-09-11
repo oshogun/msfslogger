@@ -11,17 +11,17 @@ import {
 } from '../src/auth/password';
 
 // src/auth/password.ts is pure — no DB, no express, no I/O — so nothing is
-// mocked here. scrypt at N=16384 costs ~45 ms per derivation (design §6.2), so
-// each test below deliberately performs only a handful.
+// mocked here. scrypt at N=16384 costs ~45 ms per derivation, so each test
+// below deliberately performs only a handful.
 
 const STORED = /^scrypt\$16384\$8\$1\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/;
 
 describe('SCRYPT_PARAMS', () => {
-  it('is the frozen parameter set of design §6.2', () => {
+  it('is the frozen parameter set', () => {
     expect(SCRYPT_PARAMS).toEqual({ N: 16384, r: 8, p: 1, keylen: 32, saltlen: 16 });
   });
 
-  it('exposes the length limits of design §6.3', () => {
+  it('exposes the length limits', () => {
     expect(PASSWORD_MIN_LENGTH).toBe(12);
     expect(PASSWORD_MAX_LENGTH).toBe(200);
     expect(USERNAME_MAX_LENGTH).toBe(64);
@@ -61,8 +61,7 @@ describe('verifyPassword', () => {
     expect(verifyPassword('padded password', stored)).toBe(false);
   });
 
-  // A corrupt or foreign auth_user row must be a failed login, never a 500
-  // (design §6.2 step 1).
+  // A corrupt or foreign auth_user row must be a failed login, never a 500.
   it.each([
     ['empty string', ''],
     ['one character', 'x'],
@@ -75,8 +74,8 @@ describe('verifyPassword', () => {
   });
 
   it('re-derives with the stored row\'s own parameters, not the current ones', () => {
-    // A hash written under a cheaper N still verifies, which is what lets §6.2
-    // raise the parameters later without a migration.
+    // A hash written under a cheaper N still verifies, which is what lets the
+    // scrypt parameters be raised later without a migration.
     const cheap = 'scrypt$1024$8$1$' +
       Buffer.from('0123456789abcdef').toString('base64') + '$' +
       crypto.scryptSync('legacy password', Buffer.from('0123456789abcdef'), 32, { N: 1024, r: 8, p: 1 }).toString('base64');
@@ -86,7 +85,7 @@ describe('verifyPassword', () => {
 });
 
 describe('DUMMY_PASSWORD_HASH', () => {
-  it('is a well-formed hash so the §16.1 wrong-username path costs a real derivation', () => {
+  it('is a well-formed hash so the wrong-username path costs a real derivation', () => {
     expect(DUMMY_PASSWORD_HASH).toMatch(STORED);
   });
 

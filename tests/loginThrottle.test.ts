@@ -1,4 +1,4 @@
-// tests/loginThrottle.test.ts — design.md §16.2 (run 2026-09-10-security-hardening).
+// tests/loginThrottle.test.ts
 //
 // LoginThrottle is pure in-memory state, no DB and no express, so nothing is
 // mocked here — only the clock is faked (helpers.useFakeClock/useRealClock),
@@ -11,7 +11,7 @@ import { useFakeClock, useRealClock } from './helpers';
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 10;
 
-describe('LoginThrottle (design §16.2)', () => {
+describe('LoginThrottle', () => {
   let throttle: LoginThrottle;
 
   beforeEach(() => {
@@ -82,8 +82,8 @@ describe('LoginThrottle (design §16.2)', () => {
       throttle.recordFailure(`10.0.1.${i}`, now);
     }
     // Reach into the private Map to observe the invariant directly — the
-    // design names the Map's size as the bounding trigger (§16.2), so this is
-    // the thing under test, not an implementation detail.
+    // Map's size is the bounding trigger, so this is the thing under test,
+    // not an implementation detail.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const internals = throttle as unknown as { entries: Map<string, unknown> };
     expect(internals.entries.size).toBe(1001);

@@ -4,9 +4,9 @@ import { sessionGet, sessionSet, sessionDestroy } from '../db';
 
 /**
  * express-session Store backed by the auth_session table via the src/db.ts
- * accessors (design.md §10.2). No MemoryStore (leaks memory, logs the
- * operator out on every restart) and no second native sqlite driver — this is
- * ~40 lines over the accessors this project already has.
+ * accessors. No MemoryStore (leaks memory, logs the operator out on every
+ * restart) and no second native sqlite driver — this is ~40 lines over the
+ * accessors this project already has.
  *
  * `length` and `clear` are intentionally not implemented — express-session
  * never calls them.
@@ -22,8 +22,8 @@ export class SqliteSessionStore extends session.Store {
   /**
    * A missing row, an expired row, and a JSON.parse failure are all reported
    * as "no session" (cb(null, null)), never as an error — one corrupt or
-   * stale row must not wedge every request (§10.2). An expired row is also
-   * deleted here.
+   * stale row must not wedge every request. An expired row is also deleted
+   * here.
    */
   get(sid: string, callback: (err: unknown, session?: SessionData | null) => void): void {
     try {
@@ -70,16 +70,16 @@ export class SqliteSessionStore extends session.Store {
 
   /**
    * Delegates to set() — this is what makes `rolling: true` extend the stored
-   * expiry, not just the cookie (§10.2).
+   * expiry, not just the cookie.
    */
   touch(sid: string, sessionData: SessionData, callback?: () => void): void {
     this.set(sid, sessionData, callback);
   }
 
   /**
-   * §16.5: derived from session.cookie.expires when present; an absent or
-   * Invalid Date (NaN) falls back to now + maxAgeMs, so a malformed cookie
-   * object can never write NaN into the INTEGER NOT NULL expires_at column.
+   * Derived from session.cookie.expires when present; an absent or Invalid
+   * Date (NaN) falls back to now + maxAgeMs, so a malformed cookie object can
+   * never write NaN into the INTEGER NOT NULL expires_at column.
    */
   private expiryFor(sessionData: SessionData): number {
     const expires = sessionData.cookie?.expires;

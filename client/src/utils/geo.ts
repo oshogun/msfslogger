@@ -1,14 +1,14 @@
 // ── Shared client geo helpers ─────────────────────────────────────────────────
 //
 // One home for `unwrapLonChain`, so the next map component that draws a planned
-// route does not start a third copy. TripMap.tsx (T-008) and FlightMap.tsx
-// (T-017) both import this rather than keeping their own — the antimeridian fix
+// route does not start a third copy. TripMap.tsx and FlightMap.tsx both import
+// this rather than keeping their own — the antimeridian fix
 // is the one piece of client geometry where a wrong answer still looks entirely
 // plausible on screen, and it only surfaces on the long-haul trips this feature
 // is aimed at, so it must not be able to drift between two copies.
 
 /**
- * Antimeridian handling for planned routes (design.md DoD 7).
+ * Antimeridian handling for planned routes.
  *
  * A planned leg's waypoint chain is naturally ordered (seq ASC), so instead of
  * accepting Leaflet's default — which draws the straight line between raw

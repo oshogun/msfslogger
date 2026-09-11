@@ -5,8 +5,8 @@ import { LoginThrottle, SESSION_COOKIE_NAME } from './middleware';
 import type { LoginResponse, SessionResponse } from '../types';
 
 /**
- * /api/auth — never behind requireAuth (§8.1, §9). Mounted by src/server.ts
- * (T-007) before `app.use('/api', requireAuth)`.
+ * /api/auth — never behind requireAuth. Mounted by src/server.ts
+ * before `app.use('/api', requireAuth)`.
  */
 export function createAuthRouter(): Router {
   const router = express.Router();
@@ -14,7 +14,7 @@ export function createAuthRouter(): Router {
 
   const ipOf = (req: Request): string => req.socket.remoteAddress ?? 'unknown';
 
-  // §16.1 — login evaluation, step by step.
+  // Login evaluation, step by step.
   router.post('/login', (req: Request, res: Response) => {
     const body = req.body as { username?: unknown; password?: unknown };
 
@@ -89,7 +89,7 @@ export function createAuthRouter(): Router {
     });
   });
 
-  // §9.3 — always 204, idempotent by construction: a logout with an expired
+  // Always 204, idempotent by construction: a logout with an expired
   // cookie is still a 204.
   router.post('/logout', (req: Request, res: Response) => {
     req.session.destroy(() => {
@@ -98,7 +98,7 @@ export function createAuthRouter(): Router {
     });
   });
 
-  // §9.3 — always 200, never 401, so the SPA can ask "am I logged in?"
+  // Always 200, never 401, so the SPA can ask "am I logged in?"
   // without triggering its own 401 handling.
   router.get('/session', (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');

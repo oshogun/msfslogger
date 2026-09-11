@@ -11,8 +11,8 @@
 // The matcher is the highest-consequence module in this feature. A false
 // positive attaches a flight to the wrong leg and quietly corrupts a trip's
 // record; a false negative only means the user links it by hand. So the table
-// leans on the *refusals*, and every reason code in design.md §13.4 has at
-// least one row.
+// leans on the *refusals*, and every reason code the matcher can produce has
+// at least one row.
 //
 // ── Provenance, and why it is printed in its own column ──────────────────────
 //
@@ -173,7 +173,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'radiusNm override widens the same 40 nm case',
     real: true,
-    note: 'the tuning knob plan.json expects to use once after phase 4',
+    note: 'the tuning knob for widening the match radius past its default',
     input: takeoff(northOf(KSBA, 40), vfrTrip(), { radiusNm: 50 }),
     reason: 'MATCHED',
     legId: 11,
@@ -196,7 +196,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'leg 1 already flown, second takeoff from KSBA',
     real: true,
-    note: 'reachable only because the loader returns flown legs too (Amendment C)',
+    note: 'reachable only because the candidate loader returns flown legs too, not just eligible ones',
     input: takeoff(KSBA, vfrTrip({ l11: { status: 'flown', linkedFlightId: null } })),
     reason: 'LEG_ALREADY_FLOWN',
     legId: null,
@@ -215,7 +215,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'flown leg excluded, its successor still matches',
     real: true,
-    note: 'takeoff at KMRY with leg 1 flown+linked: exactly the §13.2 saving grace',
+    note: 'takeoff at KMRY with leg 1 flown+linked: the case where a flown leg is excluded but its successor still matches',
     input: takeoff(KMRY_A, vfrTrip({ l11: { status: 'flown', linkedFlightId: 42 } })),
     reason: 'MATCHED',
     legId: 12,
@@ -243,7 +243,7 @@ const SCENARIOS: Scenario[] = [
   {
     name: 'precedence: flown AND linked reports FLOWN',
     real: true,
-    note: 'the per-leg order in §13.2 step 5, not whichever check runs first',
+    note: 'the fixed per-leg check order, not whichever check runs first',
     input: takeoff(KSBA, vfrTrip({ l11: { status: 'flown', linkedFlightId: 42 } })),
     reason: 'LEG_ALREADY_FLOWN',
     legId: null,
@@ -384,22 +384,22 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-// ── Database-backed section: Amendment C has no other guard ──────────────────
+// ── Database-backed section: the return-all-legs guard has no other cover ────
 //
 // Everything above is pure: matchPlannedLeg() is called directly against
 // hand-built candidates, and no SQL ever runs. That leaves
 // getPlannedLegCandidatesForActiveTrip() (src/db.ts) completely uncovered —
 // it deliberately returns EVERY leg of the active trip, 'flown'/'diverted'/
 // 'skipped'/already-linked included, so that step 5 of the matcher can name
-// the specific obstacle instead of a generic NO_LEG_IN_RADIUS (design.md
-// §13.2, Amendment C). Its old name, getUnflownPlannedLegsForActiveTrip,
-// endorsed the opposite behaviour, which is exactly why a
-// `WHERE l.status NOT IN ('flown','diverted')` filter is the kind of change
-// that looks like a harmless optimisation and would revert the amendment by
-// accident. Nothing above would notice: the three reason codes it protects
-// would silently degrade to NO_LEG_IN_RADIUS. This section runs the real
-// query against a real (scratch, temporary) SQLite database and asserts
-// what Amendment C requires of it.
+// the specific obstacle instead of a generic NO_LEG_IN_RADIUS. Its old name,
+// getUnflownPlannedLegsForActiveTrip, endorsed the opposite behaviour, which
+// is exactly why a `WHERE l.status NOT IN ('flown','diverted')` filter is
+// the kind of change that looks like a harmless optimisation and would
+// silently break this guarantee. Nothing above would notice: the three
+// reason codes it protects would silently degrade to NO_LEG_IN_RADIUS. This
+// section runs the real query against a real (scratch, temporary) SQLite
+// database and asserts that every leg of the active trip — regardless of
+// status or link state — actually comes back.
 //
 // src/db.ts computes its DB_PATH from process.cwd() once, at module load —
 // so the only way to point it at a scratch database is to chdir there
@@ -415,7 +415,7 @@ function runDbBackedSection(): boolean {
   const problems: string[] = [];
   let dbModule: DbModule | null = null;
 
-  console.log('── planned-leg candidates — database-backed section (Amendment C guard)');
+  console.log('── planned-leg candidates — database-backed section (return-all-legs guard)');
 
   try {
     process.chdir(tmpDir);
@@ -436,7 +436,7 @@ function runDbBackedSection(): boolean {
     // seq=2 despite being inserted first (id=1), and leg 'skipped' is
     // seq=3. The one correct order is therefore
     // [flown(id2), diverted(id3), planned(id1), skipped(id4)] — anything
-    // else means the ORDER BY isn't what §13.2 requires.
+    // else means the ORDER BY isn't seq ASC, id ASC as required.
     const rawDb = dbModule.getDb();
     const insertLeg = rawDb.prepare(`
       INSERT INTO planned_legs (
@@ -465,7 +465,7 @@ function runDbBackedSection(): boolean {
     if (gotStatuses.length !== wantStatuses.length) {
       problems.push(
         `expected all four statuses [${wantStatuses.join(', ')}], got [${gotStatuses.join(', ')}] ` +
-        `(${candidates.length} candidate(s) total) — a status filter is dropping rows Amendment C requires`,
+        `(${candidates.length} candidate(s) total) — a status filter is dropping rows the matcher needs`,
       );
     }
 
@@ -572,8 +572,8 @@ function main(): void {
   console.log('');
 
   // ── Invariants that are not per-scenario ───────────────────────────────────
-  // Every reason code in design.md §13.4 must be reachable from this table; a
-  // code with no row is a branch nobody has ever seen run.
+  // Every reason code the matcher can produce must be reachable from this
+  // table; a code with no row is a branch nobody has ever seen run.
   const ALL_REASONS: LegMatchReason[] = [
     'MATCHED',
     'NO_ACTIVE_TRIP',
@@ -592,8 +592,9 @@ function main(): void {
   if (missing.length) failures.push(`   ✗ reason codes never produced: ${missing.join(', ')}`);
 
   // Determinism: the same input twice, and the same input with its candidate
-  // list reversed, must both produce the identical result. §13.2 says no step
-  // depends on iteration order, and this is the cheapest way to keep it true.
+  // list reversed, must both produce the identical result. No step of the
+  // matcher may depend on iteration order, and this is the cheapest way to
+  // keep it true.
   let orderFailures = 0;
   for (const s of SCENARIOS) {
     const a = JSON.stringify(matchPlannedLeg(s.input));
@@ -633,7 +634,7 @@ function main(): void {
   // anywhere else) that runs getPlannedLegCandidatesForActiveTrip()'s actual
   // SQL rather than hand-building candidates. See its own header for why.
   const dbSectionOk = runDbBackedSection();
-  if (!dbSectionOk) failures.push('   ✗ database-backed section (Amendment C guard) — see above');
+  if (!dbSectionOk) failures.push('   ✗ database-backed section (return-all-legs guard) — see above');
 
   if (failures.length === 0) {
     console.log(`${SCENARIOS.length} scenarios, 0 failures`);

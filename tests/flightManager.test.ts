@@ -1,9 +1,9 @@
-// tests/flightManager.test.ts — src/flightManager.ts, T-008 part 3 of 3.
+// tests/flightManager.test.ts — tests src/flightManager.ts, part 3 of 3.
 //
 // The planned-leg seam: the auto-match at takeoff, the live status the /api/status
 // poll reads, the arrival outcome written at landing, and the manual-link refresh.
 //
-// The matcher itself is NOT mocked (design.md §6.5) — src/legMatcher.ts is pure
+// The matcher itself is NOT mocked — src/legMatcher.ts is pure
 // and is the logic under test here as much as FlightManager is. Only './db' and
 // './airports' are replaced, so the candidates are ours and the decision is the
 // real one.
@@ -90,7 +90,7 @@ describe('FlightManager — planned-leg live status', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 17 ────────────────────────────────────────────────────────────────
+  // ── getPlannedLegStatus(): the null case and segment naming ───────────────
 
   it('getPlannedLegStatus() is null before any flight and while a flight is unlinked', () => {
     const fm = new FlightManager();
@@ -151,7 +151,7 @@ describe('FlightManager — planned-leg live status', () => {
     expect(st!.nextWaypointIdent).toBe('MID');
   });
 
-  // ── AC 18 — the antimeridian ─────────────────────────────────────────────
+  // ── The antimeridian ───────────────────────────────────────────────────────
 
   it('picks the right segment across the antimeridian rather than the ~360°-wide one', () => {
     const DEP = { lat: 10.0, lon: 178.5 };
@@ -187,7 +187,7 @@ describe('FlightManager — auto-link at takeoff', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 19 ────────────────────────────────────────────────────────────────
+  // ── Auto-link at takeoff: matched, refused, and failure isolation ─────────
 
   it('a MATCHED result links exactly once and populates the status cache', () => {
     arrangeMatch(KSBA);
@@ -274,7 +274,7 @@ describe('FlightManager — arrival on the planned leg', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 20 ────────────────────────────────────────────────────────────────
+  // ── Arrival radius decides flown vs diverted ──────────────────────────────
 
   it("landing inside ARRIVAL_RADIUS_NM of the planned destination records 'flown'", () => {
     const at = northOfNm(KMRY, 3.46); // 3.46 nm out, well inside the radius
@@ -310,7 +310,7 @@ describe('FlightManager — arrival on the planned leg', () => {
   // ARRIVAL_RADIUS_NM *value* — 5 or 20 both leave them green, since neither
   // sits near the real threshold. These two pin the constant itself: one
   // landing just inside 10 nm, one just outside, both measured (not derived
-  // on paper) per §4.6/§10.5.
+  // on paper).
 
   it("landing just inside ARRIVAL_RADIUS_NM (~9.9 nm) still records 'flown'", () => {
     const at = northOfNm(KMRY, 9.9);
@@ -375,7 +375,7 @@ describe('FlightManager — refreshPlannedLegForFlight', () => {
   });
   afterEach(() => useRealClock());
 
-  // ── AC 21 ────────────────────────────────────────────────────────────────
+  // ── refreshPlannedLegForFlight(): re-linking, unlinking, no-ops ───────────
 
   it('is a no-op for an id that is not the current flight', () => {
     arrangeMatch(KSBA);

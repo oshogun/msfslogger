@@ -1,15 +1,15 @@
-// tests/kmlExport.test.ts — src/kmlExport.ts (T-005).
+// tests/kmlExport.test.ts — src/kmlExport.ts.
 //
 // src/kmlExport.ts imports nothing from ./db, ./server or ./index and performs
-// no I/O (its own header, design.md §5.1) — this file matches that: no fs, no
-// network calls, no better-sqlite3, no live flights.db. Fixtures are plain
-// KmlFlight / KmlPoint object literals built in-memory, never read from disk.
+// no I/O — this file matches that: no fs, no network calls, no better-sqlite3,
+// no live flights.db. Fixtures are plain KmlFlight / KmlPoint object literals
+// built in-memory, never read from disk.
 //
 // Assertions are structural, via fast-xml-parser's XMLParser, not whole-string
-// equality — the one exception is the coordinate-encoding test (§8, "an exact
-// known numeric value"), which the task explicitly asks to pin as a literal.
-// Every test additionally asserts well-formedness with XMLValidator, per
-// design.md §8.3 ("Every generated document asserted well-formed").
+// equality — the one exception is the coordinate-encoding test, which pins an
+// exact known numeric value as a literal. Every test additionally asserts
+// well-formedness with XMLValidator, since every generated document must be
+// well-formed.
 
 import { describe, expect, it } from 'vitest';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
@@ -52,7 +52,7 @@ function coordLines(coordinatesText: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-/** No literal `null`/`undefined` may ever reach the document (design §6.3). */
+/** No literal `null`/`undefined` may ever reach the document. */
 function expectNoNullOrUndefinedLiterals(xml: string): void {
   expect(xml).not.toMatch(/\bnull\b/i);
   expect(xml).not.toMatch(/\bundefined\b/i);
@@ -100,14 +100,14 @@ describe('buildFlightKml — single flight happy path', () => {
     const styles = asArray(doc.kml.Document.Style);
     expect(styles).toHaveLength(5);
     expect(styles.map((s: any) => s['@_id'])).toEqual(['track-0', 'track-1', 'track-2', 'track-3', 'track-4']);
-    expect(styles[0].LineStyle.color).toBe('fffaa560'); // design §4.4 byte order
+    expect(styles[0].LineStyle.color).toBe('fffaa560'); // aabbggrr byte order
 
     const placemark = doc.kml.Document.Placemark;
     expect(placemark.name).toBe('#63 KSBA → KMRY — 2026-09-09');
     expect(placemark.styleUrl).toBe('#track-0');
     expect(placemark.TimeSpan.begin).toBe(f.start_time);
     expect(placemark.TimeSpan.end).toBe(f.end_time);
-    // KML 2.2 XSD Feature sequence, design §4.2.
+    // KML 2.2 XSD Feature sequence.
     expect(Object.keys(placemark)).toEqual(['name', 'description', 'TimeSpan', 'styleUrl', 'LineString']);
 
     const coords = coordLines(placemark.LineString.coordinates);
@@ -160,7 +160,7 @@ describe('buildFlightSetKml — containers sorted by start_time then id, not req
     ]);
     expect(folders.map((f: any) => f.Placemark.name)).toEqual(folders.map((f: any) => f.name)); // Folder name = Placemark name
 
-    // Style index follows OUTPUT position (design §4.4), not request position.
+    // Style index follows OUTPUT position, not request position.
     expect(folders.map((f: any) => f.Placemark.styleUrl)).toEqual(['#track-0', '#track-1', '#track-2']);
   });
 });
@@ -204,9 +204,9 @@ describe('buildTripKml — whole trip, start_time order', () => {
   });
 });
 
-// ── 4. Zero-point flight (design §6.1) ──────────────────────────────────────────
+// ── 4. Zero-point flight ─────────────────────────────────────────────────────
 
-describe('buildFlightKml — zero-point flight (design §6.1)', () => {
+describe('buildFlightKml — zero-point flight', () => {
   it('emits a Placemark with name/description/TimeSpan but no geometry element at all', () => {
     const f = flight({ points: [] });
     const xml = buildFlightKml(f);
@@ -223,9 +223,9 @@ describe('buildFlightKml — zero-point flight (design §6.1)', () => {
   });
 });
 
-// ── 5. One-point flight (design §6.2) ───────────────────────────────────────────
+// ── 5. One-point flight ──────────────────────────────────────────────────────
 
-describe('buildFlightKml — one-point flight (design §6.2)', () => {
+describe('buildFlightKml — one-point flight', () => {
   it('emits a Point, not a LineString', () => {
     const f = flight({ points: [pt(57.749284, -152.488563, 68.24)] });
     const xml = buildFlightKml(f);
@@ -242,9 +242,9 @@ describe('buildFlightKml — one-point flight (design §6.2)', () => {
   });
 });
 
-// ── 6. Null departure_icao / arrival_icao / aircraft / end_time (design §6.3, §6.4) ──
+// ── 6. Null departure_icao / arrival_icao / aircraft / end_time ─────────────────
 
-describe('buildFlightKml — null departure_icao/arrival_icao/aircraft/end_time (design §6.3, §6.4)', () => {
+describe('buildFlightKml — null departure_icao/arrival_icao/aircraft/end_time', () => {
   it('renders ???? in the label, "Unknown"/"In progress" in the description, and an open-ended TimeSpan', () => {
     const f = flight({
       id: 71,
@@ -273,18 +273,18 @@ describe('buildFlightKml — null departure_icao/arrival_icao/aircraft/end_time 
     expect(html).toContain('<th>Distance</th><td>Unknown</td>');
     expect(html).toContain('<th>Max altitude</th><td>Unknown</td>');
 
-    // TimeSpan carries begin only — no <end> element at all (design §4.3).
+    // TimeSpan carries begin only — no <end> element at all.
     expect(placemark.TimeSpan.begin).toBe(f.start_time);
     expect(placemark.TimeSpan.end).toBeUndefined();
     expect(xml).not.toContain('<end>');
   });
 });
 
-// ── 7. Escaping: & < > " ' (design §4.6) ────────────────────────────────────────
+// ── 7. Escaping: & < > " ' ──────────────────────────────────────────────────────
 
-describe('escaping: & < > " \' in a trip name and an aircraft value (design §4.6)', () => {
+describe('escaping: & < > " \' in a trip name and an aircraft value', () => {
   it('escapes every special character and never breaks the CDATA wrapper, even with a ]]> payload', () => {
-    // The exact doctored value design.md §4.6 verifies by hand.
+    // The exact doctored value, verified by hand.
     const nasty = `A&B <x> "q" 'z' ]]>`;
     const f = flight({ aircraft: nasty });
     const xml = buildTripKml(`Trip: ${nasty}`, [f]);
@@ -306,10 +306,10 @@ describe('escaping: & < > " \' in a trip name and an aircraft value (design §4.
   });
 });
 
-// ── 8. Coordinate encoding: lon,lat,alt order, feet→metres, precision (design §4.5) ──
+// ── 8. Coordinate encoding: lon,lat,alt order, feet→metres, precision ──────────
 
-describe('coordinate encoding — lon,lat,alt order and feet-to-metres conversion (design §4.5)', () => {
-  it('matches the exact worked example from design.md §4.5', () => {
+describe('coordinate encoding — lon,lat,alt order and feet-to-metres conversion', () => {
+  it('matches an exact worked example', () => {
     // lat 55.90914215639822, lon -159.15985271873274, altitude_ft 46.35459507171225
     // -> 46.35459507171225 * 0.3048 = 14.128920... -> "14.1"
     const f = flight({ points: [pt(55.90914215639822, -159.15985271873274, 46.35459507171225)] });
@@ -317,7 +317,7 @@ describe('coordinate encoding — lon,lat,alt order and feet-to-metres conversio
     expectWellFormed(xml);
 
     const doc = parseKml(xml);
-    // One point -> a <Point>, per design §6.2; same encoding rule as a LineString.
+    // One point -> a <Point>; same encoding rule as a LineString.
     expect(doc.kml.Document.Placemark.Point.coordinates).toBe('-159.159853,55.909142,14.1');
   });
 

@@ -67,6 +67,13 @@ built on a guessed file format is the expensive kind of wrong.
   every Dispatcher will be given your design instead of the whole file. A renamed
   or renumbered heading silently breaks that. Amendments keep the numbering — see
   below.
+- **This numbering is internal to `design.md` and the envelopes that cite it —
+  it never appears in application source.** A Dispatcher implementing your
+  design must not carry a `§` reference, a run-id, `design.md`, an "Amendment"
+  label, `plan.json`, a task id, or a phase/review file name into a comment in
+  `src/`, `client/src/`, or `tests/`. If a section's reasoning belongs in the
+  code as a comment, that comment states the reasoning itself, not a pointer to
+  where it came from.
 - **Write it to be read in parts.** A section should stand on its own, because it
   will be delivered on its own. Cross-reference by number ("see §4.2") so an
   agent handed one section knows what else to pull. Prose that assumes the reader

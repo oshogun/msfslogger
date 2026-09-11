@@ -418,10 +418,10 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 
 /* ── Trip detail ── */
 .legs-section { margin-bottom: 1.5rem; }
-/* Round-1 fix (reviews/phase-2.md Finding 1): let the (fixed-width, 8-column)
-   legs table scroll internally instead of the whole document going wide.
-   Mirrors .app-main's min-width:0 above — contain overflow at the smallest
-   scope that can absorb it, rather than letting it propagate to the page. */
+/* Let the (fixed-width, 8-column) legs table scroll internally instead of the
+   whole document going wide. Mirrors .app-main's min-width:0 above — contain
+   overflow at the smallest scope that can absorb it, rather than letting it
+   propagate to the page. */
 .legs-table-wrap { overflow-x: auto; }
 .legs-pagination {
   display: flex;
@@ -478,14 +478,14 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .badge-snippet { color: #f59e0b; background: #2d2410; border: 1px solid #4a3a12; }
 .td-route-snippet { color: #94a3b8 !important; }
 .td-planned-meta { font-size: 0.72rem; color: #64748b; margin-top: 0.15rem; }
-/* design.md §14 (T-018 F-3): a diverted leg's landing note picks up the same
-   amber as .badge-diverted, so the row reads as notable without shouting —
-   a flown leg's note stays the plain .td-planned-meta color on purpose. */
+/* A diverted leg's landing note picks up the same amber as .badge-diverted,
+   so the row reads as notable without shouting — a flown leg's note stays
+   the plain .td-planned-meta color on purpose. */
 .td-planned-meta-diverted { color: #fbbf24; }
 .btn-icon { padding: 0.25rem 0.45rem; font-size: 0.75rem; line-height: 1; margin-right: 0.3rem; }
 .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
 
-/* ── Active trip, and manual link/unlink/skip (design.md §11, §12, §15) ── */
+/* ── Active trip, and manual link/unlink/skip ── */
 .active-trip-row {
   display: flex;
   align-items: center;

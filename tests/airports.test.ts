@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { parseCSVLine, parseCSV, setAirports, findNearestAirport, type Airport } from '../src/airports';
 
 // initAirports() is never called from a test — it reads airports.json from
-// disk or downloads over HTTPS (design §7.4, §10.1). All fixtures below are
-// inline CSV strings or in-memory Airport[] arrays fed through setAirports().
+// disk or downloads over HTTPS. All fixtures below are inline CSV strings or
+// in-memory Airport[] arrays fed through setAirports().
 
 beforeEach(() => setAirports([]));
 
@@ -30,7 +30,7 @@ describe('parseCSVLine', () => {
 });
 
 describe('parseCSV', () => {
-  // 19 OurAirports columns (design §7.5):
+  // 19 OurAirports columns:
   // id,ident,type,name,latitude_deg,longitude_deg,elevation_ft,continent,
   // iso_country,iso_region,municipality,scheduled_service,gps_code,icao_code,
   // iata_code,local_code,home_link,wikipedia_link,keywords

@@ -8,15 +8,14 @@ import { TrafficStore, roundCoord, roundAlt, normHeading, applyRetentionCap } fr
 const STALE_TIMEOUT_MS = 10_000;
 const STALE_CHECK_INTERVAL_MS = 5_000;
 
-// Server rejects a batch with more than this many objects (§4.5 row 5). The
-// agent truncates to the same number before posting (agent/agent.js §3.8), so
-// reaching this case in normal operation means something is wrong. design.md
-// (run 2026-09-08-ai-traffic-map) §1.2.
+// Server rejects a batch with more than this many objects. The agent
+// truncates to the same number before posting, so reaching this case in
+// normal operation means something is wrong.
 const MAX_BATCH_OBJECTS = 200;
 
-// Same name, same parsing rule as the agent's (design.md §3.5, §5.6): disabled
-// iff the trimmed, lowercased value is exactly one of these; unset, empty, or
-// anything else means enabled.
+// Same name, same parsing rule as the agent's: disabled iff the trimmed,
+// lowercased value is exactly one of these; unset, empty, or anything else
+// means enabled.
 const TRAFFIC_DISABLED_VALUES = ['0', 'false', 'off', 'no'];
 function parseTrafficEnabled(value: string | undefined): boolean {
   return !TRAFFIC_DISABLED_VALUES.includes(String(value ?? '').trim().toLowerCase());
@@ -40,7 +39,7 @@ function isValidFrame(body: unknown): body is SimFrame {
 }
 
 /**
- * One element of a traffic batch, treated as Record<string, unknown> (§4.6).
+ * One element of a traffic batch, treated as Record<string, unknown>.
  * Number.isFinite rejects NaN, +/-Infinity, null, undefined, strings and
  * missing keys in one predicate. onGround is the only optional field.
  */
@@ -57,9 +56,9 @@ function isValidTrafficElement(o: unknown): o is Record<string, unknown> {
   );
 }
 
-/** Builds the stored shape from a validated element (§4.6 step 1). A fresh
- *  object is constructed rather than spread, so unknown extra keys (§4.6,
- *  e.g. a stray "title") are dropped, not carried through. */
+/** Builds the stored shape from a validated element. A fresh object is
+ *  constructed rather than spread, so unknown extra keys (e.g. a stray
+ *  "title") are dropped, not carried through. */
 function normalizeTrafficElement(o: Record<string, unknown>): TrafficObject {
   return {
     id: o.id as number,
@@ -76,13 +75,12 @@ export type TrafficBatchResult =
   | { ok: false; error: string };
 
 /**
- * The body-shape and per-element checks of §4.5 rows 3-6 plus the §4.6
- * normalisation and de-duplication, as one pure function so
- * src/inspect-traffic.ts can drive it without HTTP. Does NOT apply the
- * retention cap (§5.5, applyRetentionCap in src/trafficStore.ts) — that step
- * needs flightManager.appState.lastFrame, which only the caller has — and
- * does not touch the store: a rejected batch must leave both completely
- * unchanged (§4.5).
+ * The body-shape and per-element checks plus normalisation and
+ * de-duplication, as one pure function so src/inspect-traffic.ts can drive it
+ * without HTTP. Does NOT apply the retention cap (applyRetentionCap in
+ * src/trafficStore.ts) — that step needs flightManager.appState.lastFrame,
+ * which only the caller has — and does not touch the store: a rejected batch
+ * must leave both completely unchanged.
  */
 export function buildTrafficObjects(body: unknown): TrafficBatchResult {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -102,8 +100,8 @@ export function buildTrafficObjects(body: unknown): TrafficBatchResult {
   }
 
   // De-duplicate by id through a Map: first-occurrence order, last-occurrence
-  // value (§4.6 step 2) — re-setting an existing Map key updates its value
-  // without moving its position, which is exactly this rule.
+  // value — re-setting an existing Map key updates its value without moving
+  // its position, which is exactly this rule.
   const byId = new Map<number, TrafficObject>();
   for (const raw of objects as Record<string, unknown>[]) {
     const normalized = normalizeTrafficElement(raw);
@@ -112,8 +110,8 @@ export function buildTrafficObjects(body: unknown): TrafficBatchResult {
   return { ok: true, objects: [...byId.values()] };
 }
 
-/** Fixed-width digest of a token or header value, so the ingest-token check can
- *  use crypto.timingSafeEqual (design.md §12.3). */
+/** Fixed-width digest of a token or header value, so the ingest-token check
+ *  can use crypto.timingSafeEqual. */
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value, 'utf8').digest();
 }
@@ -132,24 +130,24 @@ export function createIngestRouter(
   // The token comes from AppConfig, not process.env: src/config.ts is the only
   // module that reads the environment for security settings, and it already
   // refused to start unless the token is set or ALLOW_UNAUTHENTICATED_INGEST
-  // opted out of it (design.md §7.4, §12.1, §12.2).
+  // opted out of it.
   const token = ingestConfig.token;
   const tokenDigest = token ? sha256(token) : null;
   let lastFrameAt = 0;
 
-  // Read once, at construction — same rule as the agent's (design.md §3.5,
-  // §5.6). Independent of INGEST_TOKEN: setting one does not imply the other.
+  // Read once, at construction — same rule as the agent's. Independent of
+  // INGEST_TOKEN: setting one does not imply the other.
   const trafficEnabled = parseTrafficEnabled(process.env.TRAFFIC_ENABLED);
   let trafficDisabledLogged = false;
 
   const checkAuth = (req: Request, res: Response): boolean => {
     // Reachable only through the explicit ALLOW_UNAUTHENTICATED_INGEST opt-out
-    // — loadConfig() will not hand us a null token otherwise (§12.2).
+    // — loadConfig() will not hand us a null token otherwise.
     if (!tokenDigest) return true;
     const header = req.get('x-ingest-token');
     // Compared as SHA-256 digests so the two buffers are always the same
     // length: timingSafeEqual cannot throw on a length mismatch, and the
-    // comparison leaks nothing about the token's length (§12.3).
+    // comparison leaks nothing about the token's length.
     if (header && timingSafeEqual(sha256(header), tokenDigest)) return true;
     res.status(401).json({ error: 'Invalid or missing ingest token' });
     return false;
@@ -232,10 +230,10 @@ export function createIngestRouter(
 
   // AI traffic: a one-way, memory-only channel beside the flight-data path
   // above. It never calls markConnected()/markDisconnected(), never touches
-  // lastFrameAt, and never calls any FlightManager method (§4.7) — agent
+  // lastFrameAt, and never calls any FlightManager method — agent
   // connectivity is defined by the flight-data pipeline alone. Checked in
-  // this exact order (§4.5): auth, then the kill switch, then validation; the
-  // first failure wins and the store is left completely unchanged.
+  // this exact order: auth, then the kill switch, then validation; the first
+  // failure wins and the store is left completely unchanged.
   router.post('/traffic', (req, res) => {
     if (!checkAuth(req, res)) return;
 

@@ -51,11 +51,10 @@ function lonDeltaDeg(from: number, to: number): number {
  * Why not simply pick whichever waypoint minimises dist(pos, waypoint) +
  * dist(waypoint, destination)? Triangle inequality means that sum is
  * smallest for the LAST waypoint unless the aircraft is off to the side of
- * the direct line — and a real planned route is nearly straight (design.md
- * §6: the KSFO->KLAX skeleton is 293.48 nm against a 293.23 nm direct great
- * circle). That approach would report the destination as "next waypoint"
- * from the moment of takeoff on almost every real leg, which is exactly
- * backwards.
+ * the direct line — and a real planned route is nearly straight (the
+ * KSFO->KLAX skeleton is 293.48 nm against a 293.23 nm direct great circle).
+ * That approach would report the destination as "next waypoint" from the
+ * moment of takeoff on almost every real leg, which is exactly backwards.
  */
 function crossTrackNm(lat: number, lon: number, aLat: number, aLon: number, bLat: number, bLon: number): number {
   const cosLat = Math.cos(((aLat + bLat) / 2 * Math.PI) / 180);
@@ -75,12 +74,12 @@ function formatNm(distanceNm: number | null): string {
 /**
  * The parenthetical that follows a refusal's reason code in the log.
  *
- * `nearbyLegIds` does not mean one thing (design.md §13.4): for AMBIGUOUS it is
- * the *eligible* ids — the choices, which is what the line should name — and for
- * every other outcome reached after the radius test it is every id within the
- * radius. Before the radius is usefully applied it is empty, and then the only
- * thing worth reporting is how far the nearest planned departure was, if the
- * matcher got far enough to measure one.
+ * `nearbyLegIds` does not mean one thing: for AMBIGUOUS it is the *eligible*
+ * ids — the choices, which is what the line should name — and for every
+ * other outcome reached after the radius test it is every id within the
+ * radius. Before the radius is usefully applied it is empty, and then the
+ * only thing worth reporting is how far the nearest planned departure was, if
+ * the matcher got far enough to measure one.
  */
 function describeRefusal(result: LegMatchResult): string {
   const legs = result.nearbyLegIds;
@@ -100,10 +99,10 @@ function describeRefusal(result: LegMatchResult): string {
 /**
  * Live-status cache for the flight currently FLYING, built once — at
  * auto-link time, or refreshed on a manual link/unlink — never re-read from
- * the database per status poll (design.md §19). `waypoints` mirrors the
- * leg's own planned_waypoints order (departure first, destination last, per
- * design.md §5.4c / lnmpln.ts); `remainingFromNm[i]` is the great-circle
- * distance from `waypoints[i]` to the destination, following that same chain.
+ * the database per status poll. `waypoints` mirrors the leg's own
+ * planned_waypoints order (departure first, destination last, per
+ * lnmpln.ts); `remainingFromNm[i]` is the great-circle distance from
+ * `waypoints[i]` to the destination, following that same chain.
  */
 interface PlannedLegCache {
   flightId: number;
@@ -313,7 +312,7 @@ export class FlightManager {
   }
 
   /**
-   * The live-panel context for /api/status (design.md §19), or null while
+   * The live-panel context for /api/status, or null while
    * unlinked. Reads only the cache built at link time plus the two
    * coordinates the caller already has — no query, so a 1 Hz poll costs
    * nothing here. `lat`/`lon` come from the last frame, not stored, since the
@@ -352,7 +351,7 @@ export class FlightManager {
   }
 
   /**
-   * Called by the manual link/unlink endpoint (design.md §12.3), which talks
+   * Called by the manual link/unlink endpoint, which talks
    * to the database directly and never goes through FlightManager. Without
    * this, linking or unlinking the in-progress flight by hand would leave the
    * live-status cache pointed at whatever autoLinkPlannedLeg last set (or at
@@ -368,11 +367,11 @@ export class FlightManager {
   }
 
   /**
-   * Auto-match at takeoff, design.md §13.5 — exactly once per flight, never
-   * from onFrame/recordPoint/writePoint (§20 item 11). The candidates are
-   * loaded here and the matcher works on the legs' own stored coordinates, so
+   * Auto-match at takeoff — exactly once per flight, never from
+   * onFrame/recordPoint/writePoint. The candidates are loaded here and the
+   * matcher works on the legs' own stored coordinates, so
    * findNearestAirport() stays at its two calls per flight and the frame path
-   * gains nothing at all (§20 item 10).
+   * gains nothing at all.
    *
    * Everything is caught, deliberately and without rethrowing. insertFlight()
    * has already run by the time this is reached, and nothing the trip planner
@@ -397,17 +396,18 @@ export class FlightManager {
         // guard for matchPlannedLeg()'s other potential callers and for its
         // own scenario harness (inspect-legmatch.ts), which is a pure
         // function with no database and exercises step 0 directly. Note:
-        // linkFlightToPlannedLeg() (the manual PUT path, §12.3) does not
-        // call the matcher at all, so it is not what this guard is for.
+        // linkFlightToPlannedLeg() (the manual PUT path) does not call the
+        // matcher at all, so it is not what this guard is for.
         flightAlreadyLinkedTo: null,
       });
 
       if (result.reason === 'MATCHED' && result.plannedLegId !== null) {
-        // The one read §13.5 does not budget for, and only on the matched
-        // path: the candidates carry departureIdent but no destination, and
-        // the frozen log line names the whole route. Read before the write so
-        // that a link which succeeded can never be reported as a failure
-        // because the label lookup was the thing that threw.
+        // The one read the auto-match path doesn't budget for, and only on
+        // the matched path: the candidates carry departureIdent but no
+        // destination, and the frozen log line names the whole route. Read
+        // before the write so that a link which succeeded can never be
+        // reported as a failure because the label lookup was the thing that
+        // threw.
         const leg = getPlannedLegById(result.plannedLegId);
         linkFlightToPlannedLeg(flightId, result.plannedLegId, 'auto');
         if (leg) this.plannedLegCache = buildPlannedLegCache(flightId, leg);
@@ -420,7 +420,7 @@ export class FlightManager {
       }
 
       // A non-match is never silent: every refusal names its reason code, so an
-      // unlinked flight is always explainable after the fact (§13.5).
+      // unlinked flight is always explainable after the fact.
       console.log(
         `[FlightManager] Flight #${flightId} not linked — ${result.reason}${describeRefusal(result)}`
       );
@@ -430,14 +430,14 @@ export class FlightManager {
   }
 
   /**
-   * Landing outcome for a linked flight, design.md §14. Runs after
+   * Landing outcome for a linked flight. Runs after
    * closeFlight() for the same reason the takeoff match runs after
    * insertFlight(): by the time it can fail, the flight is already safely
    * closed, so a throw costs the leg's arrival state and nothing else.
    *
    * The link is read from the flight row rather than remembered from
-   * startFlight(). The user can link or unlink a flight from the UI while it is
-   * still in the air (§15), and the row is the only thing that knows about it —
+   * startFlight(). The user can link or unlink a flight from the UI while it
+   * is still in the air, and the row is the only thing that knows about it —
    * remembering the takeoff match would mark a leg the user had since unlinked.
    * getFlightPlannedLegId() exists so that read costs one integer rather than
    * the flight's whole track.
@@ -458,7 +458,7 @@ export class FlightManager {
       const deviationNm = haversineNm(frame.lat, frame.lon, leg.destination_lat, leg.destination_lon);
       // The link is kept either way — a diversion never auto-unlinks, because
       // the link records the intent and that stays true when the destination
-      // changed. arrival_deviation_nm is written on both paths (§14).
+      // changed. arrival_deviation_nm is written on both paths.
       const status = deviationNm <= ARRIVAL_RADIUS_NM ? 'flown' : 'diverted';
       recordPlannedLegArrival(legId, status, Math.round(deviationNm * 10) / 10);
 

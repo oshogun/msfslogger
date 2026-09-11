@@ -1,19 +1,19 @@
-// tests/helpers/index.ts — shared test-helpers module (design.md §4, §5, §6).
+// tests/helpers/index.ts — shared test-helpers module.
 //
-// One file, one owner: T-002 writes it, T-004/T-005/T-006/T-008 import it
-// read-only. Defaults below are a frozen contract — a task that needs a
-// different value overrides it at the call site with `over`, it does not
-// edit the defaults here.
+// One file, one owner: this module owns its defaults; other test files
+// import it read-only. Defaults below are a frozen contract — a test that
+// needs a different value overrides it at the call site with `over`, it does
+// not edit the defaults here.
 //
 // No native sqlite bindings, no http/https, no live database file, no real
-// wall clock dependency at module scope (design.md §10). useFakeClock() /
-// useRealClock() are opt-in per test file, not applied here.
+// wall clock dependency at module scope. useFakeClock() / useRealClock() are
+// opt-in per test file, not applied here.
 
 import { vi } from 'vitest';
 import type { SimFrame, LegMatchCandidate, PlannedLegWithChildren, PlannedWaypoint } from '../../src/types';
 import type { HandCloseFlight, HandCloseLeg } from '../../src/plannedLegClose';
 
-// ── §4.2 makeFrame ──────────────────────────────────────────────────────────
+// ── makeFrame ────────────────────────────────────────────────────────────────
 
 export function makeFrame(over: Partial<SimFrame> = {}): SimFrame {
   return {
@@ -31,7 +31,7 @@ export function makeFrame(over: Partial<SimFrame> = {}): SimFrame {
   };
 }
 
-// ── §4.3 makeCandidate ──────────────────────────────────────────────────────
+// ── makeCandidate ────────────────────────────────────────────────────────────
 
 export function makeCandidate(over: Partial<LegMatchCandidate> = {}): LegMatchCandidate {
   return {
@@ -49,7 +49,7 @@ export function makeCandidate(over: Partial<LegMatchCandidate> = {}): LegMatchCa
   };
 }
 
-// ── §4.4 makeHandCloseFlight / makeHandCloseLeg ─────────────────────────────
+// ── makeHandCloseFlight / makeHandCloseLeg ───────────────────────────────────
 // Structural subsets declared in src/plannedLegClose.ts:47-66, not src/types.ts.
 
 export function makeHandCloseFlight(over: Partial<HandCloseFlight> = {}): HandCloseFlight {
@@ -74,10 +74,10 @@ export function makeHandCloseLeg(over: Partial<HandCloseLeg> = {}): HandCloseLeg
   };
 }
 
-// ── §4.5 makePlannedLegWithChildren ─────────────────────────────────────────
+// ── makePlannedLegWithChildren ────────────────────────────────────────────────
 // Wide row type (src/types.ts:238-242, ~40 fields); FlightManager reads only
 // id, trip_id, departure_ident, destination_ident, destination_lat,
-// destination_lon, waypoints[]. Every field not named in design §4.5 defaults
+// destination_lon, waypoints[]. Every field not named above defaults
 // to null. Departure first, destination last in `waypoints` — the order
 // buildPlannedLegCache() (src/flightManager.ts:118) depends on.
 
@@ -163,7 +163,7 @@ export function makePlannedLegWithChildren(over: Partial<PlannedLegWithChildren>
   };
 }
 
-// ── §4.6 Geometry helpers ────────────────────────────────────────────────────
+// ── Geometry helpers ─────────────────────────────────────────────────────────
 // One arc-minute is NOT one nautical mile in this codebase (R=3440.065 in
 // src/geo.ts) — never hardcode "/60" in this module.
 
@@ -174,7 +174,7 @@ export function northOfNm(pos: { lat: number; lon: number }, nm: number): { lat:
   return { lat: pos.lat + nm * DEG_PER_NM, lon: pos.lon };
 }
 
-// ── §4.7 Named real positions ────────────────────────────────────────────────
+// ── Named real positions ─────────────────────────────────────────────────────
 
 export const KSBA = { lat: 34.426201, lon: -119.841507 };
 export const KSFO = { lat: 37.618023, lon: -122.375519 };
@@ -183,7 +183,7 @@ export const KLAX = { lat: 33.942474, lon: -118.409332 };
 export const KSTS = { lat: 38.509693, lon: -122.812897 };
 export const KACV = { lat: 40.977814, lon: -124.108475 };
 
-// ── §5 Faking time ────────────────────────────────────────────────────────────
+// ── Faking time ───────────────────────────────────────────────────────────────
 // Opt-in per test file. Do NOT call these at module scope — a pure module
 // must not acquire a hidden clock dependency.
 
@@ -198,7 +198,7 @@ export function useRealClock(): void {
   vi.useRealTimers();
 }
 
-// ── §6 Faking module boundaries ──────────────────────────────────────────────
+// ── Faking module boundaries ──────────────────────────────────────────────────
 //
 // Consuming test files do:
 //   vi.mock('../src/db',       async () => (await import('./helpers')).dbMock);
@@ -206,7 +206,7 @@ export function useRealClock(): void {
 // The vi.mock() call itself is each consuming test file's job, not this
 // module's — this module only exports the mock objects and the reset.
 
-// §6.2 — all ten functions src/flightManager.ts imports from './db'.
+// All ten functions src/flightManager.ts imports from './db'.
 export const dbMock = {
   insertFlight: vi.fn(),
   insertPoint: vi.fn(),
@@ -220,7 +220,7 @@ export const dbMock = {
   getTripName: vi.fn(),
 };
 
-// §6.3 — the one function (plus initAirports) src/flightManager.ts imports
+// The one function (plus initAirports) src/flightManager.ts imports
 // from './airports'.
 export const airportsMock = {
   findNearestAirport: vi.fn(),
@@ -263,7 +263,7 @@ installDbMockDefaults();
 installAirportsMockDefaults();
 
 /**
- * vitest.config.ts (T-001) sets `restoreMocks: true`, i.e. `vi.restoreAllMocks()`
+ * vitest.config.ts sets `restoreMocks: true`, i.e. `vi.restoreAllMocks()`
  * before every test. Verified against node_modules/@vitest/spy/dist/index.js
  * (4.1.11): that call only restores vi.spyOn() spies (its MOCK_RESTORE set) —
  * it does NOT touch plain vi.fn() objects like dbMock/airportsMock, so it

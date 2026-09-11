@@ -8,9 +8,9 @@ import { unwrapLonChains } from '../utils/geo';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 
-// Frozen outside LEG_COLORS by design.md §18 so a planned route can never be
-// mistaken for a flown leg at a glance. Dashed, thinner, drawn beneath flown
-// tracks (rendered first in JSX — Leaflet stacks same-pane layers in the order
+// Frozen outside LEG_COLORS so a planned route can never be mistaken for a
+// flown leg at a glance. Dashed, thinner, drawn beneath flown tracks
+// (rendered first in JSX — Leaflet stacks same-pane layers in the order
 // they are added).
 const PLANNED_ROUTE_COLOR = '#94a3b8';
 
@@ -57,8 +57,8 @@ function procedureNote(leg: PlannedLegWithChildren): string | null {
   if (leg.star_name) parts.push(`STAR ${leg.star_name}`);
   if (leg.approach_name) parts.push(`APP ${leg.approach_name}`);
   if (parts.length === 0) return null;
-  // design.md §6.2: makes the gap at the ends read as missing procedure data,
-  // not a drawing bug.
+  // Makes the gap at the ends read as missing procedure data, not a drawing
+  // bug.
   return `${parts.join(' · ')} (planned route excludes SID/STAR/approach legs)`;
 }
 
@@ -78,8 +78,8 @@ interface Props {
   flights: Flight[];
   /**
    * Optional: when omitted, TripMap renders exactly as it did before this
-   * prop existed (design.md T-008 DoD 1). Every existing caller — including
-   * PrintTrip, which does not pass it — is unaffected.
+   * prop existed. Every existing caller — including PrintTrip, which does
+   * not pass it — is unaffected.
    */
   plannedLegs?: PlannedLegWithChildren[];
   /** Called once tiles have finished loading. Used by the PDF export. */
@@ -126,10 +126,10 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
       />
       {/*
         Planned routes render first so they sit beneath flown tracks in the
-        same pane (design.md §18). Drawn from planned_waypoints exactly as
-        stored — never snapped, warped or interpolated toward the flown track
-        (design.md §6.2, DoD 9): a visible gap at the ends of an IFR leg with
-        procedures is the file drawn faithfully, not a bug.
+        same pane. Drawn from planned_waypoints exactly as stored — never
+        snapped, warped or interpolated toward the flown track: a visible gap
+        at the ends of an IFR leg with procedures is the file drawn
+        faithfully, not a bug.
       */}
       {sortedPlannedLegs(plannedLegs).map((leg, legIdx) => {
         const sortedWaypoints = leg.waypoints.slice().sort((a, b) => a.seq - b.seq);
