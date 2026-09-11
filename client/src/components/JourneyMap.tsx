@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { JourneyLeg, JourneyAirport } from '../types';
+import { unwrapLonChain } from '../utils/geo';
 
 /**
  * Legs are tinted along a hue ramp from the first flight to the most recent, so
@@ -17,7 +18,7 @@ export function legColor(seq: number, total: number): string {
 function FitAll({ legs }: { legs: JourneyLeg[] }) {
   const map = useMap();
   useEffect(() => {
-    const all = legs.flatMap(l => l.track);
+    const all = legs.flatMap(l => unwrapLonChain(l.track as [number, number][]));
     if (all.length === 0) return;
     map.fitBounds(L.latLngBounds(all as [number, number][]), { padding: [28, 28] });
   }, [map, legs]);
@@ -46,10 +47,11 @@ export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) 
 
       {legs.map(leg => {
         const dimmed = highlightId !== null && highlightId !== leg.id;
+        const track = unwrapLonChain(leg.track as [number, number][]);
         return (
           <Polyline
             key={leg.id}
-            positions={leg.track}
+            positions={track}
             pathOptions={{
               color: legColor(leg.seq, legs.length),
               weight: highlightId === leg.id ? 4.5 : 2.2,

@@ -87,7 +87,7 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No GPS points recorded.</p>;
   }
 
-  const latlngs: [number, number][] = points.map(p => [p.lat, p.lon]);
+  const latlngs = unwrapLonChain(points.map(p => [p.lat, p.lon] as [number, number]));
   const rawPlannedChain: [number, number][] = sortedWaypoints.map(w => [w.lat, w.lon]);
   const plannedChain = unwrapLonChain(rawPlannedChain);
   const center = latlngs[0] ?? plannedChain[0] ?? ([0, 0] as [number, number]);

@@ -42,7 +42,7 @@ function procedureNote(leg: PlannedLegWithChildren): string | null {
 function BoundsController({ flights, plannedLegs }: { flights: Flight[]; plannedLegs: PlannedLegWithChildren[] }) {
   const map = useMap();
   useEffect(() => {
-    const flownPoints = flights.flatMap(f => (f.points || []).map(p => [p.lat, p.lon] as [number, number]));
+    const flownPoints = flights.flatMap(f => unwrapLonChain((f.points || []).map(p => [p.lat, p.lon] as [number, number])));
     const plannedPoints = plannedLegs.flatMap(leg => {
       const chain = leg.waypoints.slice().sort((a, b) => a.seq - b.seq).map(w => [w.lat, w.lon] as [number, number]);
       return unwrapLonChain(chain);
@@ -140,7 +140,7 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         const pts = f.points || [];
         if (pts.length === 0) return null;
         const color = LEG_COLORS[i % LEG_COLORS.length];
-        const latlngs: [number, number][] = pts.map(p => [p.lat, p.lon]);
+        const latlngs = unwrapLonChain(pts.map(p => [p.lat, p.lon] as [number, number]));
         return (
           <Fragment key={f.id}>
             <Polyline positions={latlngs} pathOptions={{ color, weight: 2.5, opacity: 0.9 }}>
