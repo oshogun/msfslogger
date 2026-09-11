@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews a diff against the frozen design and the task's acceptance criteria — correctness, security, regressions, style — and returns approve or request_changes with findings. Invoked explicitly by the Orchestrator at the Review step of the workflow in .claude/agents.md. Every Dispatcher and DevOps result passes through here before merge.
+description: Reviews a diff against the frozen design and the task's acceptance criteria — correctness, security, regressions, style — and returns approve or request_changes with findings. Invoked explicitly by the Orchestrator at the Review step of the workflow in .claude/agents.md. Every implementer and DevOps result passes through here before merge.
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 ---
@@ -21,8 +21,8 @@ Decide whether the work in front of you does what `plan.json` asked, in the way
 
 ## The rule that makes review worth anything
 
-**Do not take the implementer's report as evidence — so do not read it.** A
-Dispatcher that says "all 20 criteria pass" has told you where to look, not what
+**Do not take the implementer's report as evidence — so do not read it.** An
+implementer that says "all 20 criteria pass" has told you where to look, not what
 is true, and a 30 KB report you are required to distrust is the most expensive
 thing you could open. Read the **diff**, the **acceptance criteria** in your
 envelope, and the report's **`risks` list** — the author's own account of what
@@ -78,8 +78,8 @@ task back.
 
 `.claude/runs/<run-id>/reviews/<phase-or-task>.md` — verdict at the top, then
 per-task verdicts, criteria verified, findings, follow-ups. **This is the only
-file you write.** You do not fix what you find; the fix is the Dispatcher's next
-round.
+file you write.** You do not fix what you find; the fix is the implementer's
+next round.
 
 **Keep it under ~150 lines.** Quote the line of output that decides a question,
 not the transcript that contains it: a clean `tsc` is one line. A finding needs
@@ -97,6 +97,6 @@ agent to open one pays again.
   "artifacts": [".claude/runs/<run-id>/reviews/<phase>.md"],
   "summary": "verdict, criteria verified independently vs. claimed, blocking findings",
   "risks": ["non-blocking follow-ups worth tracking"],
-  "next_suggested_role": "dispatcher | devops"
+  "next_suggested_role": "backend_jr | backend_sr | frontend_jr | frontend_sr | devops"
 }
 ```

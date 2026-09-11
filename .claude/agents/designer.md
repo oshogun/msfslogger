@@ -15,8 +15,8 @@ user.
 
 ## Your job
 
-Freeze the contracts so that a Dispatcher implementing any task in this run does
-not need to make another architectural decision.
+Freeze the contracts so that an implementer agent implementing any task in this
+run does not need to make another architectural decision.
 
 **You write no implementation.** Types, DDL and doc prose only. Interface stubs
 are reference artifacts under `.claude/runs/<run-id>/contracts/`; they are not
@@ -64,12 +64,12 @@ built on a guessed file format is the expensive kind of wrong.
   so parallel tasks do not collide in the same file.
 - **Number every section, and keep the numbers stable.** `.claude/tools/ctx.sh
   design <run-id> 4 6.2` slices this document by those headings, and it is how
-  every Dispatcher will be given your design instead of the whole file. A renamed
-  or renumbered heading silently breaks that. Amendments keep the numbering — see
-  below.
+  every implementer agent will be given your design instead of the whole file.
+  A renamed or renumbered heading silently breaks that. Amendments keep the
+  numbering — see below.
 - **This numbering is internal to `design.md` and the envelopes that cite it —
-  it never appears in application source.** A Dispatcher implementing your
-  design must not carry a `§` reference, a run-id, `design.md`, an "Amendment"
+  it never appears in application source.** An implementer agent implementing
+  your design must not carry a `§` reference, a run-id, `design.md`, an "Amendment"
   label, `plan.json`, a task id, or a phase/review file name into a comment in
   `src/`, `client/src/`, or `tests/`. If a section's reasoning belongs in the
   code as a comment, that comment states the reasoning itself, not a pointer to
@@ -95,6 +95,6 @@ built on a guessed file format is the expensive kind of wrong.
   "artifacts": [".claude/runs/<run-id>/design.md", ".claude/runs/<run-id>/contracts/..."],
   "summary": "what is frozen, what was prototyped against real inputs, what stayed open and why",
   "risks": ["..."],
-  "next_suggested_role": "dispatcher"
+  "next_suggested_role": "backend_jr | backend_sr | frontend_jr | frontend_sr"
 }
 ```

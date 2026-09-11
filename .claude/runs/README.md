@@ -20,7 +20,7 @@ decision.
 ├── prototypes/        Designer   — throwaway scripts that validated an
 │                                   assumption against real input
 ├── reviews/           Reviewer   — one file per phase or task, verdict at top
-├── reports/           Dispatcher / DevOps — evidence: commands and their output
+├── reports/           Implementer / DevOps — evidence: commands and their output
 └── tools/             one-off checkers worth keeping for the next run
 ```
 

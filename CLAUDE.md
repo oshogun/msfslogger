@@ -10,9 +10,10 @@ changing behaviour it documents.
 This project runs the agentic workflow in **[.claude/agents.md](.claude/agents.md)** —
 read it; it is your routing policy. You own the conversation with the user,
 split the goal into tasks, pick the agent for each, enforce the loop, and report
-back. The sub-agents in `.claude/agents/` (`planner`, `designer`, `dispatcher`,
-`devops`, `reviewer`) never talk to the user: they return the response envelope
-to you, and you validate, merge, and decide the next step.
+back. The sub-agents in `.claude/agents/` (`planner`, `designer`, `backend_jr`,
+`backend_sr`, `frontend_jr`, `frontend_sr`, `devops`, `reviewer`) never talk to
+the user: they return the response envelope to you, and you validate, merge,
+and decide the next step.
 
 Standing environment facts every agent needs — Node 20 via nvm, no `sqlite3`
 CLI, the live database, the user's running server — are in
@@ -25,7 +26,7 @@ Three tiers, per `.claude/agents.md` § Cost discipline rule 6:
 
 - **Answer directly** — a question, an investigation, a one-line fix, a doc typo.
   No run id, no artifacts, no sub-agent.
-- **One Dispatcher + one Reviewer** — a change with a single seam: one module, no
+- **One implementer + one Reviewer** — a change with a single seam: one module, no
   new contract. `intake.md` is the only artifact.
 - **The full loop** — feature work: several files, a schema or API change, or
   something the user will see.
@@ -45,14 +46,18 @@ workflow are tier 1.
    schema change, a new endpoint, a shared type. Freeze it before any code is
    written. A run that only wires up existing contracts skips this step, and the
    skip is recorded in `intake.md`.
-4. **Implement** — dispatchers, batched. Consecutive tasks on the same owner and
-   dependency chain go to one Dispatcher; two tasks touching the same file are
-   one Dispatcher, always. Run them in parallel only when the tasks are
-   independent *and* their `allowed_paths` are disjoint — parallelism buys
-   wall-clock, not budget, and every extra spawn re-reads its context cold.
-5. **Review** — every Dispatcher and DevOps result goes to `reviewer` before
-   merge. `request_changes` sends the task back to a Dispatcher; after 3 failed
-   rounds, stop and escalate to the user.
+4. **Implement** — delegate to `backend_jr`, `backend_sr`, `frontend_jr`, or
+   `frontend_sr` per task (domain from `allowed_paths`, seniority from
+   complexity), batched. Consecutive tasks on the same owner, the same
+   implementer role, and dependency chain go to one implementer agent; two
+   tasks touching the same file are one implementer agent, always — a backend
+   and a frontend task never share one. Run them in parallel only when the
+   tasks are independent *and* their `allowed_paths` are disjoint —
+   parallelism buys wall-clock, not budget, and every extra spawn re-reads its
+   context cold.
+5. **Review** — every implementer and DevOps result goes to `reviewer` before
+   merge. `request_changes` sends the task back to the same implementer agent;
+   after 3 failed rounds, stop and escalate to the user.
 6. **Ship** — `devops` once the run's tasks are approved, if the run touches
    build, packaging or deploy. Otherwise skip it and say so.
 7. **Report** — outcome, residual risks, follow-ups.
@@ -69,13 +74,17 @@ opens the whole 62 KB `plan.json` to find 5 KB. Name design context as the exact
 slice command, `.claude/tools/ctx.sh design <run-id> 4 6.2`, never `design.md`.
 Never say "as discussed".
 
-Match the model to the **risk**, per the rule in `.claude/agents.md`. The role
-defaults are `opus` for Planner and Designer — they run once and decide
-everything downstream — and `sonnet` for Dispatcher, DevOps and Reviewer.
-Override with the Agent tool's `model` parameter: `opus` for a Reviewer when the
-phase changes the schema, runs a migration, deletes or overwrites data, touches
-credentials, or is on its second `request_changes` round; `haiku` for a narrow,
-fully specified mechanical edit.
+Match the agent to the task's **domain and risk**, per the rule in
+`.claude/agents.md`. Planner and Designer default to `opus` — they run once and
+decide everything downstream. The implementers split by domain and seniority:
+`backend_jr`/`frontend_jr` default to `sonnet` for a single-seam task with no
+new contract; `backend_sr`/`frontend_sr` default to `opus` for a schema change,
+a migration, a new page/route, or logic spanning several modules in that
+domain. DevOps and Reviewer default to `sonnet`. Override with the Agent tool's
+`model` parameter: `opus` for a Reviewer when the phase changes the schema,
+runs a migration, deletes or overwrites data, touches credentials, or is on its
+second `request_changes` round; `haiku` to downgrade a Jr implementer for a
+narrow, fully specified mechanical edit.
 
 ### Non-negotiables
 

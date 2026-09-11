@@ -2,7 +2,7 @@
 
 **Who reads this file: the Orchestrator.** Sub-agents do not. Each role file in
 `.claude/agents/` is self-contained by design — it carries the role's rules and
-its response envelope — so a Dispatcher that opens this document is paying for
+its response envelope — so an implementer that opens this document is paying for
 context it was already given. The only shared file every agent reads is
 `.claude/ENVIRONMENT.md`.
 
@@ -17,9 +17,11 @@ Orchestrator, which validates, merges, and decides the next step.
         ┌──────────────┐
   user ─▶│ Orchestrator │◀── final report
         └──────┬───────┘
-   ┌───────┬───┴───┬────────────┬──────────┐
-   ▼       ▼       ▼            ▼          ▼
-Planner Designer Dispatcher  DevOps    Reviewer
+   ┌───────┬───┴────┬───────────────────────┬──────────┐
+   ▼       ▼         ▼                      ▼          ▼
+Planner Designer  Implementer            DevOps    Reviewer
+                (backend_jr/sr,
+                 frontend_jr/sr)
 ```
 
 ## Roles
@@ -29,18 +31,31 @@ Planner Designer Dispatcher  DevOps    Reviewer
 | **Orchestrator** | Owns the goal, splits it into tasks, picks the agent, enforces the loop, reports back to the user. | Task graph + final summary |
 | **Planner** | Turns a fuzzy goal into an ordered, dependency-aware task list with acceptance criteria. | `plan.json` (tasks, deps, DoD) |
 | **Designer** | Defines architecture, module boundaries, data models, API/UX contracts. No implementation. | Design doc + interface stubs |
-| **Dispatcher** | Executes implementation tasks: writes/edits code, verifies locally. | Diff + evidence |
+| **Backend Jr** (`sonnet`) | Single-seam backend implementation: one module, no new contract. Files: `src/**`, `tests/**`, `agent/**`. | Diff + evidence |
+| **Backend Sr** (`opus`) | Cross-cutting or contract-adjacent backend implementation: schema changes, migrations, logic spanning several modules. Same files as Backend Jr. | Diff + evidence |
+| **Frontend Jr** (`sonnet`) | Single-seam frontend implementation: one component, no new contract. Files: `client/**`. | Diff + evidence |
+| **Frontend Sr** (`opus`) | Cross-cutting or contract-adjacent frontend implementation: new pages/routes, cross-component state, API-consuming changes. Same files as Frontend Jr. | Diff + evidence |
 | **DevOps** | Build, packaging, CI/CD, environment, secrets, deployment, observability. | Pipeline changes + deploy status |
 | **Reviewer** | Reviews diffs against the design and acceptance criteria; checks security, regressions, style. | Verdict `approve` / `request_changes` + findings |
+
+Backend and frontend never share a task: a task's `allowed_paths` sit entirely
+in one domain, and the Planner (or the Orchestrator, for tier-2 work) picks the
+matching agent — Jr by default, Sr when the task is a schema change, a
+migration, a new page/route, cross-module or cross-component reasoning, or
+otherwise ambiguous enough to be worth a second pair of judgement. Naming the
+agent by domain and seniority, rather than routing through a generic
+Dispatcher, is deliberate: it makes token usage groupable by role straight from
+the Agent tool's own invocation record, with no extra spawn spent classifying
+the task.
 
 ## Cost discipline
 
 A sub-agent starts cold. Everything it knows, it re-read — and it re-reads it on
 every spawn. In the `2026-09-07-manual-mark-flown` run, `plan.json` and
-`design.md` together came to 131 KB; a Dispatcher that opened both spent roughly
-30k tokens before writing a line, and ten spawns spent it ten times. These rules
-exist to stop that, and they bind the Orchestrator first because it is the
-Orchestrator that fills the envelope.
+`design.md` together came to 131 KB; an implementer that opened both spent
+roughly 30k tokens before writing a line, and ten spawns spent it ten times.
+These rules exist to stop that, and they bind the Orchestrator first because it
+is the Orchestrator that fills the envelope.
 
 **1. Pass slices, never whole artifacts.** `.claude/tools/ctx.sh` extracts them:
 
@@ -57,11 +72,13 @@ already has it — and names design sections by number. An agent told to read
 `design.md` reads 69 KB; an agent told `ctx.sh design <run> 3 5` reads 4.
 
 **2. One spawn is the unit of cost, so spawn fewer.** Batch consecutive tasks
-that share an owner and dependency chain into one Dispatcher when their
-`allowed_paths` do not collide with a parallel task. Two tasks on the same file
-in the same phase are one Dispatcher, always. Reserve parallel spawns for work
-that is genuinely independent — parallelism buys wall-clock, not budget, and each
-extra agent pays the cold-start tax again.
+that share an owner, an implementer role, and a dependency chain into one
+implementer agent when their `allowed_paths` do not collide with a parallel
+task. Two tasks on the same file in the same phase are one agent, always. A
+backend task and a frontend task never batch into one spawn, even if
+sequential — different domain means a different agent. Reserve parallel spawns
+for work that is genuinely independent — parallelism buys wall-clock, not
+budget, and each extra agent pays the cold-start tax again.
 
 **3. Skip the steps a run does not need.** Design is for runs that introduce a
 contract — a schema change, a new endpoint, a shared type. A run that adds a
@@ -85,7 +102,7 @@ the report's `risks` list — nothing else.
 | Work | Path |
 | --- | --- |
 | Question, investigation, one-line fix, doc typo | Orchestrator answers directly. No run id, no artifacts. |
-| A change with one seam — one module, no new contract | One Dispatcher + one Reviewer. `intake.md` only. |
+| A change with one seam — one module, no new contract | One implementer (Jr) + one Reviewer. `intake.md` only. |
 | Feature work: several files, a schema or API change, something the user sees | The full loop below. |
 
 Spinning up a Planner for a two-line change is the failure mode. So is running
@@ -100,7 +117,7 @@ Every hand-off uses the same envelope.
 ```json
 {
   "task_id": "T-004",
-  "role": "dispatcher",
+  "role": "backend_sr",
   "goal": "Implement flight log persistence layer",
   "task_record": { "…the task object from plan.json, pasted verbatim…" },
   "context": ["ctx.sh design 2026-09-07-run 4 6.2", "src/db.ts"],
@@ -136,10 +153,11 @@ For tier-3 work only — see Cost discipline rule 6.
 2. **Plan** — delegate to Planner; store `plan.json`.
 3. **Design** — delegate to Designer *if the run introduces a contract*; freeze
    before code is written.
-4. **Implement** — delegate to Dispatchers, batched per rule 2.
-5. **Review** — every Dispatcher and DevOps result goes to Reviewer before merge,
-   at phase granularity. `request_changes` sends the task back (max 3 rounds,
-   then escalate to the user).
+4. **Implement** — delegate to the implementer agents (`backend_jr`,
+   `backend_sr`, `frontend_jr`, `frontend_sr`), batched per rule 2.
+5. **Review** — every implementer and DevOps result goes to Reviewer before
+   merge, at phase granularity. `request_changes` sends the task back to the
+   same implementer agent (max 3 rounds, then escalate to the user).
 6. **Ship** — delegate to DevOps *if the run touches build, packaging or deploy*.
 7. **Report** — Orchestrator summarizes outcome, residual risks, follow-ups.
 
@@ -151,11 +169,16 @@ For tier-3 work only — see Cost discipline rule 6.
   `model` parameter:
   - `opus` — Planner and Designer, which run once per run and decide everything
     downstream. This is the cheapest place in the workflow to spend.
-  - `sonnet` — Dispatchers, DevOps, and Reviewers by default.
+  - `opus` — Backend Sr and Frontend Sr by default: a schema change, a
+    migration, a new page/route, or logic spanning several modules in that
+    domain.
+  - `sonnet` — Backend Jr and Frontend Jr by default, and DevOps and Reviewer
+    always.
   - `opus` for a Reviewer — escalate for a phase that changes the schema, runs a
     migration, deletes or overwrites data, touches credentials, or comes back for
     a second `request_changes` round.
-  - `haiku` — a narrow, fully specified mechanical edit with no judgement in it.
+  - `haiku` — override a Jr implementer down for a narrow, fully specified
+    mechanical edit with no judgement in it.
 - Agents only read/write inside their `allowed_paths`.
 - No agent may skip Review; Orchestrator never merges unreviewed work.
 - Any agent may return `blocked` with a concrete question instead of guessing.

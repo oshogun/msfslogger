@@ -45,14 +45,14 @@ planning, establish for yourself:
   "tasks": [
     {
       "id": "T-001",
-      "role": "designer | dispatcher | devops | reviewer",
+      "role": "designer | backend_jr | backend_sr | frontend_jr | frontend_sr | devops | reviewer",
       "title": "...",
       "goal": "...",
       "depends_on": ["T-000"],
       "allowed_paths": ["src/foo.ts", "client/src/bar.tsx"],
       "acceptance_criteria": ["checkable statements, each verifiable by a named command"],
       "context": ["ctx.sh design <run-id> 4 6.2", "src/db.ts"],
-      "model_hint": "haiku | sonnet | opus"
+      "model_hint": "haiku | opus — optional override of the role's default model; omit to use it"
     }
   ]
 }
@@ -68,8 +68,15 @@ planning, establish for yourself:
   has no test framework — see `.claude/ENVIRONMENT.md` for what verification
   looks like here.
 - **`allowed_paths` are disjoint for any two tasks that may run in parallel.**
-  This is the mechanism that makes parallel Dispatchers safe, so assign file
-  ownership deliberately — including which file a shared type lives in.
+  This is the mechanism that makes parallel implementer agents safe, so assign
+  file ownership deliberately — including which file a shared type lives in.
+- **`role` picks the implementer's domain and seniority in one field.**
+  `backend_jr`/`frontend_jr` for a single-seam task — one module, no new
+  contract; `backend_sr`/`frontend_sr` for a schema change, a migration, a new
+  page/route, or logic spanning several modules in that domain. A task's
+  `allowed_paths` must sit entirely in one domain — `src/**`/`tests/**`/`agent/**`
+  for backend, `client/**` for frontend — since backend and frontend never
+  share an agent.
 - **Every phase ends in a reviewer task**, and the first task of phase N depends
   on the reviewer task of phase N−1. That gate is what stops tasks with
   overlapping paths in different phases from ever running concurrently.
@@ -77,10 +84,11 @@ planning, establish for yourself:
   first, then the thing that acts on its own.
 - **Isolate the risky parts** into pure modules with their own CLI inspectors, so
   they are falsifiable without the sim and without a test framework.
-- **`model_hint` matches task risk**: `haiku` for a narrow, fully specified
-  mechanical edit; `sonnet` for ordinary implementation, devops and review;
-  `opus` only where a wrong call is expensive — an ambiguous cross-file change, or
-  a review of a schema change, a migration, a deletion path or a credential.
+- **`model_hint` is only for overriding a role's default model**: `haiku` to
+  downgrade a Jr implementer task that is a narrow, fully specified mechanical
+  edit with no judgement in it; `opus` to flag that the Reviewer should run at
+  opus for this task (a schema change, a migration, a deletion path, or a
+  credential). Leave it unset otherwise — the role already picks sonnet or opus.
 - **Fewer, larger tasks.** Every task is a cold agent that re-reads its context,
   so a task is only worth splitting out when it can run in parallel with another
   or needs a different owner. Two edits to the same file are one task. Splitting
