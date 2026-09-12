@@ -261,11 +261,40 @@ describe('resolveConfigPath and parseConfigArg', () => {
   });
 
   it('prefers the explicit override', () => {
+    // `path.resolve` on win32 would rewrite a drive-less rooted path like
+    // this to the current drive (e.g. `D:\tmp\explicit.json`); an absolute
+    // path must come back byte-for-byte instead.
     expect(resolveConfigPath('/tmp/explicit.json')).toBe('/tmp/explicit.json');
+  });
+
+  it('still resolves a genuinely relative override against cwd', () => {
+    expect(resolveConfigPath('relative.json')).toBe(path.resolve('relative.json'));
   });
 
   it('falls back to a platform path that ends in msfslogger/config.json', () => {
     expect(resolveConfigPath()).toMatch(/msfslogger[\\/]config\.json$/);
+  });
+
+  it('prefers MSFSLOGGER_CONFIG over the platform default, absolute path untouched', () => {
+    const prior = process.env.MSFSLOGGER_CONFIG;
+    process.env.MSFSLOGGER_CONFIG = '/tmp/from-env.json';
+    try {
+      expect(resolveConfigPath()).toBe('/tmp/from-env.json');
+    } finally {
+      if (prior === undefined) delete process.env.MSFSLOGGER_CONFIG;
+      else process.env.MSFSLOGGER_CONFIG = prior;
+    }
+  });
+
+  it('resolves a relative MSFSLOGGER_CONFIG against cwd', () => {
+    const prior = process.env.MSFSLOGGER_CONFIG;
+    process.env.MSFSLOGGER_CONFIG = 'from-env-relative.json';
+    try {
+      expect(resolveConfigPath()).toBe(path.resolve('from-env-relative.json'));
+    } finally {
+      if (prior === undefined) delete process.env.MSFSLOGGER_CONFIG;
+      else process.env.MSFSLOGGER_CONFIG = prior;
+    }
   });
 });
 

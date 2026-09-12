@@ -119,15 +119,27 @@ export function parseConfigArg(argv: readonly string[]): string | undefined {
 }
 
 /**
+ * `path.resolve` on win32 treats a POSIX-style rooted path with no drive
+ * letter (e.g. `/tmp/x.json`) as relative to the current drive, silently
+ * rewriting it to `D:\tmp\x.json`. An already-absolute path — which
+ * `path.isAbsolute` recognizes correctly on every platform, drive letter or
+ * not — is returned as-is; only a genuinely relative path gets resolved
+ * against cwd.
+ */
+function resolveMaybeAbsolute(candidate: string): string {
+  return path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+}
+
+/**
  * Resolution order: explicit override, then MSFSLOGGER_CONFIG, then the
  * platform default. Returns a path even when nothing exists there — a missing
  * config has to be reported with the place it was looked for.
  */
 export function resolveConfigPath(override?: string): string {
-  if (override && override.trim() !== '') return path.resolve(override.trim());
+  if (override && override.trim() !== '') return resolveMaybeAbsolute(override.trim());
 
   const fromEnv = process.env.MSFSLOGGER_CONFIG;
-  if (fromEnv && fromEnv.trim() !== '') return path.resolve(fromEnv.trim());
+  if (fromEnv && fromEnv.trim() !== '') return resolveMaybeAbsolute(fromEnv.trim());
 
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
