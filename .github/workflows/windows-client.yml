@@ -1,0 +1,77 @@
+name: Windows client
+
+# Separate from ci.yml on purpose: this needs a Windows runner (MSVC, WebView2,
+# the Tauri bundler) for work ci.yml's ubuntu-latest job cannot do, and it is
+# scoped to windows-client/ so it does not fire on every unrelated push.
+on:
+  push:
+    paths:
+      - "windows-client/**"
+      - ".github/workflows/windows-client.yml"
+  pull_request:
+    paths:
+      - "windows-client/**"
+      - ".github/workflows/windows-client.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      # windows-client/src-tauri/Cargo.toml pins rust-version = "1.88.0"
+      # (Rust 2024 edition support, needed by the resolved dependency graph).
+      # Pinned to that exact version, not "stable", so a future stable
+      # release cannot silently change the toolchain this CI job builds against.
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      # windows-latest already ships the MSVC build tools and the WebView2
+      # runtime Tauri needs at build and run time; `cargo tauri build` fetches
+      # WiX/NSIS itself for msi/nsis bundling. Nothing else to install.
+
+      # render-check.mjs (windows-client/ui/tools/render-check.mjs) is
+      # deliberately NOT run in this job: it imports `puppeteer`, which is a
+      # dependency of the *root* package.json, not of windows-client or
+      # windows-client/sidecar. Running it here would require a full `npm ci`
+      # at the repo root (including better-sqlite3's native build) that this
+      # path-filtered, windows-client-only workflow has no other reason to
+      # do, for a headless-Chromium screenshot check that has no
+      # Windows-specific rendering value ci.yml/local runs don't already
+      # cover. Omitted, not forgotten.
+
+      - name: Sidecar install
+        working-directory: windows-client/sidecar
+        run: npm ci
+
+      - name: Sidecar typecheck
+        working-directory: windows-client/sidecar
+        run: npm run typecheck
+
+      - name: Sidecar tests
+        working-directory: windows-client/sidecar
+        run: npm test
+
+      - name: Rust <-> webview contract check
+        run: node windows-client/tools/contract-check.mjs
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      - name: Build Tauri app (produces the Windows installer)
+        working-directory: windows-client/src-tauri
+        run: cargo tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msfslogger-windows-client-installer
+          path: |
+            windows-client/src-tauri/target/release/bundle/msi/*.msi
+            windows-client/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

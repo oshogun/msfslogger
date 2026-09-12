@@ -1,0 +1,66 @@
+{
+  "$comment": "Reference copy of design section 6: page map, frozen DOM hooks and the stub-bridge shape. NOT wired into any build. T-006 owns index.html and must create these hooks with exactly these names; T-007 owns the field hooks on the config pages; T-008's render-check.mjs asserts on them.",
+  "pages": [
+    { "id": "STATUS", "title": "ACARS STATUS", "group": "STATUS", "n": 1, "m": 1, "owner": "T-006" },
+    { "id": "MENU", "title": "MSFSLOGGER", "group": "MENU", "n": 1, "m": 1, "owner": "T-006" },
+    { "id": "NETWORK", "title": "CFG NETWORK", "group": "CFG", "n": 1, "m": 3, "owner": "T-007" },
+    { "id": "SIM", "title": "CFG SIM", "group": "CFG", "n": 2, "m": 3, "owner": "T-007" },
+    { "id": "TRAFFIC", "title": "CFG TRAFFIC", "group": "CFG", "n": 3, "m": 3, "owner": "T-007" }
+  ],
+  "domHooks": {
+    "structure": [
+      { "selector": "#fmc-unit", "role": "Bezel root. Everything skeuomorphic hangs off this." },
+      { "selector": "#fmc-screen", "role": "The CDU screen. Carries data-page with the active page id." },
+      { "selector": "#page-title", "role": "Title line text, e.g. CFG NETWORK." },
+      { "selector": "#page-number", "role": "Right-aligned page counter, e.g. 1/3. Empty string for single-page groups." },
+      { "selector": "#page-body", "role": "Container the active page renders into. Page modules never write outside it." },
+      { "selector": "#scratchpad", "role": "Bottom line: typed entry and FMC messages. Carries data-message-kind = entry | error | advisory." },
+      { "selector": "#msg-line", "role": "Dim single-line mirror of the most recent sidecar log message." },
+      { "selector": "#bridge-mode", "role": "Carries data-stub = true|false so the harness can prove which bridge is live." }
+    ],
+    "status": [
+      { "selector": "#status-app", "attrs": ["data-state", "data-severity"], "role": "Control axis line." },
+      { "selector": "#status-sim", "attrs": ["data-state", "data-severity"], "role": "SimConnect axis line." },
+      { "selector": "#status-net", "attrs": ["data-state", "data-severity"], "role": "Backend axis line. Reads exactly ACARS UPLINK when net.ok." },
+      { "selector": "#status-pause", "attrs": ["data-state", "data-severity"], "role": "Pause axis line." },
+      { "selector": "#status-traffic", "attrs": ["data-state"], "role": "Traffic counters. Not an axis; advisory only." },
+      { "selector": "#status-config-path", "role": "Resolved config path, for the user to find the file." },
+      { "selector": "#uplink-prompt", "role": "Text of the START>/STOP> prompt on LSK R6 of the STATUS page." }
+    ],
+    "keys": [
+      { "selector": "[data-lsk]", "values": ["L1", "L2", "L3", "L4", "L5", "L6", "R1", "R2", "R3", "R4", "R5", "R6"] },
+      { "selector": "[data-key]", "values": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "/", "+/-", "SP", "DEL", "CLR", "MENU", "PREV", "NEXT", "EXEC"] }
+    ],
+    "fields": [
+      { "selector": "[data-field=\"serverUrl\"]", "lsk": "L1", "page": "NETWORK", "replaces": "SERVER_URL" },
+      { "selector": "[data-field=\"ingestToken\"]", "lsk": "L2", "page": "NETWORK", "replaces": "INGEST_TOKEN", "masked": true },
+      { "selector": "[data-field=\"certPath\"]", "lsk": "L3", "page": "NETWORK", "replaces": "NODE_EXTRA_CA_CERTS" },
+      { "selector": "[data-field=\"sim\"]", "lsk": "L1", "page": "SIM", "replaces": "--sim / -s" },
+      { "selector": "[data-field=\"autoUplink\"]", "lsk": "L2", "page": "SIM", "replaces": "(new)" },
+      { "selector": "[data-field=\"trafficEnabled\"]", "lsk": "L1", "page": "TRAFFIC", "replaces": "TRAFFIC_ENABLED" },
+      { "selector": "[data-field=\"trafficRadiusM\"]", "lsk": "L2", "page": "TRAFFIC", "replaces": "TRAFFIC_RADIUS_M" }
+    ],
+    "fieldValue": { "selector": "[data-field-value=\"<key>\"]", "role": "The rendered value inside its field element. For ingestToken this is the mask, never the token." }
+  },
+  "stubBridge": {
+    "global": "window.__FMC_STUB__",
+    "createdBy": "windows-client/ui/src/bridge.js, only when window.__TAURI__ (or window.__TAURI_INTERNALS__) is absent",
+    "shape": {
+      "isStub": "true",
+      "config": "{ exists, path, config: RedactedConfig|null, raw: RawConfig-without-ingestToken }",
+      "status": "StatusMessage | null - last status handed to emitStatus",
+      "calls": "Array<{ method: string, args: unknown[], at: number }> - every bridge call, in order",
+      "setConfigResult": "{ ok: true, path } by default; overwrite to test the failure path",
+      "emitStatus": "(status: StatusMessage) => void - delivers to every onStatus listener",
+      "emitLog": "(log: LogMessage) => void",
+      "emitExit": "(payload) => void"
+    }
+  },
+  "fmcMessages": {
+    "INVALID ENTRY": "Scratchpad content does not parse for the field the LSK belongs to.",
+    "ENTRY OUT OF RANGE": "Parses, but outside the accepted range (trafficRadiusM).",
+    "NOT ALLOWED": "LSK pressed on a display-only line, or SAVE with no bridge.",
+    "KEY NOT ACTIVE": "LSK with no field or prompt on that line.",
+    "CONFIG SAVED": "Advisory after a successful config_set."
+  }
+}

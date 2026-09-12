@@ -16,6 +16,18 @@ This is the only supported connection method. Remote SimConnect over TCP (pointi
 
 If the server runs on the **same machine** as MSFS, you don't need the agent — `node-simconnect` connects locally automatically.
 
+### Windows desktop client (in development)
+
+[`windows-client/`](windows-client/) is a Tauri desktop app that aims to
+replace the CLI agent above with a graphical one: the same SimConnect
+connection and HTTP uplink, but every setting configured through an
+FMC-styled on-screen panel instead of environment variables and a `--sim`
+flag, and connection status shown in FMC vocabulary (the connected state
+reads `ACARS UPLINK`). See [`windows-client/README.md`](windows-client/README.md)
+for build instructions, the settings-migration table, and the manual test
+plan. `agent/` above is unaffected and remains the supported way to connect
+until the new client is proven out.
+
 ---
 
 ## Environment variables

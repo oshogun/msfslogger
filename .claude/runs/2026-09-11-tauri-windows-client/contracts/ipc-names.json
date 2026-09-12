@@ -1,0 +1,34 @@
+{
+  "$comment": "Frozen names crossing the Rust/webview seam (design sections 3 and 6). NOT wired into any build. windows-client/tools/contract-check.mjs (T-008) embeds its own copy of these lists as a top-of-file const and checks both sides against it; this file is the reference the Reviewer diffs that const against. No compiler on this machine can catch a rename here, which is the whole reason the list exists.",
+  "protocolVersion": 1,
+  "tauriCommands": [
+    { "name": "config_get", "args": [], "returns": "{ exists: boolean, path: string, config: RedactedConfig | null, raw: RawConfig | null }", "note": "raw omits ingestToken and carries tokenSet instead. Missing file is exists:false, not an error." },
+    { "name": "config_set", "args": ["patch: object"], "returns": "{ ok: true, path: string } | { ok: false, message: string }", "note": "Shallow-merges patch over the on-disk object, writes atomically (temp file + rename in the same directory), then sends the `config` control line to the sidecar. Performs no semantic validation - the sidecar is the authority and reports app.error-config." },
+    { "name": "config_path", "args": [], "returns": "string", "note": "The resolved path, for display on the STATUS/MENU page." },
+    { "name": "uplink_start", "args": [], "returns": "null", "note": "Spawns the sidecar if it is not running, then sends the `start` control line." },
+    { "name": "uplink_stop", "args": [], "returns": "null", "note": "Sends the `stop` control line. The child stays alive." },
+    { "name": "sidecar_restart", "args": [], "returns": "null", "note": "Shutdown then respawn. Resets the restart budget." },
+    { "name": "status_get", "args": [], "returns": "StatusMessage | null", "note": "The last status the supervisor saw, so a reloaded webview paints immediately instead of waiting for the next event." }
+  ],
+  "tauriEvents": [
+    { "name": "sidecar:status", "payload": "StatusMessage", "note": "Forwarded verbatim from the sidecar's stdout, or synthesised by the supervisor for app.crashed / app.restarting." },
+    { "name": "sidecar:log", "payload": "LogMessage", "note": "Sidecar `log` messages plus supervisor-level lines (spawn, exit, decode failure)." },
+    { "name": "sidecar:exit", "payload": "{ code: number | null, signal: string | null, restarting: boolean, restartsRemaining: number }" }
+  ],
+  "bridgeMethods": [
+    { "name": "getConfig", "maps_to": "config_get" },
+    { "name": "setConfig", "maps_to": "config_set" },
+    { "name": "getConfigPath", "maps_to": "config_path" },
+    { "name": "startUplink", "maps_to": "uplink_start" },
+    { "name": "stopUplink", "maps_to": "uplink_stop" },
+    { "name": "restartSidecar", "maps_to": "sidecar_restart" },
+    { "name": "getStatus", "maps_to": "status_get" },
+    { "name": "onStatus", "maps_to": "sidecar:status" },
+    { "name": "onLog", "maps_to": "sidecar:log" },
+    { "name": "onExit", "maps_to": "sidecar:exit" },
+    { "name": "isStub", "maps_to": null, "note": "boolean property: true when no Tauri bridge was found and the stub is in use." }
+  ],
+  "controlMessageTypes": ["start", "stop", "config", "shutdown", "ping"],
+  "sidecarMessageTypes": ["hello", "status", "log", "pong", "frame", "traffic"],
+  "reservedSidecarMessageTypes": ["frame", "traffic"]
+}

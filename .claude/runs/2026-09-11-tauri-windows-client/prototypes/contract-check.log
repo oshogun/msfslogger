@@ -1,0 +1,10 @@
+PASS config_get: Rust src-tauri/src/main.rs:16 | webview ui/src/bridge.js:14
+PASS config_set: Rust src-tauri/src/main.rs:24 | webview ui/src/bridge.js:15
+PASS config_path: Rust src-tauri/src/main.rs:39 | webview ui/src/bridge.js:16
+PASS uplink_start: Rust src-tauri/src/main.rs:45 | webview ui/src/bridge.js:17
+PASS uplink_stop: Rust src-tauri/src/main.rs:48 | webview ui/src/bridge.js:18
+PASS sidecar_restart: Rust src-tauri/src/main.rs:51 | webview ui/src/bridge.js:19
+PASS status_get: Rust src-tauri/src/main.rs:54 | webview ui/src/bridge.js:20
+PASS sidecar:status: Rust src-tauri/src/main.rs:63 | webview ui/src/bridge.js:25
+PASS sidecar:log: Rust src-tauri/src/main.rs:64 | webview ui/src/bridge.js:26
+PASS sidecar:exit: Rust src-tauri/src/main.rs:65 | webview ui/src/bridge.js:27

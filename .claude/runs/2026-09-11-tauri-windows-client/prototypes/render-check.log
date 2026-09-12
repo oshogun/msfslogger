@@ -1,0 +1,48 @@
+Scratch server 127.0.0.1:45481 (never port 3000)
+PASS app.starting: SIDECAR STARTING
+PASS app.no-config: NO CONFIG
+PASS app.error-config: CONFIG INVALID
+PASS app.stopped: UPLINK STOPPED
+PASS app.running: UPLINK ACTIVE
+PASS app.crashed: SIDECAR FAULT
+PASS app.restarting: SIDECAR RESTART
+PASS sim.idle: SIM LINK STANDBY
+PASS sim.connecting: SIM LINK CONNECTING
+PASS sim.connected: SIM LINK ONLINE
+PASS sim.retry: SIM LINK RETRY 05S
+PASS net.idle: ACARS STANDBY
+PASS net.pending: ACARS CONNECTING
+PASS net.ok: ACARS UPLINK
+PASS net.standby: ACARS READY
+PASS net.unauthorized: ACARS REJECT 401
+PASS net.http-error: ACARS FAULT 503
+PASS net.tls-error: ACARS CERT FAULT
+PASS net.unreachable: ACARS NO COMM
+PASS pause.off: PAUSE OFF
+PASS pause.full: SIM PAUSED
+PASS pause.active: ACTIVE PAUSE
+PASS pause.menu: SIM MENU
+PASS pause.unknown: PAUSE 16
+PASS connected: SIM LINK ONLINE | ACARS UPLINK
+PASS sim-down: SIM LINK RETRY 10S | ACARS READY
+PASS backend-down: SIM LINK ONLINE | ACARS NO COMM
+PASS retry-ladder: 05,10,20,40,60,60,60,60,60; local tick 60 -> 59
+PASS unknown: ?? sim.future
+PASS config-network: serverUrl, ingestToken, certPath
+PASS config-sim: sim, autoUplink
+PASS config-traffic: trafficEnabled, trafficRadiusM
+PASS reject serverUrl: INVALID ENTRY; no save
+PASS reject serverUrl empty: INVALID ENTRY; no save
+PASS reject ingestToken empty: INVALID ENTRY; no save
+PASS reject sim: INVALID ENTRY; no save
+PASS reject autoUplink: INVALID ENTRY; no save
+PASS reject trafficRadiusM: ENTRY OUT OF RANGE; no save
+PASS reject trafficRadiusM: ENTRY OUT OF RANGE; no save
+PASS SAVE: full canonical config; untouched token omitted; token absent from all captured DOM text and config returns
+PASS save failure: SAVE FAILED
+PASS navigation: CFG wrap; unfinished secret cleared
+PASS first-run: required boxes; missing config blocks save; GUI creates full config
+PASS invalid-object-repair: current raw preferred to stale config; repair, defaults, token preserved
+PASS window-minimum: panel fits 420x680
+PASS browser errors: none (pageerror and console error both fatal)
+Cleanup: browser closed; scratch server closed

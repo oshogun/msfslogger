@@ -1,0 +1,4 @@
+# Shared workflow entry point: ../AGENTS.md.
+# Roles are discovered from .codex/agents/*.toml.
+[agents]
+enabled = true

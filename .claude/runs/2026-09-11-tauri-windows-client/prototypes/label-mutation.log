@@ -1,0 +1,26 @@
+$ temporary label mutation: label: 'ACARS UPLINK' -> label: 'ACARS BROKEN'
+$ node windows-client/ui/tools/render-check.mjs
+Scratch server 127.0.0.1:35289 (never port 3000)
+PASS app.starting: SIDECAR STARTING
+PASS app.no-config: NO CONFIG
+PASS app.error-config: CONFIG INVALID
+PASS app.stopped: UPLINK STOPPED
+PASS app.running: UPLINK ACTIVE
+PASS app.crashed: SIDECAR FAULT
+PASS app.restarting: SIDECAR RESTART
+PASS sim.idle: SIM LINK STANDBY
+PASS sim.connecting: SIM LINK CONNECTING
+PASS sim.connected: SIM LINK ONLINE
+PASS sim.retry: SIM LINK RETRY 05S
+PASS net.idle: ACARS STANDBY
+PASS net.pending: ACARS CONNECTING
+Cleanup: browser closed; scratch server closed
+FAIL net.ok: net.ok: label
++ actual - expected
+
++ 'ACARS BROKEN'
+- 'ACARS UPLINK'
+         ^
+exit=1
+restored byte-for-byte sha256: True
+$ git diff --stat

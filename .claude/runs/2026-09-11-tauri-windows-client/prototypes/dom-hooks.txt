@@ -1,0 +1,106 @@
+12:    <div id="fmc-unit">
+20:          <button type="button" class="lsk lsk-left" data-lsk="L1" aria-label="Line select key L1"></button>
+21:          <button type="button" class="lsk lsk-left" data-lsk="L2" aria-label="Line select key L2"></button>
+22:          <button type="button" class="lsk lsk-left" data-lsk="L3" aria-label="Line select key L3"></button>
+23:          <button type="button" class="lsk lsk-left" data-lsk="L4" aria-label="Line select key L4"></button>
+24:          <button type="button" class="lsk lsk-left" data-lsk="L5" aria-label="Line select key L5"></button>
+25:          <button type="button" class="lsk lsk-left" data-lsk="L6" aria-label="Line select key L6"></button>
+28:        <div id="fmc-screen" data-page="STATUS">
+31:              <span id="page-title">ACARS STATUS</span>
+32:              <span id="page-number"></span>
+35:            <div id="page-body">
+36:              <div class="page-view" data-page-view="STATUS">
+41:                    id="status-app"
+42:                    data-state="app.starting"
+43:                    data-severity="caution"
+52:                    id="status-sim"
+53:                    data-state="sim.idle"
+54:                    data-severity="idle"
+63:                    id="status-net"
+64:                    data-state="net.idle"
+65:                    data-severity="idle"
+74:                    id="status-pause"
+75:                    data-state="pause.off"
+76:                    data-severity="idle"
+83:                  <span class="cell-l status-line advisory" id="status-traffic" data-state="traffic.idle"
+86:                  <span class="cell-r prompt prompt-hidden" id="restart-prompt">RESTART&gt;</span>
+91:                  <span class="cell-r dim" id="status-config-path">--------</span>
+95:                  <span class="cell-r prompt" id="uplink-prompt">START&gt;</span>
+101:              <span id="scratchpad" data-message-kind="entry"></span>
+108:          <button type="button" class="lsk lsk-right" data-lsk="R1" aria-label="Line select key R1"></button>
+109:          <button type="button" class="lsk lsk-right" data-lsk="R2" aria-label="Line select key R2"></button>
+110:          <button type="button" class="lsk lsk-right" data-lsk="R3" aria-label="Line select key R3"></button>
+111:          <button type="button" class="lsk lsk-right" data-lsk="R4" aria-label="Line select key R4"></button>
+112:          <button type="button" class="lsk lsk-right" data-lsk="R5" aria-label="Line select key R5"></button>
+113:          <button type="button" class="lsk lsk-right" data-lsk="R6" aria-label="Line select key R6"></button>
+118:        <span id="msg-line"></span>
+119:        <span id="bridge-mode" data-stub="false">TAURI</span>
+125:            <button type="button" class="key key-fn" data-key="MENU">MENU</button>
+126:            <button type="button" class="key key-fn" data-key="PREV">PREV</button>
+127:            <button type="button" class="key key-fn" data-key="NEXT">NEXT</button>
+130:            <button type="button" class="key" data-key="1">1</button>
+131:            <button type="button" class="key" data-key="2">2</button>
+132:            <button type="button" class="key" data-key="3">3</button>
+133:            <button type="button" class="key" data-key="4">4</button>
+134:            <button type="button" class="key" data-key="5">5</button>
+135:            <button type="button" class="key" data-key="6">6</button>
+136:            <button type="button" class="key" data-key="7">7</button>
+137:            <button type="button" class="key" data-key="8">8</button>
+138:            <button type="button" class="key" data-key="9">9</button>
+139:            <button type="button" class="key" data-key=".">.</button>
+140:            <button type="button" class="key" data-key="0">0</button>
+141:            <button type="button" class="key" data-key="+/-">+/-</button>
+147:            <button type="button" class="key" data-key="A">A</button>
+148:            <button type="button" class="key" data-key="B">B</button>
+149:            <button type="button" class="key" data-key="C">C</button>
+150:            <button type="button" class="key" data-key="D">D</button>
+151:            <button type="button" class="key" data-key="E">E</button>
+152:            <button type="button" class="key" data-key="F">F</button>
+153:            <button type="button" class="key" data-key="G">G</button>
+154:            <button type="button" class="key" data-key="H">H</button>
+155:            <button type="button" class="key" data-key="I">I</button>
+156:            <button type="button" class="key" data-key="J">J</button>
+157:            <button type="button" class="key" data-key="K">K</button>
+158:            <button type="button" class="key" data-key="L">L</button>
+159:            <button type="button" class="key" data-key="M">M</button>
+160:            <button type="button" class="key" data-key="N">N</button>
+161:            <button type="button" class="key" data-key="O">O</button>
+162:            <button type="button" class="key" data-key="P">P</button>
+163:            <button type="button" class="key" data-key="Q">Q</button>
+164:            <button type="button" class="key" data-key="R">R</button>
+165:            <button type="button" class="key" data-key="S">S</button>
+166:            <button type="button" class="key" data-key="T">T</button>
+167:            <button type="button" class="key" data-key="U">U</button>
+168:            <button type="button" class="key" data-key="V">V</button>
+169:            <button type="button" class="key" data-key="W">W</button>
+170:            <button type="button" class="key" data-key="X">X</button>
+171:            <button type="button" class="key" data-key="Y">Y</button>
+172:            <button type="button" class="key" data-key="Z">Z</button>
+173:            <button type="button" class="key" data-key="/">/</button>
+174:            <button type="button" class="key" data-key="SP">SP</button>
+175:            <button type="button" class="key key-wide" data-key="DEL">DEL</button>
+176:            <button type="button" class="key key-wide" data-key="CLR">CLR</button>
+179:            <button type="button" class="key key-exec" data-key="EXEC">EXEC</button>
+185:    <template id="page-network-template">
+186:      <div class="page-view config-page" data-page-view="NETWORK">
+187:        <div class="config-field" data-field="serverUrl">
+189:          <div class="row row-value"><span class="cell-l" data-field-value="serverUrl"></span></div>
+191:        <div class="config-field" data-field="ingestToken" data-masked="true">
+193:          <div class="row row-value"><span class="cell-l" data-field-value="ingestToken"></span></div>
+195:        <div class="config-field" data-field="certPath">
+197:          <div class="row row-value"><span class="cell-l" data-field-value="certPath"></span></div>
+199:        <div class="config-feedback row row-label" data-config-feedback></div>
+203:    <template id="page-sim-template">
+204:      <div class="page-view config-page" data-page-view="SIM">
+205:        <div class="config-field" data-field="sim">
+207:          <div class="row row-value"><span class="cell-l" data-field-value="sim"></span></div>
+209:        <div class="config-field" data-field="autoUplink">
+211:          <div class="row row-value"><span class="cell-l" data-field-value="autoUplink"></span></div>
+213:        <div class="config-feedback row row-label" data-config-feedback></div>
+217:    <template id="page-traffic-template">
+218:      <div class="page-view config-page" data-page-view="TRAFFIC">
+219:        <div class="config-field" data-field="trafficEnabled">
+221:          <div class="row row-value"><span class="cell-l" data-field-value="trafficEnabled"></span></div>
+223:        <div class="config-field" data-field="trafficRadiusM">
+225:          <div class="row row-value"><span class="cell-l" data-field-value="trafficRadiusM"></span></div>
+227:        <div class="config-feedback row row-label" data-config-feedback></div>

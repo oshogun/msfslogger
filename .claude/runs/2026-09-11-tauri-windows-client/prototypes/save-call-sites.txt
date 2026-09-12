@@ -1,0 +1,3 @@
+windows-client/ui/src/pages/index.js:155:    const result = await fmc.bridge.setConfig(patch);
+windows-client/ui/src/bridge.js:114:    setConfig: (patch) => host.invoke(COMMANDS.configSet, { patch }),
+windows-client/ui/src/bridge.js:189:    async setConfig(patch) {

@@ -1,0 +1,490 @@
+{
+  "run_id": "2026-09-11-tauri-windows-client",
+  "goal": "Replace the CLI-and-env-var Windows agent (agent/agent.js) with a Tauri desktop app under a new top-level windows-client/ directory: a Node sidecar (adapted from agent/agent.js + agent/traffic.js) keeps all SimConnect and HTTP-uplink logic and is driven entirely by an on-disk JSON config file instead of SERVER_URL / INGEST_TOKEN / NODE_EXTRA_CA_CERTS / TRAFFIC_ENABLED / TRAFFIC_RADIUS_M / --sim; a Tauri (Rust) shell owns the native window, the sidecar's process lifecycle and the config file; and a skeuomorphic FMC-styled webview UI exposes every setting graphically and shows connection state in FMC vocabulary, with the connected state labelled exactly ACARS UPLINK. agent/** stays as-is as the fallback until the new client is proven on the user's real Windows box.",
+  "frozen_decisions": [
+    "User story acceptance criterion 1, verbatim: 'A Tauri-based Windows desktop client can connect to the backend server.'",
+    "User story acceptance criterion 2, verbatim: 'Users can configure connection settings entirely through the UI (no required CLI/env vars).'",
+    "User story acceptance criterion 3, verbatim: 'Connection status visibly changes in the UI, with connected state labeled ACARS UPLINK.'",
+    "User story acceptance criterion 4, verbatim: 'UI style and labels reflect an FMC-inspired, aviation-themed interaction model.'",
+    "User story acceptance criterion 5, verbatim: 'Existing CLI agent functionality is functionally matched for connection/configuration behavior.'",
+    "Architecture (confirmed with the user): SimConnect/HTTP logic stays in Node (reuse node-simconnect, proven in agent/agent.js and agent/traffic.js), running as a sidecar process. Tauri (Rust) owns: native window, the FMC-styled config/status UI, sidecar process lifecycle (spawn/restart/stop), and reading/writing the on-disk config file that the sidecar also reads. The exact IPC shape is Design's job, but the sidecar-over-IPC shape \u2014 not a pure Rust rewrite, not a direct SimConnect binding in Rust \u2014 is frozen.",
+    "Architecture (confirmed with the user): new code lives entirely under a new top-level directory windows-client/ (not under agent/** or client/**). windows-client/ contains both the Rust/Tauri side and the Node sidecar side, the latter adapted from agent/agent.js + agent/traffic.js \u2014 reuse the logic, but it now speaks the new IPC protocol instead of logging to console.",
+    "Environment (confirmed with the user): this machine has no Rust/cargo, no Windows and no webview runtime, so nothing in windows-client/ can be compiled or executed end-to-end here \u2014 the same situation agent/** has always been in. No task's Definition of Done may require cargo build, cargo test, tauri dev, or running the actual GUI. Every Rust-touching task states that the user must be the one to build and run it.",
+    "Scope (confirmed with the user): the existing agent/** Node CLI is untouched by this run \u2014 not deleted, not modified. It remains the fallback until the new client is proven on a real Windows box.",
+    "Scope (confirmed with the user): Ship/DevOps scope is limited to CI/packaging config (a GitHub Actions windows-latest job that can really run cargo/tauri build). No code-signing or installer-signing \u2014 that needs credentials and is out of scope; escalate if it comes up."
+  ],
+  "sequencing_rationale": [
+    "Three phases, each ending in a reviewer gate, and the first task of each phase depends on the previous phase's reviewer. Phase 1 ships a config-file-driven sidecar the user can run on Windows today (a strict improvement on agent.js: no env vars), phase 2 ships the actual Tauri app and the FMC panel around it, phase 3 ships the Windows CI build plus the documentation and manual test plan the user needs to exercise it.",
+    "The sidecar ships before the GUI that supervises it, which is the escape-hatch-before-automation rule applied at phase granularity: if the Tauri shell misbehaves on the user's box, a plain `node windows-client/sidecar/dist/index.js --config <file>` is still a working agent, and agent/** is untouched behind that.",
+    "Escape hatch inside phase 2 as well: the app does not auto-start the sidecar. Manual START/STOP is the baseline behaviour and an `autoUplink` config flag (default false) is the automation layered on top, so a crash-looping sidecar can never make the app unusable at launch.",
+    "All four contracts this run introduces (IPC protocol, config schema, FMC status vocabulary, windows-client module boundaries) are frozen by one designer task at the head of phase 1, in a design.md whose section numbering is itself part of the Definition of Done \u2014 every downstream task cites `ctx.sh design 2026-09-11-tauri-windows-client <n>` and those citations must resolve.",
+    "The planner verified, on this machine, every verification command the plan names, so no task's DoD rests on a tool that turns out to be missing: (a) `npm install node-simconnect` succeeds on Linux and `require('node-simconnect')` loads \u2014 it is pure JS, no native addon \u2014 so the sidecar typechecks against real types here; (b) `open('probe', Protocol.KittyHawk)` rejects in ~21 ms with `connect ECONNREFUSED 127.0.0.1:2048` on Linux, so the sidecar's full connect-fail-backoff-retry loop is observable here without a sim; (c) `npx vitest run --config <config inside the repo>` works using the root vitest install when the config sets `root: __dirname`, so sidecar tests live entirely under windows-client/ and no root vitest.config.ts edit is needed; (d) puppeteer is already a root runtime dependency and launches headless Chromium with --no-sandbox and screenshots successfully, so the FMC webview can be rendered, asserted on and screenshotted here; (e) `jq`, python3 `tomllib` and python3 `yaml` are available for Cargo.toml / tauri.conf.json / workflow structural checks. cargo, rustc, gh and actionlint are NOT available.",
+    "Only the Rust side and the real WebView2 rendering are unverifiable here, and each is given the strongest check this machine allows instead of a hand-wave: Cargo.toml/tauri.conf.json parse checks, and a contract-check tool that greps the frozen command/event names out of src-tauri/** and ui/src/bridge.js and fails if either side is missing one. That tool is what catches the Rust-to-webview seam breaking without a compiler.",
+    "The risky, decision-dense parts are isolated into pure modules with CLI inspectors, following the repo's existing style: config.ts (validation, with bad-*.json fixtures each exiting 1 with a one-line reason), status.ts (the FMC state table as a pure function), protocol.ts (IPC codec), traffic.ts (the direct port of agent/traffic.js's buildTrafficBatch). All four are unit-tested here; the SimConnect wiring that cannot be tested here is kept as thin as possible around them, exactly as agent/traffic.js is kept free of node-simconnect today.",
+    "Phase 2 puts the Rust task and the UI tasks in one phase with one reviewer rather than two phases, because the UI depends on the frozen bridge contract (design \u00a76) and not on the Rust code: T-005 (src-tauri/**) and T-006 (ui/**) have disjoint allowed_paths and run in parallel, and the phase's single reviewer checks both sides of the seam against the same frozen table, which is a better gate than reviewing each half blind.",
+    "File ownership inside windows-client/ui is assigned deliberately so the sequential UI tasks never edit the same file: T-006 owns index.html, css/fmc.css, src/bridge.js, src/status.js, src/app.js; T-007 owns src/pages/** and css/pages.css; T-008 owns ui/tools/** and windows-client/tools/**.",
+    "Domain routing note carried into every task: none of windows-client/** is under the roles' usual home turf (backend = src/**, tests/**, agent/**; frontend = client/**). Routing is by task content \u2014 the Node sidecar, the Rust shell and the CI/packaging work are backend/devops, the webview panel is frontend \u2014 and every task record says so, so a cold implementer is not confused by unfamiliar allowed_paths.",
+    "Model policy: designer and the two senior implementer roles run at their default opus because they decide everything downstream and none of it is compiler-checked here. The phase-1 and phase-2 reviewers are pinned to opus because the config carries the ingest token (a credential) and the Rust side writes it to disk. The UI page task, the harness task, the docs task, the CI task and the final review keep their sonnet defaults; nothing in this plan is mechanical enough for haiku."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Contracts frozen, and a config-file-driven sidecar that matches the CLI agent",
+      "ships": "The user can drop windows-client/sidecar on the Windows box and run it with a JSON config file instead of environment variables and the --sim flag: same SimConnect connect/reconnect/pause/traffic behaviour as agent/agent.js, same HTTP uplink to the server, plus machine-readable FMC status lines on stdout. No GUI yet, but the env-var requirement (acceptance criterion 2's hard part) is already gone.",
+      "tasks": [
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "The app: Tauri shell, sidecar supervision and the skeuomorphic FMC panel",
+      "ships": "The Windows desktop app itself \u2014 a native window running a skeuomorphic FMC panel with LSK-driven config pages for every setting, START/STOP control of the uplink, and a live status display whose connected state reads ACARS UPLINK. The user builds and runs it on Windows; on this machine the panel is proven by headless-Chromium screenshots and a contract check across the Rust/webview seam.",
+      "tasks": [
+        "T-013",
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008",
+        "T-009"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Windows CI build, documentation and the manual test plan",
+      "ships": "A GitHub Actions windows-latest job that really compiles the Tauri app and runs the sidecar checks (the build this machine cannot do), plus windows-client/README.md with the install/build steps, the FMC vocabulary table, and a numbered manual test plan the user runs against MSFS to sign off the five acceptance criteria.",
+      "tasks": [
+        "T-010",
+        "T-011",
+        "T-012"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the four contracts: config schema, Tauri-sidecar IPC, FMC status vocabulary, windows-client module boundaries",
+      "goal": "Write .claude/runs/2026-09-11-tauri-windows-client/design.md freezing everything the rest of this run builds against. Read agent/agent.js, agent/traffic.js and agent/README.md first and derive the contracts from the behaviour that is actually there \u2014 this is a port with a new front end, not a redesign of what the agent does on the wire. The section numbering below is part of the contract: every downstream task cites `ctx.sh design 2026-09-11-tauri-windows-client <n>`, so the headings must be exactly `## 1.` \u2026 `## 7.` in this order: 1 Scope and non-goals, 2 Config file (location, schema, validation, error handling, TLS/CA and token handling), 3 Tauri <-> sidecar IPC protocol, 4 FMC status vocabulary, 5 Directory and module boundaries with the verification command for each area, 6 UI contract (page map, DOM ids, Tauri command/event names, stub bridge, skeuomorphic style rules), 7 Windows-only manual verification plan outline and the explicit list of what cannot be verified on Linux. Facts the planner verified on this machine and you should design against rather than re-derive: node-simconnect installs and loads on Linux (pure JS, ships its own .d.ts) and open() rejects in ~21 ms with `connect ECONNREFUSED 127.0.0.1:2048`, so the sidecar's connect-fail/backoff path is observable here; `npx vitest run --config windows-client/sidecar/vitest.config.ts` works from the repo root against the root vitest install when the config sets `root: __dirname`; puppeteer is a root dependency and launches headless Chromium with --no-sandbox; module scripts are blocked over file:// so the webview must be servable over http://127.0.0.1 for headless checks; jq, python3 tomllib and python3 yaml exist; cargo, rustc, gh and actionlint do not.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-11-tauri-windows-client/design.md",
+        ".claude/runs/2026-09-11-tauri-windows-client/contracts/**"
+      ],
+      "acceptance_criteria": [
+        "design.md exists with H2 headings numbered exactly `## 1.` through `## 7.` in the order listed in the goal, and `.claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 4 5 6` returns five non-empty, non-overlapping sections (run it and paste the first line of each).",
+        "\u00a72 gives the config file's default resolution order, including the Windows path (%APPDATA%\\msfslogger\\config.json or the Tauri app-config dir, whichever you pick \u2014 state it) and a Linux/XDG path so the sidecar is runnable on this dev machine, plus an OPTIONAL `--config <path>` override used only for testing. It states in one sentence that no CLI flag and no environment variable is required for normal operation (acceptance criterion 2).",
+        "\u00a72 contains a table with one row per setting mapping today's mechanism to the new one: SERVER_URL, INGEST_TOKEN, NODE_EXTRA_CA_CERTS (certificate path), TRAFFIC_ENABLED, TRAFFIC_RADIUS_M and --sim/-s each appear, with JSON key, JSON type, default, and validation rule. No setting from agent/README.md's env-var table is missing.",
+        "\u00a72 states the validation rules preserved verbatim from today's behaviour: sim accepts only 2020 | 2024 | fsx case-insensitively (2020 -> Protocol.KittyHawk, 2024 -> Protocol.SunRise, fsx -> Protocol.FSX_SP2) and rejects anything else; trafficRadiusM is Math.round-ed then clamped to [1000, 200000] with a non-finite value falling back to 40000 plus a warning; trafficEnabled is false only for the set {0, false, off, no} (case-insensitive, trimmed); serverUrl must be http(s) and is stated to be required; ingestToken is required (the server 401s without a matching one).",
+        "\u00a72 states what the sidecar does when the config is missing or invalid while running under a GUI supervisor, and explicitly contrasts it with agent/agent.js's `process.exit(1)`: the sidecar must not exit-loop \u2014 it reports an error state over IPC and waits for a new config. Name the state id it reports.",
+        "\u00a72 states the ingest-token redaction rule: where the token may and may not appear (stdout JSON lines, stderr logs, IPC payloads to the webview, screenshots, the UI field), in a form an implementer can check with grep.",
+        "\u00a72 decides how the server's self-signed certificate is trusted, given Node reads NODE_EXTRA_CA_CERTS only at process start: pick one of (a) Tauri passes NODE_EXTRA_CA_CERTS to the spawned child from config.certPath, (b) the sidecar re-execs itself with the env set when config.certPath is present and the env is not, (c) an undici dispatcher with a custom CA passed to fetch. State which, state the fallback if it fails, and state how the standalone (no-Tauri) run gets the same behaviour \u2014 phase 1 ships without Tauri, so option (a) alone is insufficient.",
+        "\u00a73 specifies the IPC completely: the framing (one JSON object per line on the sidecar's stdout, stderr reserved for human-readable logs, or whatever you choose \u2014 state it), every sidecar->Tauri message type with its exact field names and types, every Tauri->sidecar message type likewise, behaviour on a malformed or oversized line, and the rule that an unknown message type is ignored rather than fatal.",
+        "\u00a73 specifies process lifecycle: how the sidecar is spawned (argv, cwd, env), what happens on unexpected child exit (restart policy and whether it backs off), what happens on config change (restart vs in-place reload \u2014 pick one and say how the sidecar is told), how a user-initiated STOP is delivered and how long the shell waits before killing, and the guarantee that the child is terminated when the window closes so no orphan keeps posting to the server.",
+        "\u00a74 is a state table with one row per state: internal state id (the string the sidecar emits), the FMC display label, which of the two independent axes it belongs to (SimConnect link vs backend reachability \u2014 agent/README.md treats these as independent and so must this), and the condition that enters it. The table covers at minimum: starting, no config, invalid config, SimConnect connecting, SimConnect connected, SimConnect lost with retry countdown (5 s doubling to a 60 s cap, matching agent/agent.js's nextReconnectDelayMs), backend reachable, backend returning non-2xx, backend unreachable, sim paused (with the Pause_EX1 flag decoding agent/agent.js's describePause already does), uplink stopped by the user, sidecar crashed.",
+        "\u00a74 states that the backend-connected label is exactly the string `ACARS UPLINK` (acceptance criterion 3), and states explicitly how both axes are readable on screen at the same time \u2014 one label cannot be allowed to hide the other, since SimConnect being down and the server being down are different problems with different fixes.",
+        "\u00a75 fixes the windows-client/ directory layout (src-tauri/, sidecar/, ui/, tools/) down to the file names the plan's allowed_paths already assume, and for each area names the exact verification command runnable on this Linux machine \u2014 the tsc invocation, the vitest invocation, the inspector invocations, the render check, the contract check \u2014 and lists what can only be verified on Windows.",
+        "\u00a75 states that the sidecar is TypeScript with its own tsconfig.json and vitest.config.ts under windows-client/sidecar/, that it is typechecked with `npx tsc --noEmit -p windows-client/sidecar/tsconfig.json` and tested with `npx vitest run --config windows-client/sidecar/vitest.config.ts` from the repo root, and that neither the root tsconfig.json, the root vitest.config.ts nor the root package.json is modified by this run.",
+        "\u00a76 freezes the UI contract: the page map (at minimum a status page and the config pages), the DOM id or data-attribute of every element the render-check harness will assert on, the exact Tauri command names and event names crossing the bridge (identical strings to \u00a73's message types or an explicit mapping table), and the shape of the stub bridge that lets windows-client/ui/index.html run in a plain headless browser with no Tauri present.",
+        "\u00a76 states the skeuomorphic rules concretely enough to review against: colour palette with hex values, the font stack (no CDN or network font \u2014 the app is offline), bezel/screen/LSK layout, how LSK entry and the scratchpad work, and at least three named FMC conventions the UI adopts (e.g. scratchpad error messages like INVALID ENTRY, page title with page n/m, prompt arrows).",
+        "\u00a77 lists the Windows-only manual test plan as numbered steps with the expected observation for each, covering all five user-story acceptance criteria, and a separate explicit list of what cannot be verified on Linux (cargo build, tauri build, WebView2 rendering fidelity, a real SimConnect session, a real HTTPS server with the self-signed certificate).",
+        "The design does not change any server-side contract: it states that the sidecar posts to POST /api/ingest/frame, /api/ingest/event and /api/ingest/traffic with the x-ingest-token header and the exact body shapes agent/agent.js sends today, and that no file under src/**, tests/**, agent/** or client/** is modified by this run."
+      ],
+      "context": [
+        "agent/agent.js",
+        "agent/traffic.js",
+        "agent/README.md",
+        ".claude/runs/2026-09-11-tauri-windows-client/intake.md",
+        ".claude/ENVIRONMENT.md"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "backend_sr",
+      "title": "Sidecar project skeleton plus the pure modules: config loader/validator, FMC status table, IPC codec, inspect-config",
+      "goal": "Create windows-client/sidecar as a self-contained Node 20 + TypeScript project and implement the three pure modules the rest of the sidecar is built on, per design \u00a72, \u00a73, \u00a74 and \u00a75. Deliberate constraint carried over from agent/traffic.js: none of config.ts, status.ts or protocol.ts may import node-simconnect or touch the network, so all three are fully unit-testable on this Linux machine. node-simconnect is declared as a dependency of this package (it installs and loads fine on Linux \u2014 verified \u2014 it simply cannot connect here). Also ship inspect-config, a CLI inspector in the style of src/inspect-*.ts, that resolves and prints an effective config with the token redacted. Domain note: these allowed_paths are outside the backend role's usual src/**, tests/**, agent/** home turf because this run adds a new top-level directory; routing is by content \u2014 this is Node/TypeScript service code. Do not touch agent/**, client/** or src/**; agent/agent.js stays as the fallback.",
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [
+        "windows-client/sidecar/package.json",
+        "windows-client/sidecar/package-lock.json",
+        "windows-client/sidecar/tsconfig.json",
+        "windows-client/sidecar/vitest.config.ts",
+        "windows-client/sidecar/src/config.ts",
+        "windows-client/sidecar/src/status.ts",
+        "windows-client/sidecar/src/protocol.ts",
+        "windows-client/sidecar/src/inspect-config.ts",
+        "windows-client/sidecar/samples/config/**",
+        "windows-client/sidecar/tests/config.test.ts",
+        "windows-client/sidecar/tests/status.test.ts",
+        "windows-client/sidecar/tests/protocol.test.ts",
+        "windows-client/.gitignore"
+      ],
+      "acceptance_criteria": [
+        "Under Node 20 (`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20`), `npx tsc --noEmit -p windows-client/sidecar/tsconfig.json` exits 0 from the repo root. tsconfig has strict: true.",
+        "`npx vitest run --config windows-client/sidecar/vitest.config.ts` from the repo root exits 0 and reports at least 25 passing tests. The config sets `root: __dirname` so the root vitest.config.ts is not read and not modified (this invocation was verified working by the planner against the root vitest 4.1.11 install); `git status --porcelain vitest.config.ts tsconfig.json package.json` is empty.",
+        "config.ts implements every validation rule in design \u00a72, and tests/config.test.ts asserts each one by table: sim accepted as '2020', '2024', 'fsx', 'FSX', ' 2024 ' if trimming is specified, and rejected for '2019', 'msfs', '' and a number; trafficRadiusM at 999 -> 1000, 1000 -> 1000, 40000 -> 40000, 200001 -> 200000, 1500.6 -> 1501, 'abc' -> 40000 with the documented warning; trafficEnabled false for each of 0, '0', false, 'false', 'OFF', 'no' and true for unset, '', 'yes', 1; missing serverUrl rejected; non-http(s) serverUrl rejected; missing ingestToken rejected.",
+        "`npx tsc -p windows-client/sidecar/tsconfig.json` then `node windows-client/sidecar/dist/inspect-config.js windows-client/sidecar/samples/config/good.json` exits 0 and prints the resolved effective config, and `node windows-client/sidecar/dist/inspect-config.js windows-client/sidecar/samples/config/good.json | grep -c \"$(node -e \"process.stdout.write(require('./windows-client/sidecar/samples/config/good.json').ingestToken)\")\"` prints 0 \u2014 the token never appears in inspector output. The token value in the committed sample is an obvious placeholder, not a real secret.",
+        "At least six `windows-client/sidecar/samples/config/bad-*.json` fixtures exist, one per rejection rule (missing serverUrl, bad scheme, missing ingestToken, bad sim value, malformed JSON, wrong type for a field), and `for f in windows-client/sidecar/samples/config/bad-*.json; do node windows-client/sidecar/dist/inspect-config.js \"$f\" >/dev/null 2>&1; echo \"$f -> $?\"; done` prints `-> 1` for every one. Running any single bad fixture prints a one-line human reason naming the offending field, and no stack trace (paste all six lines in the report).",
+        "status.ts implements design \u00a74's table as a pure function with no I/O and no imports beyond types: every state id in \u00a74 has a case, the function returns the display label plus which axis it belongs to, the backend-connected label is exactly the string `ACARS UPLINK`, and tests/status.test.ts asserts the table row by row so that adding, renaming or dropping a row in \u00a74 without updating code fails the suite.",
+        "The retry-countdown state reproduces agent/agent.js's backoff exactly: a pure nextReconnectDelayMs-equivalent is asserted for attempts 0..8 giving 5000, 10000, 20000, 40000, 60000, 60000, 60000, 60000, 60000.",
+        "protocol.ts encodes and decodes every message type in design \u00a73 in both directions, with round-trip tests, and decoding a malformed line, a non-JSON line, an unknown type and an oversized line returns a typed error result rather than throwing (asserted in tests/protocol.test.ts).",
+        "`npm ls node-simconnect --prefix windows-client/sidecar` shows the pinned version and `node -e \"require('node-simconnect')\"` run with cwd windows-client/sidecar exits 0 on this Linux machine, proving the dependency installs here even though it cannot connect.",
+        "`git status --porcelain` shows changes only under windows-client/ and `.claude/runs/2026-09-11-tauri-windows-client/`; `git status --porcelain agent/ client/ src/ tests/` is empty.",
+        "windows-client/.gitignore covers node_modules/, dist/ and the Rust target/ directory so no build output is ever committed."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 4 5",
+        "agent/traffic.js",
+        "agent/agent.js",
+        "src/inspect-legmatch.ts"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "backend_sr",
+      "title": "Sidecar runtime: HTTP uplink, traffic port, SimConnect runner, entrypoint and stdin control",
+      "goal": "Build the running sidecar on top of T-002's pure modules, per design \u00a72, \u00a73 and \u00a74: uplink.ts (the postJson/x-ingest-token layer plus the TLS/CA decision from \u00a72), traffic.ts (a port of agent/traffic.js's buildTrafficBatch with the env-var reading removed \u2014 the radius now comes from config), simconnect.ts (the data definitions, the 1 Hz request, the Pause_EX1 and legacy pause events, the 2 s traffic sweep throttle, the reconnect backoff, all lifted from agent/agent.js), index.ts (resolve config, emit \u00a73 status lines on stdout, accept \u00a73 control messages on stdin, never exit-loop on bad config), and inspect-uplink.ts (a CLI inspector that posts a synthetic frame, event and traffic batch to the configured server so the uplink is falsifiable without a sim). On this Linux machine the whole loop is observable: open() rejects in ~21 ms with `connect ECONNREFUSED 127.0.0.1:2048`, so a run here exercises config load, status emission, connect failure, backoff and retry for real. Domain note: allowed_paths are outside the backend role's usual home turf because this run adds a new top-level directory; this is Node service code. Any scratch HTTP server you start uses port 3100 or above and never port 3000, and nothing touches flights.db.",
+      "depends_on": [
+        "T-002"
+      ],
+      "allowed_paths": [
+        "windows-client/sidecar/src/uplink.ts",
+        "windows-client/sidecar/src/traffic.ts",
+        "windows-client/sidecar/src/simconnect.ts",
+        "windows-client/sidecar/src/index.ts",
+        "windows-client/sidecar/src/inspect-uplink.ts",
+        "windows-client/sidecar/tests/traffic.test.ts",
+        "windows-client/sidecar/tests/uplink.test.ts",
+        "windows-client/sidecar/package.json"
+      ],
+      "acceptance_criteria": [
+        "`npx tsc --noEmit -p windows-client/sidecar/tsconfig.json` and `npx vitest run --config windows-client/sidecar/vitest.config.ts` both exit 0 under Node 20, with at least 15 tests added by this task.",
+        "traffic.ts's buildTrafficBatch is behaviourally identical to agent/traffic.js's, and tests/traffic.test.ts covers all seven documented steps: drop the user by object id, drop by position within 0.0001 deg, drop non-integer or negative ids, drop non-finite lat/lon/altitudeFt/headingDeg, drop on-ground aircraft under 1 kt, de-duplicate by id keeping first-occurrence order with last-occurrence value, truncate at 200 objects. The emitted object carries id, lat, lon, altitudeFt, headingDeg, onGround and drops groundSpeedKnots.",
+        "traffic.ts reads no environment variable: `grep -n 'process.env' windows-client/sidecar/src/traffic.ts` returns nothing, and the radius is a parameter supplied from config.",
+        "The uplink is proven against a scratch server: start a throwaway logging HTTP server on port 3100 (never 3000), run `node windows-client/sidecar/dist/inspect-uplink.js --config <scratch config pointing at http://127.0.0.1:3100>`, and show the captured requests \u2014 POST /api/ingest/frame, POST /api/ingest/event and POST /api/ingest/traffic, each with `x-ingest-token` equal to the configured token and Content-Type application/json. Paste the captured header and body of the frame request and confirm its fields match agent/agent.js's exactly: lat, lon, altitudeFt, airspeedKnots, groundSpeedKnots, headingDeg, verticalSpeedFpm, onGround, simRunning, aircraft.",
+        "A non-2xx response and a connection refusal are both handled without throwing into the caller (as postJson does today) and both surface as the backend-axis states from design \u00a74 \u2014 shown by pointing the same inspector at a server that returns 500 and at a closed port, with the emitted status lines pasted.",
+        "Running the entrypoint on this machine, `timeout 30 node windows-client/sidecar/dist/index.js --config <scratch config>`, emits JSON lines on stdout that protocol.ts decodes, shows the SimConnect connect attempt failing with ECONNREFUSED 127.0.0.1:2048 (expected \u2014 there is no sim here), shows the retry states with delays of 5 s then 10 s, and does not exit within the 30 s window. Paste the observed lines.",
+        "The same 30 s run with a deliberately invalid config emits the \u00a72 invalid-config state and stays alive: the process is still running at timeout (exit code 124 from `timeout`) and there is no repeated spawn/exit cycle. `grep -rn 'process.exit(1)' windows-client/sidecar/src/index.ts` returns nothing, or every hit is justified in the report as a path unreachable under supervision.",
+        "stdin control works per \u00a73: piping the stop message exits 0 within 2 s, and piping the config-change message applies the new config per \u00a73's chosen semantics (in-place reload or self-restart) with a status line proving it. Paste both commands and their output.",
+        "The TLS/CA mechanism chosen in design \u00a72 is implemented and works for the standalone run (no Tauri present): the report names the code path and shows evidence (child env, a status line, or a successful request against a scratch HTTPS server using a throwaway self-signed certificate generated in the scratchpad \u2014 never the repo's certs/ directory).",
+        "A parity table in the report lists each behaviour of agent/agent.js \u2014 1 Hz simObjectData request, the ten flight-data fields in registration order, simRunning 3 when slew is active else 2, Pause_EX1 preferred over legacy Paused/Unpaused once seen, describePause flag decoding, crashed and flightLoaded events, connected/disconnected events posted to /api/ingest/event, traffic sweep every 2000 ms only when enabled, reconnect backoff with the single-pending-reconnect guard \u2014 and names the file and line in the port that implements it. Any deliberate difference is listed with its reason.",
+        "The token is never printed: `timeout 15 node windows-client/sidecar/dist/index.js --config <scratch config> 2>&1 | grep -c <token value>` prints 0.",
+        "`git status --porcelain agent/ client/ src/ tests/` is empty and all other changes are inside windows-client/."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 4",
+        "agent/agent.js",
+        "agent/traffic.js",
+        "windows-client/sidecar/src/config.ts",
+        "windows-client/sidecar/src/protocol.ts",
+        "windows-client/sidecar/src/status.ts"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "reviewer",
+      "title": "Review phase 1: config contract, credential handling and CLI-agent parity",
+      "goal": "Review T-002 and T-003 against design \u00a72, \u00a73, \u00a74 and \u00a75 by re-running their evidence rather than trusting the reports. The two things to be hardest on: the ingest token is a credential and must not leak into stdout, stderr, committed samples or IPC payloads it does not need to be in; and 'functionally matched' (user acceptance criterion 5) means a line-by-line comparison against agent/agent.js, not a vibe.",
+      "depends_on": [
+        "T-002",
+        "T-003"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-11-tauri-windows-client/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Every command named in the T-002 and T-003 reports is re-run and its actual output recorded: tsc, vitest, both inspectors against good and all bad fixtures, the 30 s entrypoint run, the scratch-server uplink capture, the invalid-config run and the stdin control commands.",
+        "The parity table from T-003 is checked item by item against agent/agent.js, and any behaviour present there but missing in the port is raised as a finding with the agent.js line number.",
+        "Credential handling is verified independently: grep the whole of windows-client/ for the sample token value and for any real-looking secret, confirm committed sample configs contain placeholders only, and confirm no status line, log line or IPC message carries the token.",
+        "Scope is verified: `git status --porcelain agent/ client/ src/ tests/` is empty, the root package.json, tsconfig.json and vitest.config.ts are unmodified, and no scratch database or server on port 3000 was involved.",
+        "Design conformance is checked per section: every \u00a72 validation rule has a test, every \u00a73 message type is implemented in protocol.ts, every \u00a74 state id is reachable in code, and any drift between design and code is a finding naming both sides.",
+        "The review verdict is approve or request_changes with numbered findings, each naming the file, the line and the command that exposed it, written to .claude/runs/2026-09-11-tauri-windows-client/reviews/."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 4 5",
+        ".claude/tools/ctx.sh task 2026-09-11-tauri-windows-client T-002 T-003",
+        "agent/agent.js"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-005",
+      "role": "backend_sr",
+      "title": "Tauri shell: window, sidecar supervisor, config file commands and event forwarding",
+      "goal": "Build windows-client/src-tauri \u2014 the Rust side \u2014 per design \u00a73, \u00a75 and \u00a76: the Tauri v2 app manifest and Cargo manifest, a sidecar supervisor that spawns the Node sidecar with the config path and the \u00a72 environment, reads its stdout line by line, decodes the \u00a73 messages and forwards them to the webview as Tauri events, plus the commands the UI calls to read the config, write it atomically, start the uplink, stop it and request a restart. The escape hatch ships before the automation: the sidecar is NOT started at app launch unless config.autoUplink is true, and that flag defaults to false \u2014 manual START/STOP is the baseline. Domain note: this is Rust process-lifecycle and IPC code routed to a backend role by content, not by path; windows-client/src-tauri/** is outside the usual src/**, tests/**, agent/** home turf. CRITICAL ENVIRONMENT CONSTRAINT: there is no cargo and no rustc on this machine (`command -v cargo` is empty) and there is no Windows or WebView2 runtime, so you cannot compile or run any of this. Do not attempt to install a Rust toolchain. Write it to be reviewed structurally, keep the unsafe-to-get-wrong parts small and commented, and hand the user the exact build commands to run on Windows.",
+      "depends_on": [
+        "T-004"
+      ],
+      "allowed_paths": [
+        "windows-client/src-tauri/**"
+      ],
+      "acceptance_criteria": [
+        "`python3 -c \"import tomllib; tomllib.load(open('windows-client/src-tauri/Cargo.toml','rb')); print('ok')\"` prints ok, and the manifest pins explicit versions for tauri and every other dependency (no `*` and no git dependencies) \u2014 paste the dependency block.",
+        "`jq . windows-client/src-tauri/tauri.conf.json` exits 0, and the report shows: the frontend path pointing at ../ui as frozen in design \u00a75, the window title and default size, the bundle targets for Windows (msi and/or nsis), and NO signing-related keys \u2014 signing is explicitly out of scope for this run.",
+        "Every Tauri command name and every emitted event name frozen in design \u00a73/\u00a76 appears in the Rust source, each exactly once as a definition: `grep -rn '#\\[tauri::command\\]' -A1 windows-client/src-tauri/src/` and `grep -rn 'emit' windows-client/src-tauri/src/` are pasted in the report, annotated against the frozen name list, with no name missing and no undeclared extra.",
+        "The supervisor reads the sidecar's stdout line by line and decodes each line as one \u00a73 message; a malformed or non-JSON line is routed to a log buffer and never panics or kills the app. Name the file and line of the decode path and of its error branch.",
+        "Unexpected child exit is handled per design \u00a73's restart policy, with the policy restated in a code comment next to the implementation, and a bounded restart rate so a crash-looping sidecar cannot spin the machine (name the bound).",
+        "The child is terminated when the window closes or the app exits, so no orphaned sidecar keeps posting to the server \u2014 name the handler and the kill path.",
+        "Config writes are atomic (write to a temporary file in the same directory, then rename) and the token is never written to a log or printed; config read on a missing file returns the documented no-config state from design \u00a72 rather than an error. Name both code paths.",
+        "The sidecar is not spawned at startup unless the config's autoUplink flag is true, and the flag's default is false; START and STOP commands exist and are the primary control path. Paste the branch that implements this.",
+        "The report states in one line that nothing here was compiled \u2014 `command -v cargo` and `command -v rustc` are both empty on this machine \u2014 and lists the exact commands the user must run on Windows to build and run it (for example `npm --prefix windows-client/sidecar ci && npm --prefix windows-client/sidecar run build`, then `cargo tauri dev` / `cargo tauri build` from windows-client/src-tauri), with the prerequisites (Rust toolchain, WebView2, Node 20).",
+        "No file outside windows-client/src-tauri/ is modified: `git status --porcelain` shows changes only there plus the run directory."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 5 6",
+        "windows-client/sidecar/src/protocol.ts",
+        "windows-client/sidecar/src/config.ts"
+      ]
+    },
+    {
+      "id": "T-006",
+      "role": "frontend_sr",
+      "title": "FMC panel shell: skeuomorphic chrome, status page with ACARS UPLINK, and the Tauri bridge with a browser stub",
+      "goal": "Build the webview UI shell in windows-client/ui per design \u00a74 and \u00a76: index.html, the skeuomorphic FMC stylesheet (bezel, CDU screen, LSK rows, scratchpad), src/bridge.js (the single place that talks to Tauri, falling back to a stub when window.__TAURI__ is absent so the panel runs in a plain browser), src/status.js (design \u00a74's state table rendered \u2014 the connected label is exactly ACARS UPLINK, and both axes, SimConnect link and backend uplink, are visible at once), and src/app.js wiring them together. Plain HTML/CSS/JS, no framework and no build step, no network fonts or CDN \u2014 the app is offline. This runs in Windows WebView2 (Chromium-based), so target modern Chromium without polyfills. Domain note: this is frontend work routed by content; windows-client/ui/** is outside the frontend role's usual client/** home turf, and client/** must not be touched. You can render and screenshot this here with the root puppeteer install, but note that module scripts are blocked over file:// \u2014 serve the ui directory over http://127.0.0.1:<scratch port> instead.",
+      "depends_on": [
+        "T-004"
+      ],
+      "allowed_paths": [
+        "windows-client/ui/index.html",
+        "windows-client/ui/css/fmc.css",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/src/status.js",
+        "windows-client/ui/src/app.js",
+        ".claude/runs/2026-09-11-tauri-windows-client/prototypes/**"
+      ],
+      "acceptance_criteria": [
+        "Every DOM id and data-attribute frozen in design \u00a76 exists in index.html exactly as named \u2014 paste a `grep -n` for each one. No renames: T-008's harness and T-005's Rust side are written against these strings.",
+        "The panel renders headless: serve windows-client/ui over a scratch port (`node -e` static server on 8123 or similar, never port 3000) and drive it with the root puppeteer install (`--no-sandbox`), then paste the command and save at least three PNGs into .claude/runs/2026-09-11-tauri-windows-client/prototypes/ \u2014 one for a connected state, one for a SimConnect-down state and one for a backend-down state.",
+        "The connected screenshot's status element contains the exact string `ACARS UPLINK` (assert it in the puppeteer run with page.$eval and paste the asserted value) and the other two do not.",
+        "Both status axes are readable simultaneously in every screenshot: the SimConnect-link line and the backend-uplink line are separate elements with separate states, and the report shows a state where one is healthy and the other is not.",
+        "src/status.js implements design \u00a74's table for every state id the sidecar can emit, including the retry countdown (5 s doubling to a 60 s cap) and the paused state, and an unknown state id renders a visible fallback rather than a blank screen or a thrown error.",
+        "src/bridge.js is the only file referencing window.__TAURI__ (`grep -rn '__TAURI__' windows-client/ui/src/` shows hits in bridge.js only), exposes exactly the command and event names frozen in design \u00a73/\u00a76, and falls back to the stub shape frozen in \u00a76 when Tauri is absent so the page works in a plain browser.",
+        "The stylesheet follows design \u00a76's skeuomorphic rules: the frozen palette hex values appear in css/fmc.css, the font stack is local-only (`grep -n 'http' windows-client/ui/css/fmc.css` returns nothing), and the bezel, screen, LSK rows and scratchpad are all present as styled elements \u2014 the screenshots are the evidence.",
+        "No JavaScript error is logged during the headless run: the puppeteer script listens for pageerror and console error and the report states that none fired.",
+        "`git status --porcelain client/ agent/ src/` is empty; all changes are under windows-client/ui/ and the run's prototypes/ directory."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 4 6",
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 3",
+        "windows-client/sidecar/src/status.ts"
+      ]
+    },
+    {
+      "id": "T-007",
+      "role": "frontend_jr",
+      "title": "FMC config pages: every setting editable by LSK, with FMC-style validation feedback",
+      "goal": "Add the configuration pages to the FMC panel per design \u00a72 and \u00a76, inside the shell T-006 built: every setting that used to be an environment variable or CLI flag \u2014 server URL, ingest token, certificate path, traffic on/off, traffic radius, sim version, and the autoUplink flag \u2014 is viewable and editable through LSK entry with the scratchpad, and SAVE persists it through the bridge command frozen in design \u00a76. Validation feedback uses FMC vocabulary (design \u00a76's conventions, e.g. INVALID ENTRY in the scratchpad) and mirrors design \u00a72's rules exactly, so the UI rejects what the sidecar would reject, at the point of entry. This is the task that satisfies acceptance criterion 2 \u2014 after it, no CLI flag or environment variable is required for anything. Domain note: frontend work routed by content; windows-client/ui/** is not under client/**, and client/** must not be touched. You own only src/pages/** and css/pages.css \u2014 do not edit index.html, fmc.css, bridge.js, status.js or app.js, which T-006 owns; extend them through the hooks design \u00a76 froze.",
+      "depends_on": [
+        "T-006"
+      ],
+      "allowed_paths": [
+        "windows-client/ui/src/pages/**",
+        "windows-client/ui/css/pages.css",
+        ".claude/runs/2026-09-11-tauri-windows-client/prototypes/**"
+      ],
+      "acceptance_criteria": [
+        "All seven settings (serverUrl, ingestToken, certPath, trafficEnabled, trafficRadiusM, sim, autoUplink) are present as labelled, editable fields across the config pages, and the report maps each one to the env var or flag it replaces from agent/README.md's table.",
+        "Each field is edited through the FMC interaction model frozen in design \u00a76 (scratchpad plus LSK), not through a plain HTML form styled to look like one \u2014 the report names the handler that implements entry.",
+        "Client-side validation mirrors design \u00a72 exactly: sim outside {2020, 2024, fsx} is rejected, trafficRadiusM outside [1000, 200000] is clamped or rejected as \u00a72 specifies, an empty serverUrl or ingestToken is rejected, and a non-http(s) serverUrl is rejected. Each rejection shows the FMC-style scratchpad message from \u00a76 and does not save.",
+        "The token field is masked on screen and never appears in a screenshot or in any DOM text node the harness captures \u2014 assert it in the headless run and paste the assertion.",
+        "SAVE calls exactly the bridge command frozen in design \u00a76 with the full config object, and the report pastes the call site; a save with an invalid field never reaches the bridge.",
+        "The pages render headless over the scratch-port server with puppeteer and at least two PNGs (config page with values, config page showing a rejected entry) are saved into .claude/runs/2026-09-11-tauri-windows-client/prototypes/. Paste the commands.",
+        "No pageerror or console error fires during the headless run, and no file owned by T-006 was modified (`git diff --name-only` pasted).",
+        "`git status --porcelain client/ agent/ src/` is empty."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 6",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/index.html",
+        "agent/README.md"
+      ]
+    },
+    {
+      "id": "T-008",
+      "role": "frontend_jr",
+      "title": "Verification tools: headless render-check over every FMC state, and a Rust/webview contract check",
+      "goal": "Write the two tools that make this GUI falsifiable on a machine with no GUI, per design \u00a74, \u00a75 and \u00a76. windows-client/ui/tools/render-check.mjs serves the ui directory over a scratch port (module scripts are blocked over file://), loads the panel in headless Chromium via the root puppeteer install with --no-sandbox, drives every state in design \u00a74's table plus both config pages through the stub bridge, asserts each rendered label against the table, and writes one PNG per state into the run's prototypes/ directory; it exits 1 with the offending state id when a label does not match. windows-client/tools/contract-check.mjs reads (never writes) windows-client/src-tauri/** and windows-client/ui/src/bridge.js and fails when a command or event name frozen in design \u00a73/\u00a76 is missing from either side \u2014 this is the only check in the run that catches the Rust-to-webview seam breaking, since nothing here can compile the Rust. Domain note: frontend tooling routed by content; these paths are outside client/**.",
+      "depends_on": [
+        "T-006",
+        "T-007"
+      ],
+      "allowed_paths": [
+        "windows-client/ui/tools/**",
+        "windows-client/tools/**",
+        ".claude/runs/2026-09-11-tauri-windows-client/prototypes/**"
+      ],
+      "acceptance_criteria": [
+        "`node windows-client/ui/tools/render-check.mjs` exits 0 under Node 20 from the repo root, prints one line per checked state, and writes one PNG per state in design \u00a74's table plus one per config page into .claude/runs/2026-09-11-tauri-windows-client/prototypes/. Paste the full output and `ls` the PNGs.",
+        "The harness asserts the exact string `ACARS UPLINK` for the backend-connected state and fails if it changes: prove it by temporarily editing that label in the UI source, showing the run exiting 1 with the offending state id in the message, then reverting (paste both runs and `git diff --stat` proving the revert).",
+        "The harness picks its own free scratch port and never binds port 3000; it shuts the server and the browser down on every exit path, including the failure path (paste the cleanup code or a run showing no leftover process).",
+        "Any pageerror or console error during a state fails the run with a non-zero exit, not just a printed warning.",
+        "`node windows-client/tools/contract-check.mjs` exits 0, and prints the frozen command and event names alongside where each was found in windows-client/src-tauri/** and in windows-client/ui/src/bridge.js.",
+        "The contract check really fails on a break: temporarily rename one event name on one side only, show the run exiting 1 naming that event and which side is missing it, then revert (paste both runs and the reverted diff).",
+        "contract-check.mjs opens no file for writing \u2014 the report states that it only reads, and the reviewer can confirm with a grep for write APIs.",
+        "Both tools run with no new dependency: puppeteer comes from the repo root install (it is already a root runtime dependency), and nothing is added to the root package.json (`git status --porcelain package.json package-lock.json` is empty).",
+        "The report states plainly that headless Chromium is not WebView2 and that these screenshots are evidence of structure, labels and layout \u2014 not proof of rendering fidelity on Windows, which only the user's manual test plan can give."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 3 4 5 6",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/src/status.js"
+      ]
+    },
+    {
+      "id": "T-009",
+      "role": "reviewer",
+      "title": "Review phase 2: the Rust/webview seam, credential-on-disk handling and the FMC contract",
+      "goal": "Review T-005, T-006, T-007 and T-008 together \u2014 the point of reviewing them in one pass is that the bridge between the Rust shell and the webview is the seam no compiler on this machine can check. Re-run the evidence, run both verification tools yourself, and look at the screenshots. Be hardest on two things: the Rust side writes the ingest token to disk, so the write path, the file location and the redaction rules must be exactly what design \u00a72 froze; and design \u00a74's state table must be implemented identically on both sides, since a label that exists in the sidecar but not in the UI is a blank panel on the user's Windows box, where no one can debug it.",
+      "depends_on": [
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008",
+        "T-013"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-11-tauri-windows-client/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "`node windows-client/ui/tools/render-check.mjs` and `node windows-client/tools/contract-check.mjs` are both re-run by the reviewer and their actual output recorded; the reviewer independently re-breaks one label and one event name to confirm both tools really fail, then reverts and shows a clean `git status`.",
+        "Every state id in design \u00a74's table is traced across all three implementations \u2014 sidecar status.ts, ui/src/status.js and the Rust forwarding path \u2014 and any state present in one and missing in another is a finding.",
+        "The Cargo.toml and tauri.conf.json parse checks are re-run (`python3 -c \"import tomllib...\"`, `jq .`), and the report confirms no signing keys and no wildcard dependency versions.",
+        "Credential handling on the Rust side is reviewed line by line: the config write is atomic, the file path is the one design \u00a72 froze, the token is not logged, and the UI masks it. Any doubt is a finding, not a note.",
+        "The screenshots in .claude/runs/2026-09-11-tauri-windows-client/prototypes/ are opened and judged against design \u00a76's skeuomorphic rules, and the review says plainly whether user acceptance criteria 3 and 4 are met by what is on screen.",
+        "Scope is verified: `git status --porcelain agent/ client/ src/ tests/` is empty, the root package.json and lockfile are unmodified, and all new files are under windows-client/ or the run directory.",
+        "The review states explicitly which claims could NOT be verified on this machine (cargo build, tauri build, WebView2 rendering, a live SimConnect session) and that they are deferred to the phase-3 manual test plan and the Windows CI job.",
+        "Verdict is approve or request_changes with numbered findings, each naming file, line and the command that exposed it, written to .claude/runs/2026-09-11-tauri-windows-client/reviews/."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 3 4 5 6",
+        ".claude/tools/ctx.sh task 2026-09-11-tauri-windows-client T-005 T-006 T-007 T-008"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-010",
+      "role": "devops",
+      "title": "GitHub Actions windows-latest job that builds the Tauri app and runs the sidecar checks",
+      "goal": "Add .github/workflows/windows-client.yml \u2014 a separate workflow from the existing ci.yml, which must not be modified \u2014 that does on a windows-latest runner what this dev machine cannot: install a Rust toolchain and the Node 20 toolchain, install and typecheck and test the sidecar, run the render-check and contract-check tools, and build the Tauri app, uploading the produced installer as a workflow artifact. Scope is CI/packaging config only, per the frozen decision: no code signing, no signing secrets, no notarization \u2014 if a step appears to need a credential, stop and escalate rather than adding a secret reference. Also add the Rust build output directory to the root .gitignore so target/ can never be committed.",
+      "depends_on": [
+        "T-009"
+      ],
+      "allowed_paths": [
+        ".github/workflows/windows-client.yml",
+        ".gitignore"
+      ],
+      "acceptance_criteria": [
+        "`python3 -c \"import yaml,sys; yaml.safe_load(open('.github/workflows/windows-client.yml')); print('ok')\"` prints ok, and the report pastes the full job definition.",
+        "The workflow runs on windows-latest and is path-filtered to windows-client/** and its own file, so it does not fire on every unrelated push; the existing ubuntu build-and-test job in .github/workflows/ci.yml is untouched (`git status --porcelain .github/workflows/ci.yml` is empty).",
+        "The job installs Node from .nvmrc (Node 20) and a pinned Rust toolchain action with an explicit version, installs the Windows Tauri prerequisites if any are needed beyond the runner defaults, and every third-party action is pinned to a major version tag at minimum.",
+        "The job runs, in order and each as a failing step: sidecar install, `tsc --noEmit` on the sidecar tsconfig, the sidecar vitest run, `node windows-client/tools/contract-check.mjs`, and the Tauri build. Each command in the workflow is the same string a developer would run locally \u2014 paste the mapping.",
+        "The built installer (msi and/or nsis, matching the bundle targets in tauri.conf.json) is uploaded with actions/upload-artifact so the user can download and install it without a local Rust toolchain.",
+        "No `secrets.` reference and no signing configuration appears anywhere in the workflow (`grep -n 'secrets\\.' .github/workflows/windows-client.yml` returns nothing) \u2014 signing is out of scope and requires a credential the run does not have.",
+        "The render-check step is either included with the reason it works on a Windows runner stated, or deliberately omitted with the reason stated \u2014 do not leave it ambiguous.",
+        "The report states plainly that this workflow has NOT been executed (there is no gh CLI and no actionlint on this machine, and agents do not push), that YAML validity is the only local check performed, and that the first real run must be observed by the user after the orchestrator pushes.",
+        "The .gitignore addition covers the Rust target directory without over-matching anything in src/ or client/ (paste the added lines and a `git status --porcelain` showing a clean tree)."
+      ],
+      "context": [
+        ".github/workflows/ci.yml",
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 5 7",
+        "windows-client/src-tauri/tauri.conf.json",
+        "windows-client/sidecar/package.json"
+      ]
+    },
+    {
+      "id": "T-011",
+      "role": "backend_jr",
+      "title": "windows-client/README.md: build and setup instructions, FMC vocabulary table and the Windows manual test plan",
+      "goal": "Write the documentation the user needs to actually run this, in windows-client/README.md, plus a short pointer section in the root README.md. Content: what the app is and how it relates to the existing agent (which stays in place, unmodified, as the fallback), prerequisites and build commands for Windows, where the config file lives, a walkthrough of configuring the app through the FMC pages, design \u00a74's status vocabulary reproduced as a table so an operator can decode the panel, troubleshooting (the same failure modes agent/README.md documents \u2014 self-signed certificate trust, token mismatch, sim protocol mismatch, server unreachable \u2014 mapped to the new FMC states), and finally the numbered manual test plan from design \u00a77 that the user runs on the Windows box to sign off each of the five user-story acceptance criteria. Do not modify agent/README.md or anything else under agent/**: it is frozen by this run. This is prose routed to a backend role by content; the file is new and outside the usual home turf.",
+      "depends_on": [
+        "T-009"
+      ],
+      "allowed_paths": [
+        "windows-client/README.md",
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "windows-client/README.md documents the prerequisites (Node 20, Rust toolchain, WebView2) and the exact build and run commands for Windows, copied from T-005's report so they are the commands that were actually intended, and states that the CI artifact from .github/workflows/windows-client.yml is the no-toolchain alternative.",
+        "It states where the config file lives on Windows (the path frozen in design \u00a72), that no environment variable and no CLI flag is required, and how to migrate today's settings: a table with one row per env var or flag from agent/README.md mapped to the field in the config UI that replaces it \u2014 all seven of SERVER_URL, INGEST_TOKEN, NODE_EXTRA_CA_CERTS, TRAFFIC_ENABLED, TRAFFIC_RADIUS_M, --sim and the new autoUplink appear.",
+        "Design \u00a74's state table is reproduced with the display label, what it means and what the operator should do about it, including ACARS UPLINK, and it makes clear that the SimConnect link and the backend uplink are two independent things that fail for different reasons.",
+        "A numbered manual test plan follows design \u00a77, each step with the command or click and the expected observation, and the plan collectively covers all five user-story acceptance criteria \u2014 the report maps each criterion to the step numbers that prove it.",
+        "The plan includes at least one negative test per failure mode: wrong token (server 401), untrusted certificate, sim not running, server unreachable, and an invalid entry in the config UI \u2014 each with the FMC state the user should see.",
+        "It states plainly which parts were never executed on the development machine (cargo build, tauri build, WebView2 rendering, a live SimConnect session) and that agent/** remains available and unmodified as the fallback.",
+        "The root README.md gains a short section pointing at windows-client/README.md without contradicting or removing anything about the existing agent: `git diff README.md` shows additions only (no deleted lines) and `git status --porcelain agent/` is empty.",
+        "Every command quoted in either README is either run and shown to work on this machine, or explicitly marked as Windows-only and untested here. No command is presented as verified when it was not."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 2 4 7",
+        "agent/README.md",
+        "README.md",
+        ".claude/runs/2026-09-11-tauri-windows-client/reports/"
+      ]
+    },
+    {
+      "id": "T-012",
+      "role": "reviewer",
+      "title": "Review phase 3 and close the run: CI config, documentation accuracy and acceptance-criteria coverage",
+      "goal": "Review T-010 and T-011, and close the run by checking the whole of it against the five user-story acceptance criteria. The specific risk here is documentation that claims more verification than happened: this run built a Windows app on a Linux machine with no Rust and no webview, and the READMEs must say so where it matters.",
+      "depends_on": [
+        "T-010",
+        "T-011"
+      ],
+      "allowed_paths": [
+        ".claude/runs/2026-09-11-tauri-windows-client/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "The workflow file is re-parsed with python3 yaml, re-read step by step, and checked for: windows-latest, path filter, pinned actions, no `secrets.` reference, artifact upload, and that .github/workflows/ci.yml is unmodified.",
+        "Every command quoted in windows-client/README.md that is runnable on Linux is actually run by the reviewer; every command that is not is confirmed to be marked Windows-only. Any command that fails or is mislabelled is a finding.",
+        "The env-var-to-UI migration table in the README is checked against agent/README.md's table and against windows-client/sidecar/src/config.ts \u2014 a setting missing from any of the three is a finding.",
+        "The manual test plan is read as if the reviewer were the user running it: any step whose expected observation is vague, unobservable or does not match design \u00a74's labels is a finding.",
+        "Each of the five user-story acceptance criteria is stated with the concrete evidence from this run that supports it and the residual gap that only the Windows box can close \u2014 no criterion is marked satisfied on the strength of a report alone.",
+        "`git status --porcelain agent/ client/ src/ tests/` is empty and the full diff of the run touches only windows-client/, .github/workflows/windows-client.yml, .gitignore, README.md and the run directory.",
+        "Verdict is approve or request_changes with numbered findings, written to .claude/runs/2026-09-11-tauri-windows-client/reviews/, plus a short list of follow-ups the run deliberately left undone."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 5 7",
+        ".claude/tools/ctx.sh task 2026-09-11-tauri-windows-client T-010 T-011",
+        "agent/README.md"
+      ]
+    },
+    {
+      "id": "T-013",
+      "role": "backend_sr",
+      "title": "Correct sidecar config-recovery and stopped-state lifecycle",
+      "depends_on": [
+        "T-004"
+      ],
+      "goal": "Resolve the phase-1 stale app.problems follow-up and related config-recovery/stopped-state lifecycle consistency in index.ts.",
+      "allowed_paths": [
+        "windows-client/sidecar/src/index.ts",
+        "windows-client/sidecar/tests/index.test.ts"
+      ],
+      "acceptance_criteria": [
+        "Stopping or shutting down after invalid reload never emits app.stopped with stale config problems.",
+        "An invalid config reload while running retains the last valid config and active uplink across repeated invalid reloads; later valid reload accurately preserves running state.",
+        "Completion of an ingest request started before STOP cannot change the stopped backend axis from net.idle.",
+        "Add focused meaningful lifecycle regression coverage using isolated mocks or subprocess scratch fixtures, and pass sidecar typecheck/build/tests under Node20.",
+        "Preserve frozen config/protocol types, existing HTTP payloads, pause handling, reconnect behavior, and all unrelated paths."
+      ]
+    }
+  ],
+  "global_risks": [
+    "Nothing Rust-side is compiled anywhere in this run until CI or the user's box: no cargo, no rustc, no Windows, no WebView2 here. The first `cargo build` will surface errors no reviewer on this machine could catch. Mitigations in the plan: Cargo.toml/tauri.conf.json parse checks, the contract-check tool across the Rust/webview seam, deliberately thin and heavily commented Rust, and a CI job whose whole purpose is to be the first real compiler. Expect at least one fix round after the first CI run.",
+    "Headless Chromium is not WebView2. The screenshots prove structure, labels and layout, not fidelity \u2014 fonts, scrollbar behaviour and CSS support can differ on Windows. Only the manual test plan closes this.",
+    "The SimConnect path is the one piece of the sidecar that cannot be exercised here at all: open() always fails on Linux, so connect-and-stream is untested until the user runs it against MSFS. The port is a close transcription of agent/agent.js precisely to keep this risk small, and T-003's parity table is the artifact that makes a regression reviewable.",
+    "The ingest token moves from an environment variable into a file on disk and into a UI field \u2014 a genuine change in the credential's exposure surface. Both implementation phases are gated by an opus reviewer for this reason, and redaction is asserted by grep rather than by inspection.",
+    "Tauri v2's sidecar story normally expects a bundled executable (externalBin), while this plan assumes the sidecar runs under a Node 20 install on the user's box, as the current agent already requires. If the user wants a double-clickable app with no Node install, the sidecar must be packaged as a single .exe (Node SEA or pkg) in the Windows CI job \u2014 that changes T-005's spawn path and T-010's workflow, but not the phase structure. Raised as open question 1.",
+    "Scope creep into a full FMC is easy here: CDU pages for live flight data, a map page, LSK-driven flight plan entry. The plan holds the line at status plus config, and design \u00a73's message set is asked to leave room for telemetry so a future page is additive rather than a rewrite.",
+    "The two user-facing READMEs can drift from what actually shipped, particularly around what was verified. T-012 exists mainly to catch that."
+  ],
+  "open_questions": [
+    "Sidecar delivery on the Windows box: the plan assumes Node 20 is installed there and Tauri spawns `node <sidecar>/dist/index.js`, which is exactly what agent/README.md already requires today, so it is strict parity and nothing regresses. The alternative is bundling the sidecar into a single .exe (Node SEA or pkg) in the windows-latest CI job so the app is double-clickable with no Node install. That is a better end-user story and the CI runner can build it, but it adds a packaging step and changes how T-005 spawns the child. Planned default: Node-on-the-box. Confirm or redirect before T-005 starts.",
+    "FMC page scope: the plan builds a status page and config pages only, because that is what the five acceptance criteria require. A live-data CDU page (position, altitude, ground speed, frames sent, traffic count) is a natural next step and design \u00a73 is asked to leave room for it in the message set. Planned default: out of scope for this run, additive later. Confirm.",
+    "Start behaviour: the plan applies the escape-hatch-before-automation rule \u2014 the app does NOT connect at launch; the user presses START, and an autoUplink config flag defaulting to false is the opt-in for auto-connect. If the user would rather it always connect at launch (closer to today's `npm start` habit), flipping the default is a one-line change in design \u00a72, but it should be a decision, not a discovery.",
+    "Whether the run should end with the orchestrator committing and pushing so the windows-latest workflow actually runs. Nothing in the plan verifies the CI job itself \u2014 it cannot be run here \u2014 so the run's last real verification step belongs to the user. Confirm the intended end state."
+  ]
+}

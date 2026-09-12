@@ -1,0 +1,41 @@
+{
+  "$comment": "Reference copy of design section 4's state table. NOT wired into any build. windows-client/sidecar/src/status.ts (T-002) and windows-client/ui/src/status.js (T-006) each implement it independently; windows-client/tools/contract-check.mjs (T-008) is what catches them drifting apart. label is a template: {ss} = whole seconds until nextRetryAt, zero-padded to 2 and capped at 99; {status} = HTTP status; {flags} = raw Pause_EX1 bitmask.",
+  "protocolVersion": 1,
+  "axes": [
+    { "id": "app", "line": 1, "domId": "status-app", "title": "SIDECAR" },
+    { "id": "sim", "line": 2, "domId": "status-sim", "title": "SIM LINK" },
+    { "id": "backend", "line": 3, "domId": "status-net", "title": "ACARS" },
+    { "id": "pause", "line": 4, "domId": "status-pause", "title": "PAUSE" }
+  ],
+  "states": [
+    { "id": "app.starting", "axis": "app", "label": "SIDECAR STARTING", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "Process start, before the config file has been read." },
+    { "id": "app.no-config", "axis": "app", "label": "NO CONFIG", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "The config file does not exist at the resolved path. First run." },
+    { "id": "app.error-config", "axis": "app", "label": "CONFIG INVALID", "severity": "fault", "emittedBy": "sidecar", "enteredWhen": "The config file exists but is unparseable or fails validation. The sidecar stays alive and waits for a config control message." },
+    { "id": "app.stopped", "axis": "app", "label": "UPLINK STOPPED", "severity": "idle", "emittedBy": "sidecar", "enteredWhen": "Config is valid and the uplink is not running: either never started (autoUplink false) or stopped by the user." },
+    { "id": "app.running", "axis": "app", "label": "UPLINK ACTIVE", "severity": "ok", "emittedBy": "sidecar", "enteredWhen": "A start control message has been accepted and not yet stopped." },
+    { "id": "app.crashed", "axis": "app", "label": "SIDECAR FAULT", "severity": "fault", "emittedBy": "tauri", "enteredWhen": "The child process exited without a shutdown control message. Synthesised by the Rust supervisor; the sidecar never emits it." },
+    { "id": "app.restarting", "axis": "app", "label": "SIDECAR RESTART", "severity": "caution", "emittedBy": "tauri", "enteredWhen": "The supervisor is within its restart budget and is respawning the child." },
+
+    { "id": "sim.idle", "axis": "sim", "label": "SIM LINK STANDBY", "severity": "idle", "emittedBy": "sidecar", "enteredWhen": "The uplink is not running, so no SimConnect connection is attempted." },
+    { "id": "sim.connecting", "axis": "sim", "label": "SIM LINK CONNECTING", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "open() has been called and has neither resolved nor rejected." },
+    { "id": "sim.connected", "axis": "sim", "label": "SIM LINK ONLINE", "severity": "ok", "emittedBy": "sidecar", "enteredWhen": "recvOpen received. attempt resets to 0." },
+    { "id": "sim.retry", "axis": "sim", "label": "SIM LINK RETRY {ss}S", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "A connect attempt failed, or an established link dropped (quit/close/error), and the next attempt is scheduled at 5 s doubling to a 60 s cap." },
+
+    { "id": "net.idle", "axis": "backend", "label": "ACARS STANDBY", "severity": "idle", "emittedBy": "sidecar", "enteredWhen": "The uplink is not running: nothing is posted and nothing is probed." },
+    { "id": "net.pending", "axis": "backend", "label": "ACARS CONNECTING", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "The uplink has started and no request has completed yet." },
+    { "id": "net.ok", "axis": "backend", "label": "ACARS UPLINK", "severity": "ok", "emittedBy": "sidecar", "enteredWhen": "The most recent frame or event POST returned 2xx. This exact string is the frozen acceptance-criterion label." },
+    { "id": "net.standby", "axis": "backend", "label": "ACARS READY", "severity": "ok", "emittedBy": "sidecar", "enteredWhen": "No ingest POST in the last 15 s (the sim link is down, so there are no frames), but the reachability probe got an HTTP response. The server is up; there is simply nothing to send." },
+    { "id": "net.unauthorized", "axis": "backend", "label": "ACARS REJECT 401", "severity": "fault", "emittedBy": "sidecar", "enteredWhen": "An ingest POST returned 401: the ingest token does not match the server's." },
+    { "id": "net.http-error", "axis": "backend", "label": "ACARS FAULT {status}", "severity": "fault", "emittedBy": "sidecar", "enteredWhen": "An ingest POST returned a non-2xx status other than 401." },
+    { "id": "net.tls-error", "axis": "backend", "label": "ACARS CERT FAULT", "severity": "fault", "emittedBy": "sidecar", "enteredWhen": "The request failed with a TLS error code (DEPTH_ZERO_SELF_SIGNED_CERT, SELF_SIGNED_CERT_IN_CHAIN, UNABLE_TO_VERIFY_LEAF_SIGNATURE, ERR_TLS_CERT_ALTNAME_INVALID, CERT_HAS_EXPIRED): the certPath is wrong, missing, or does not cover the host in serverUrl." },
+    { "id": "net.unreachable", "axis": "backend", "label": "ACARS NO COMM", "severity": "fault", "emittedBy": "sidecar", "enteredWhen": "The request failed at the transport layer (ECONNREFUSED, ETIMEDOUT, ENOTFOUND, EHOSTUNREACH, abort)." },
+
+    { "id": "pause.off", "axis": "pause", "label": "PAUSE OFF", "severity": "idle", "emittedBy": "sidecar", "enteredWhen": "Pause_EX1 flags are 0, or the legacy Unpaused event fired before any Pause_EX1 was seen." },
+    { "id": "pause.full", "axis": "pause", "label": "SIM PAUSED", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "Bit 1 (full) or bit 2 (with-sound) set and bits 4 and 8 clear; or the legacy Paused event before any Pause_EX1." },
+    { "id": "pause.active", "axis": "pause", "label": "ACTIVE PAUSE", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "Bit 4 set. Highest precedence: Active Pause is the one the legacy events never report." },
+    { "id": "pause.menu", "axis": "pause", "label": "SIM MENU", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "Bit 8 set and bit 4 clear: the sim itself is frozen, typically a menu or loading screen." },
+    { "id": "pause.unknown", "axis": "pause", "label": "PAUSE {flags}", "severity": "caution", "emittedBy": "sidecar", "enteredWhen": "Non-zero flags with no known bit set — a future SDK bit. Shown raw rather than swallowed." }
+  ],
+  "reconnectBackoffMs": [5000, 10000, 20000, 40000, 60000, 60000, 60000, 60000, 60000],
+  "pausePrecedence": ["pause.active", "pause.menu", "pause.full", "pause.unknown", "pause.off"]
+}

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://msfslogger.local/schemas/windows-client-config-1.json",
+  "title": "msfslogger windows-client config.json (design section 2)",
+  "description": "Reference schema. Not wired into any build: the sidecar validates in code (windows-client/sidecar/src/config.ts) because it must produce one human-readable line per problem, not a schema dump. Keep both in step; the schema is the reviewer's cross-check.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["serverUrl", "ingestToken"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1,
+      "description": "Schema version. Absent is read as 1."
+    },
+    "serverUrl": {
+      "type": "string",
+      "pattern": "^https?://[^\\s]+$",
+      "description": "Replaces SERVER_URL. Required. http: or https: only. Trailing slashes are stripped on load.",
+      "examples": ["https://192.168.0.30:3000"]
+    },
+    "ingestToken": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Replaces INGEST_TOKEN. Required. Sent as the x-ingest-token header. Stored in plaintext, exactly as the env var was. Must never be logged, emitted over IPC or rendered."
+    },
+    "certPath": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Replaces NODE_EXTRA_CA_CERTS. Absolute path to the server's PEM certificate. null/absent = system trust store only."
+    },
+    "trafficEnabled": {
+      "type": ["boolean", "string", "number"],
+      "default": true,
+      "description": "Replaces TRAFFIC_ENABLED. False only when String(value).trim().toLowerCase() is one of 0, false, off, no. Anything else, including absent and empty, is true."
+    },
+    "trafficRadiusM": {
+      "type": ["number", "string"],
+      "default": 40000,
+      "description": "Replaces TRAFFIC_RADIUS_M. Number(value) then Math.round then clamp to [1000, 200000]. Non-finite falls back to 40000 with a warning."
+    },
+    "sim": {
+      "type": "string",
+      "default": "2020",
+      "description": "Replaces --sim/-s. One of 2020 (Protocol.KittyHawk), 2024 (Protocol.SunRise), fsx (Protocol.FSX_SP2). The loader trims and lowercases before comparing, so \"FSX\" and \" 2024 \" are accepted on disk; the enum below is the canonical form the UI writes back. Anything else is rejected.",
+      "enum": ["2020", "2024", "fsx"]
+    },
+    "autoUplink": {
+      "type": "boolean",
+      "default": false,
+      "description": "New in the Tauri client. When false (the default) the app opens idle and the user presses START."
+    },
+    "nodePath": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Advanced escape hatch, read only by the Tauri shell and never shown in the FMC pages: absolute path to node.exe when it is not on PATH."
+    }
+  }
+}

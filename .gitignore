@@ -11,3 +11,8 @@ server.log
 backups/
 certs/
 *.pem
+
+# Rust build output (windows-client/src-tauri) - hundreds of megabytes,
+# never committed. Scoped to that directory, not a bare `target/`, so it
+# cannot swallow an unrelated dir named `target` under src/ or client/.
+windows-client/src-tauri/target/
