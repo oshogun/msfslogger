@@ -154,7 +154,17 @@ impl Worker {
 
     fn spawn(&mut self) {
         if self.child.is_some() || self.stopping.load(Ordering::Acquire) { return; }
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/dist/index.js");
+        // Built one component at a time, not `.join("../sidecar/dist/index.js")`:
+        // that embeds a literal ".." next to a forward-slash string, which on
+        // Windows produces a mixed-separator, unnormalized path. Node's own
+        // module-resolution directory walk chokes on that — it can degenerate
+        // down to the bare string "C:" (no trailing backslash), which Windows
+        // treats specially and fs.lstat rejects with EISDIR. Per-component
+        // .join() never embeds a raw separator character, so this can't happen.
+        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR is always windows-client/src-tauri, which has a parent")
+            .join("sidecar").join("dist").join("index.js");
         let entry = self.resource_entry.as_ref().filter(|path| path.is_file()).cloned()
             .or_else(|| development.is_file().then_some(development.clone()));
         let Some(entry) = entry else {
