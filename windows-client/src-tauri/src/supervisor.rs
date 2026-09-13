@@ -294,7 +294,13 @@ impl Worker {
     }
 
     fn log(&self, level: &str, text: &str) {
-        self.log_value(json!({"v":1, "type":"log", "at":protocol::now(), "level":level, "message":self.config.redact_text(text)}));
+        let message = self.config.redact_text(text);
+        // Also visible in the `cargo tauri dev` terminal itself, not just the
+        // webview's one-line scratchpad — the scratchpad only ever shows the
+        // latest message, so a fast crash loop's real cause is otherwise gone
+        // by the time anyone looks at the window.
+        eprintln!("[sidecar:{level}] {message}");
+        self.log_value(json!({"v":1, "type":"log", "at":protocol::now(), "level":level, "message":message}));
     }
 
     fn log_value(&self, value: Value) {
@@ -310,6 +316,7 @@ impl Worker {
         let signal = { use std::os::unix::process::ExitStatusExt; status.signal().map(|signal| signal.to_string()) };
         #[cfg(not(unix))]
         let signal: Option<String> = None;
+        eprintln!("[sidecar] exited: code={:?} signal={:?}", status.code(), signal);
         (self.sink)(Event::Exit(json!({"code":status.code(), "signal":signal, "restarting":remaining.is_some(), "restartsRemaining":remaining.unwrap_or(0)})));
         self.synthetic("app.crashed");
         if remaining.is_some() {
