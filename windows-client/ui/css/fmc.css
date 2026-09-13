@@ -26,7 +26,7 @@
   --fmc-font: "Consolas", "Lucida Console", "DejaVu Sans Mono", "Courier New", monospace;
   --fmc-screen-font-size: clamp(11px, 1.55vh, 20px);
   --fmc-row-h: 2.05em;
-  --fmc-cols: 24;
+  --fmc-cols: 30;
   --fmc-screen-pad: 0.9em;
 }
 
