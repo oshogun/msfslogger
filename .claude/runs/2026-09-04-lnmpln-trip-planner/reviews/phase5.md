@@ -138,6 +138,12 @@ cache surviving into the next flight's early frames before a fresh link is estab
 degenerate leg (zero-length, structurally unlikely but not impossible) falls back to "absent" rather
 than `NaN`/`Infinity` leaking into the response.
 
+**Amendment — run `2026-09-13-atlas-countries-progress-fix`.** The numerator was corrected from the
+trip's raw total flown distance to the summed `approx_distance_nm` of the planned legs whose status
+is `flown` or `diverted`. Real usage showed the old ratio reaching 100% while planned legs were still
+unflown, because every logged flight counted toward it regardless of which leg it completed. The
+denominator, the `Math.min(100, …)` clamp and the key-absent-with-no-plan contract are unchanged.
+
 ### T-021 — planned legs in the trip PDF — **approve**
 
 | DoD | Verdict | Evidence |

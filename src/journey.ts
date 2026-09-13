@@ -66,6 +66,27 @@ const ICAO_COUNTRIES: Record<string, { name: string; flag: string }> = {
   YM: { name: 'Australia', flag: '🇦🇺' },
   NZ: { name: 'New Zealand', flag: '🇳🇿' },
   FA: { name: 'South Africa', flag: '🇿🇦' },
+  // Russia & CIS. Some prefixes are shared across a border — UMKK
+  // (Kaliningrad) reads as Belarus here — the same approximation this table
+  // already makes for Brazil's S-block. Good enough for a country rollup.
+  UA: { name: 'Kazakhstan', flag: '🇰🇿' },
+  UB: { name: 'Azerbaijan', flag: '🇦🇿' },
+  UC: { name: 'Kyrgyzstan', flag: '🇰🇬' },
+  UD: { name: 'Armenia', flag: '🇦🇲' },
+  UE: { name: 'Russia', flag: '🇷🇺' },
+  UG: { name: 'Georgia', flag: '🇬🇪' },
+  UH: { name: 'Russia', flag: '🇷🇺' },
+  UI: { name: 'Russia', flag: '🇷🇺' },
+  UK: { name: 'Ukraine', flag: '🇺🇦' },
+  UL: { name: 'Russia', flag: '🇷🇺' },
+  UM: { name: 'Belarus', flag: '🇧🇾' },
+  UN: { name: 'Russia', flag: '🇷🇺' },
+  UO: { name: 'Russia', flag: '🇷🇺' },
+  UR: { name: 'Russia', flag: '🇷🇺' },
+  US: { name: 'Russia', flag: '🇷🇺' },
+  UT: { name: 'Uzbekistan', flag: '🇺🇿' },
+  UU: { name: 'Russia', flag: '🇷🇺' },
+  UW: { name: 'Russia', flag: '🇷🇺' },
 };
 
 const SINGLE_LETTER_COUNTRIES: Record<string, { name: string; flag: string }> = {
@@ -125,17 +146,22 @@ export interface JourneyAirport {
  * to be: flown distance against the sum of the trip's own planned legs'
  * approx_distance_nm, never raw distance and never the equator. The key is
  * absent, not zero, on a trip with no planned legs.
+ *
+ * Amended since: "flown distance" means the planned distance of the legs that
+ * are done, not the raw distance of every flight logged against the trip. The
+ * raw total counts sightseeing, repositioning and repeated attempts that no
+ * planned leg accounts for, so it used to read 100% while legs sat unflown.
  */
 export interface Journey {
   legCount: number;
   totalDistanceNm: number;
   totalDurationSec: number;
   /**
-   * Flown distance over the sum of each planned leg's approx_distance_nm,
-   * clamped to 0..100 — flown distance regularly overshoots the planned total
-   * since procedure legs are never in the file. Absent when the
-   * trip has no planned legs or their total is degenerate (0 nm); never `null`
-   * or `0` in that case, so a caller cannot mistake "no plan" for "no progress".
+   * The summed approx_distance_nm of the completed planned legs ('flown' and
+   * 'diverted') over the summed approx_distance_nm of all of them, clamped to
+   * 0..100. Absent when the trip has no planned legs or their total is
+   * degenerate (0 nm); never `null` or `0` in that case, so a caller cannot
+   * mistake "no plan" for "no progress".
    */
   plannedRouteProgressPct?: number;
   aircraftCount: number;
@@ -235,9 +261,17 @@ export function buildJourney(
     return best;
   }, null);
 
+  // Progress is planned distance completed over planned distance total. A
+  // 'diverted' leg counts as completed — it is no longer outstanding — while a
+  // 'skipped' one stays in the denominator only, so a trip with a skipped leg
+  // never reads 100%. That is intended: it was never flown.
   const totalPlannedDistanceNm = plannedLegs.reduce((s, l) => s + l.approx_distance_nm, 0);
+  const completedPlannedDistanceNm = plannedLegs.reduce(
+    (s, l) => s + (l.status === 'flown' || l.status === 'diverted' ? l.approx_distance_nm : 0),
+    0
+  );
   const plannedRouteProgressPct = totalPlannedDistanceNm > 0
-    ? Math.min(100, Math.round((totalDistanceNm / totalPlannedDistanceNm) * 1000) / 10)
+    ? Math.min(100, Math.round((completedPlannedDistanceNm / totalPlannedDistanceNm) * 1000) / 10)
     : undefined;
 
   return {
