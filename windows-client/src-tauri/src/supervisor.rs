@@ -79,6 +79,18 @@ struct Worker {
     budget: RestartBudget, restart_at: Option<Instant>, desired_running: bool, version_error_logged: bool, crash_latched: bool,
 }
 
+/// Strips Windows' `\\?\` extended-length/verbatim prefix, if present,
+/// leaving the ordinary drive-letter form (`C:\...`). Leaves `\\?\UNC\...`
+/// network paths alone — that prefix expands to `\\server\share\...`, a
+/// different reconstruction this narrow fix doesn't need to handle. A no-op
+/// on any path that never had the prefix, which is every path on non-Windows.
+fn strip_verbatim_prefix(path: &PathBuf) -> PathBuf {
+    match path.to_str() {
+        Some(s) if s.starts_with(r"\\?\") && !s[4..].starts_with("UNC\\") => PathBuf::from(&s[4..]),
+        _ => path.clone(),
+    }
+}
+
 impl Worker {
     fn run(&mut self, requests: Receiver<Operation>) {
         while !self.stopping.load(Ordering::Acquire) {
@@ -174,6 +186,15 @@ impl Worker {
             self.synthetic("app.crashed");
             return;
         };
+        // Tauri's path resolver returns Windows' "\\?\"-prefixed verbatim form
+        // (the same form std::fs::canonicalize produces). The OS handles it
+        // fine for actually opening the file, but Node's own package.json
+        // boundary-walk for the main module does plain string manipulation
+        // that does not expect that prefix, and mishandles the drive root —
+        // producing exactly the EISDIR-on-"C:" crash a real Windows run hit.
+        // Strip it back to the normal drive-letter form before handing this
+        // to node; irrelevant off Windows since the prefix never appears there.
+        let entry = strip_verbatim_prefix(&entry);
         let raw = self.config.read().ok().flatten();
         let node = raw.as_ref().and_then(|raw| raw.get("nodePath")).and_then(Value::as_str)
             .filter(|path| !path.trim().is_empty()).unwrap_or("node");
