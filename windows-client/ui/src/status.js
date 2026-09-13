@@ -187,7 +187,7 @@ export function renderConfigPath(root, path) {
   if (!root) return;
   const el = root.querySelector('#status-config-path');
   if (!el) return;
-  el.textContent = shortenPath(path, 22);
+  el.textContent = shortenPath(path, 40);
   el.title = typeof path === 'string' ? path : '';
 }
 

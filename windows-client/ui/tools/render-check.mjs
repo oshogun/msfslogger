@@ -256,14 +256,23 @@ try {
   assert.equal(await saves(), 1);
   console.log('PASS invalid-object-repair: current raw preferred to stale config; repair, defaults, token preserved');
   current = 'window-minimum';
-  await page.setViewport({ width: 420, height: 680, deviceScaleFactor: 1 });
+  await page.setViewport({ width: 488, height: 680, deviceScaleFactor: 1 });
   await show('STATUS'); await emit(snapshot());
   assert.equal(await page.evaluate(() => {
     const unit = document.getElementById('fmc-unit').getBoundingClientRect();
     return unit.left >= 0 && unit.top >= 0 && unit.right <= innerWidth && unit.bottom <= innerHeight;
   }), true, 'minimum window clips panel');
+  // The panel fitting the window doesn't mean the CDU content fits the
+  // screen: --fmc-cols sets the grid's width directly in ch, independent of
+  // the screen's actual box, so a wide column count can overflow its own
+  // container even while the outer panel still fits — exactly the bug that
+  // slipped past this check when --fmc-cols went from 30 to 50.
+  assert.equal(await page.evaluate(() => {
+    const screen = document.getElementById('fmc-screen');
+    return screen.scrollWidth <= screen.clientWidth;
+  }), true, 'CDU content overflows its own screen at the minimum window width');
   await capture('window-minimum');
-  console.log('PASS window-minimum: panel fits 420x680');
+  console.log('PASS window-minimum: panel fits 488x680, CDU content fits the screen');
   clean();
   console.log('PASS browser errors: none (pageerror and console error both fatal)');
 } catch (error) {
