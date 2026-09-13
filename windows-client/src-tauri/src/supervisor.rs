@@ -1,6 +1,6 @@
 use crate::{config::{lock, ConfigStore}, framing::{self, Line}, protocol::{self, DecodeError}, restart::{RestartBudget, RESTART_DELAY, SHUTDOWN_GRACE}};
 use serde_json::{json, Value};
-use std::{collections::VecDeque, io::{BufReader, Read, Write}, path::PathBuf, process::{Child, Command, ExitStatus, Stdio}, sync::{atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}, Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant}};
+use std::{collections::VecDeque, io::{BufReader, Read, Write}, path::{Path, PathBuf}, process::{Child, Command, ExitStatus, Stdio}, sync::{atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}, Arc, Mutex}, thread::{self, JoinHandle}, time::{Duration, Instant}};
 
 pub enum Event { Status(Value), Log(Value), Exit(Value) }
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -81,13 +81,15 @@ struct Worker {
 
 /// Strips Windows' `\\?\` extended-length/verbatim prefix, if present,
 /// leaving the ordinary drive-letter form (`C:\...`). Leaves `\\?\UNC\...`
-/// network paths alone — that prefix expands to `\\server\share\...`, a
-/// different reconstruction this narrow fix doesn't need to handle. A no-op
-/// on any path that never had the prefix, which is every path on non-Windows.
-fn strip_verbatim_prefix(path: &PathBuf) -> PathBuf {
+/// network paths and `\\?\Volume{GUID}\...` volume paths alone — both need a
+/// different reconstruction than a plain prefix strip (`\\?\UNC\` expands to
+/// `\\`; a volume GUID has no drive-letter form at all), which this narrow
+/// fix doesn't need to handle. A no-op on any path that never had the
+/// prefix, which is every path on non-Windows.
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     match path.to_str() {
-        Some(s) if s.starts_with(r"\\?\") && !s[4..].starts_with("UNC\\") => PathBuf::from(&s[4..]),
-        _ => path.clone(),
+        Some(s) if s.starts_with(r"\\?\") && !s[4..].starts_with("UNC\\") && !s[4..].starts_with("Volume") => PathBuf::from(&s[4..]),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -201,10 +203,6 @@ impl Worker {
         let Some(directory) = entry.parent().and_then(|dist| dist.parent()) else {
             self.log("error", "Sidecar entry has no parent directory"); self.synthetic("app.crashed"); return;
         };
-        eprintln!(
-            "[sidecar] about to spawn: node={node:?} entry={:?} used_resource_entry={} config={:?} cwd={:?}",
-            entry, self.resource_entry.as_ref().is_some_and(|p| p.is_file()), self.config.path, directory,
-        );
         let mut command = Command::new(node);
         command.arg(&entry).arg("--config").arg(&self.config.path).current_dir(directory)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
