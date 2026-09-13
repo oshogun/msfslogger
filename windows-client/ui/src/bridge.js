@@ -1,13 +1,25 @@
-// The single seam between the panel and the desktop shell.
+// The single seam between the panel and whatever host it is running inside.
 //
-// Nothing else in the UI may mention Tauri: every other module talks to the
-// object exported here. That is what lets the whole panel run in a plain
-// browser — and in headless Chromium for screenshots — with no shell at all.
-// When no Tauri host is found we build a stub with the same method names and
-// publish it as `window.__FMC_STUB__` so a test harness can feed status
-// messages in and read every call back out. The stub is not a dev-only
-// branch to be stripped: if the panel cannot find a host, showing a working
-// panel that says so beats showing nothing.
+// Import rule, and it is the whole point of this file: `src/app.js` — the
+// shell — is the only module that may import it. No page module may import it,
+// name it, or reach it through anything the shell hands them; pages get the
+// small page interface the shell builds and nothing else. Tauri, and the
+// `window.__TAURI__` / `window.__TAURI_INTERNALS__` / `window.__FMC_HOST__` /
+// `window.__FMC_STUB__` globals, are named here and nowhere else in the UI.
+// That is what lets the whole panel run in a plain browser — and in headless
+// Chromium for screenshots — with no desktop shell at all, and what will let
+// it run inside a sim gauge without a line of page code changing.
+//
+// Three hosts are resolved, in this order: an adapter a host installed on
+// `window.__FMC_HOST__` before this module evaluated, then Tauri, then a
+// built-in stub with the same method names, published as `window.__FMC_STUB__`
+// so a test harness can feed status messages in and read every call back out.
+// An installed host wins over Tauri so that a panel embedded in something
+// Tauri-shaped still gets its own adapter, and a half-built host object falls
+// through rather than booting a panel whose buttons throw. Neither the stub nor
+// the installation seam is a dev-only branch to be stripped: the seam is how a
+// second host comes to exist at all, and if the panel can find no host, showing
+// a working panel that says so beats showing nothing.
 
 /** Command names on the Rust side. Renaming one here breaks the shell. */
 const COMMANDS = {
@@ -38,9 +50,60 @@ function clone(value) {
   }
 }
 
-// ── Real bridge ──────────────────────────────────────────────────────────────
+// ── Host resolution ──────────────────────────────────────────────────────────
+
+/**
+ * Everything a host must implement to drive the panel. Each one is treated as
+ * async by the shell and signals failure by rejecting, never by throwing.
+ */
+const HOST_METHODS = [
+  'getConfig',
+  'setConfig',
+  'getConfigPath',
+  'startUplink',
+  'stopUplink',
+  'restartSidecar',
+  'getStatus',
+  'onStatus',
+  'onLog',
+  'onExit',
+];
+
+/**
+ * A host installs itself by assigning `window.__FMC_HOST__` before this module
+ * evaluates — in a gauge, from the bootstrap script injected ahead of the panel
+ * document. An object missing any method is not adopted at all: a panel that
+ * falls back to Tauri or the stub is worth more than one whose buttons throw.
+ */
+function findInstalledHost() {
+  const installed = typeof window !== 'undefined' ? window.__FMC_HOST__ : undefined;
+  if (!installed || typeof installed !== 'object') return null;
+  for (const name of HOST_METHODS) {
+    if (typeof installed[name] !== 'function') return null;
+  }
+  return installed;
+}
+
+/**
+ * An installed host is adopted, not used raw: the shell always sees an object
+ * built here, with every method bound through and a label to annunciate, so it
+ * never has to defend against a partial adapter.
+ */
+function adoptHost(installed) {
+  const label = typeof installed.hostLabel === 'string' && installed.hostLabel.trim()
+    ? installed.hostLabel.trim()
+    : 'HOST';
+  const adapter = { isStub: false, hostLabel: label };
+  for (const name of HOST_METHODS) {
+    adapter[name] = (...args) => installed[name](...args);
+  }
+  return adapter;
+}
 
 function findHost() {
+  const installed = findInstalledHost();
+  if (installed) return { kind: 'installed', installed };
+
   const globalApi = typeof window !== 'undefined' ? window.__TAURI__ : undefined;
   const internals = typeof window !== 'undefined' ? window.__TAURI_INTERNALS__ : undefined;
   if (!globalApi && !internals) return null;
@@ -49,6 +112,7 @@ function findHost() {
   if (globalApi && globalApi.core && typeof globalApi.core.invoke === 'function') {
     const listen = globalApi.event && globalApi.event.listen;
     return {
+      kind: 'tauri',
       invoke: (cmd, args) => globalApi.core.invoke(cmd, args),
       listen:
         typeof listen === 'function'
@@ -61,6 +125,7 @@ function findHost() {
   // event plugin directly, which is what the global API does anyway.
   if (internals && typeof internals.invoke === 'function') {
     return {
+      kind: 'tauri',
       invoke: (cmd, args) => internals.invoke(cmd, args),
       listen: listenViaInternals(internals),
     };
@@ -110,6 +175,7 @@ function createTauriBridge(host) {
 
   return {
     isStub: false,
+    hostLabel: 'TAURI',
     getConfig: () => host.invoke(COMMANDS.configGet),
     setConfig: (patch) => host.invoke(COMMANDS.configSet, { patch }),
     getConfigPath: () => host.invoke(COMMANDS.configPath),
@@ -182,6 +248,7 @@ function createStubBridge() {
 
   const bridge = {
     isStub: true,
+    hostLabel: 'STUB BRIDGE',
     async getConfig() {
       record('getConfig', []);
       return clone(stub.config);
@@ -237,7 +304,11 @@ function createStubBridge() {
 
 const host = findHost();
 
-export const bridge = host ? createTauriBridge(host) : createStubBridge();
+export const bridge = host === null
+  ? createStubBridge()
+  : host.kind === 'installed'
+    ? adoptHost(host.installed)
+    : createTauriBridge(host);
 
 export const TAURI_COMMANDS = COMMANDS;
 export const TAURI_EVENTS = EVENTS;

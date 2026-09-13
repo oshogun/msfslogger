@@ -1,6 +1,14 @@
-// Shared draft keeps edits across CFG pages. Existing credentials stay in the
-// shell: an untouched token is omitted from the patch so the writer preserves it.
-const fmc = window.FMC;
+// The three CFG pages. A shared draft keeps edits across them. Existing
+// credentials stay in the shell: an untouched token is omitted from the patch
+// so the writer preserves it.
+//
+// Import rule for this directory: a page reaches the outside world only through
+// the page interface it is handed — `register` at load time, `ctx.fmc` inside a
+// callback — plus `../status.js` and sibling page modules. It may not import or
+// name the host adapter, read a global for the interface, or subscribe to host
+// events; the shell owns all three. That is why the same page code will run
+// unchanged on a host this build has never seen.
+let fmc = null;
 const DEFAULTS = { version: 1, serverUrl: '', certPath: null, sim: '2020',
   autoUplink: false, trafficEnabled: true, trafficRadiusM: 40000, tokenSet: false };
 const FIELDS = {
@@ -152,7 +160,7 @@ async function save() {
   saving = true;
   fmc.setScratchpad('');
   try {
-    const result = await fmc.bridge.setConfig(patch);
+    const result = await fmc.setConfig(patch);
     if (!result?.ok) { feedback('CONFIG WRITE', 'SAVE FAILED'); return; }
     const { ingestToken, ...safe } = patch;
     Object.assign(draft, safe);
@@ -166,37 +174,43 @@ async function save() {
   finally { saving = false; }
 }
 
-for (const [index, id] of Object.keys(FIELDS).entries()) {
-  fmc.registerPage({
-    id, title: `CFG ${id}`, group: 'CFG', n: index + 1, m: 3,
-    render() {
-      ensureDraft();
-      const view = document.getElementById(`page-${id.toLowerCase()}-template`).content.firstElementChild.cloneNode(true);
-      // Paint against the returned view before it is attached by the router.
-      for (const el of view.querySelectorAll('[data-field-value]')) {
-        const field = el.dataset.fieldValue;
-        el.textContent = display(field);
-        if (field === 'serverUrl' || field === 'certPath') {
-          el.textContent = draft[field] || (field === 'serverUrl' ? '□□□□□□□□' : '--------');
-          el.title = draft[field] || '';
+// Registering is the module's only side effect, and it waits for the interface
+// to be injected: loading this bundle must not assume a browser module loader
+// ran the shell first.
+export function register(api) {
+  fmc = api;
+  for (const [index, id] of Object.keys(FIELDS).entries()) {
+    fmc.registerPage({
+      id, title: `CFG ${id}`, group: 'CFG', n: index + 1, m: 3,
+      render() {
+        ensureDraft();
+        const view = document.getElementById(`page-${id.toLowerCase()}-template`).content.firstElementChild.cloneNode(true);
+        // Paint against the returned view before it is attached by the router.
+        for (const el of view.querySelectorAll('[data-field-value]')) {
+          const field = el.dataset.fieldValue;
+          el.textContent = display(field);
+          if (field === 'serverUrl' || field === 'certPath') {
+            el.textContent = draft[field] || (field === 'serverUrl' ? '□□□□□□□□' : '--------');
+            el.title = draft[field] || '';
+          }
+          el.dataset.edited = String(edited.has(field));
         }
-        el.dataset.edited = String(edited.has(field));
-      }
-      view.querySelector('[data-config-feedback]').textContent = id === 'NETWORK' ? 'ENTRY MASKED · LSK TO SET' : '';
-      return view;
-    },
-    onLsk(lsk) {
-      if (lsk === 'L6') { fmc.showPage('MENU'); return true; }
-      if (lsk === 'R6') { void save(); return true; }
-      const field = FIELDS[id][Number(lsk.slice(1)) - 1];
-      if (!lsk.startsWith('L') || !field) return false;
-      enterField(field);
-      return true;
-    },
-    onKey(key) {
-      if (key !== 'EXEC') return false;
-      void save();
-      return true;
-    },
-  });
+        view.querySelector('[data-config-feedback]').textContent = id === 'NETWORK' ? 'ENTRY MASKED · LSK TO SET' : '';
+        return view;
+      },
+      onLsk(lsk) {
+        if (lsk === 'L6') { fmc.showPage('MENU'); return true; }
+        if (lsk === 'R6') { void save(); return true; }
+        const field = FIELDS[id][Number(lsk.slice(1)) - 1];
+        if (!lsk.startsWith('L') || !field) return false;
+        enterField(field);
+        return true;
+      },
+      onKey(key) {
+        if (key !== 'EXEC') return false;
+        void save();
+        return true;
+      },
+    });
+  }
 }

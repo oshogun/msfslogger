@@ -1,20 +1,23 @@
 // The panel shell: page routing, the scratchpad, the key and LSK handlers,
-// and the wiring from the bridge's status stream onto the screen.
+// and the wiring from the host's status stream onto the screen.
 //
-// This file owns the chrome and nothing else. Config pages are separate
-// modules that register themselves, and they are imported lazily on the first
-// navigation to one — so the shell boots, and screenshots, with no pages
+// Import rule: this is the only module under src/ that may import
+// ./bridge.js, and it keeps what it learns there to itself. It builds the one
+// small interface every page is allowed to use, hands it to each page module at
+// registration and again as `ctx.fmc` on every callback, and the adapter itself
+// is not a member of either — a page that could reach the host would, and the
+// boundary would then only be as strong as the next reviewer's attention.
+//
+// This file owns the chrome and nothing else. Pages are separate modules that
+// register themselves; the config pages are imported lazily on the first
+// navigation to one — so the shell boots, and screenshots, with no config page
 // present at all. If that import fails the scratchpad says PAGE UNAVAILABLE;
 // it never throws and never leaves a blank screen, because a blank panel on a
 // machine nobody can reach is the worst outcome this app has.
 
 import bridge from './bridge.js';
-import {
-  defaultStatus,
-  renderConfigPath,
-  renderStatus,
-  uplinkRunning,
-} from './status.js';
+import * as statusPage from './pages/status-page.js';
+import { defaultStatus } from './status.js';
 
 const MAX_SCRATCHPAD_CHARS = 4096;
 /** Pages that live in the lazily-imported bundle. */
@@ -29,9 +32,6 @@ const dom = {
   msgLine: document.getElementById('msg-line'),
   bridgeMode: document.getElementById('bridge-mode'),
 };
-
-/** The STATUS view ships in the HTML; park it while another page is up. */
-const statusView = dom.body ? dom.body.querySelector('[data-page-view="STATUS"]') : null;
 
 const pages = new Map();
 const state = {
@@ -120,7 +120,6 @@ function registerPage(page) {
 function pageContext() {
   return {
     body: dom.body,
-    bridge,
     config: state.config,
     status: state.status,
     fmc: window.FMC,
@@ -131,7 +130,8 @@ async function loadPages() {
   if (state.pagesLoaded) return true;
   if (!state.pagesLoading) {
     state.pagesLoading = import('./pages/index.js')
-      .then(() => {
+      .then((module) => {
+        module.register(window.FMC);
         state.pagesLoaded = true;
         return true;
       })
@@ -230,39 +230,6 @@ const MENU_ITEMS = [
 ];
 
 registerPage({
-  id: 'STATUS',
-  title: 'ACARS STATUS',
-  group: 'STATUS',
-  n: 1,
-  m: 1,
-  render() {
-    return statusView;
-  },
-  onLsk(lsk) {
-    if (lsk === 'L6') {
-      showPage('MENU');
-      return true;
-    }
-    if (lsk === 'R6') {
-      toggleUplink();
-      return true;
-    }
-    if (lsk === 'R5') {
-      if (state.status.app && state.status.app.state === 'app.crashed') {
-        runCommand(() => bridge.restartSidecar());
-        return true;
-      }
-      return false;
-    }
-    if (['L1', 'L2', 'L3', 'L4', 'L5'].includes(lsk)) {
-      setScratchpad('NOT ALLOWED', 'error');
-      return true;
-    }
-    return false;
-  },
-});
-
-registerPage({
   id: 'MENU',
   title: 'MSFSLOGGER',
   group: 'MENU',
@@ -290,8 +257,13 @@ registerPage({
   },
 });
 
-// ── Bridge commands ──────────────────────────────────────────────────────────
+// ── Host commands ────────────────────────────────────────────────────────────
 
+/**
+ * The three command members of the page interface share one failure message,
+ * because a page has nothing useful to do with the error and every page that
+ * offered a command prompt would otherwise repeat this try/catch.
+ */
 async function runCommand(fn) {
   try {
     await fn();
@@ -302,16 +274,9 @@ async function runCommand(fn) {
   }
 }
 
-function toggleUplink() {
-  if (uplinkRunning(state.status)) runCommand(() => bridge.stopUplink());
-  else runCommand(() => bridge.startUplink());
-}
-
 // ── Status painting ──────────────────────────────────────────────────────────
 
 function paintStatus() {
-  renderStatus(statusView, state.status);
-  renderConfigPath(statusView, state.configPath);
   const page = state.pageId ? pages.get(state.pageId) : null;
   if (page && typeof page.onStatus === 'function') {
     try {
@@ -488,24 +453,35 @@ async function loadConfig() {
 
 function boot() {
   if (dom.bridgeMode) {
+    // The host names itself. Hardcoding TAURI here would make the one piece of
+    // chrome whose job is saying which host you are on the piece that lies.
     dom.bridgeMode.setAttribute('data-stub', bridge.isStub ? 'true' : 'false');
-    dom.bridgeMode.textContent = bridge.isStub ? 'STUB BRIDGE' : 'TAURI';
+    dom.bridgeMode.textContent = bridge.hostLabel;
   }
 
-  window.FMC = {
+  // Everything a page is allowed to do, and the adapter is deliberately not
+  // among it. Built as a local first so it can be injected into page modules
+  // that are loaded by something other than a browser's module loader.
+  const fmc = {
     registerPage,
     showPage,
     setScratchpad,
     getScratchpad,
     hasScratchpadError: () => state.message?.kind === 'error',
     getConfigCache: () => state.config,
+    getConfigPath: () => state.configPath,
     getStatus: () => state.status,
     refreshConfig: loadConfig,
-    bridge,
+    setConfig: (patch) => bridge.setConfig(patch),
+    startUplink: () => runCommand(() => bridge.startUplink()),
+    stopUplink: () => runCommand(() => bridge.stopUplink()),
+    restartSidecar: () => runCommand(() => bridge.restartSidecar()),
   };
+  window.FMC = fmc;
 
   wireKeys();
   paintScratchpad();
+  statusPage.register(fmc);
   showPage('STATUS');
 
   bridge.onStatus(applyStatus);

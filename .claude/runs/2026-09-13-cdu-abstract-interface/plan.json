@@ -1,0 +1,194 @@
+{
+  "run_id": "2026-09-13-cdu-abstract-interface",
+  "goal": "Take the first step of user_stories/msfs_client.md: make every CDU page in windows-client/ui/src/ depend on exactly one small, written-down abstract interface instead of on the Tauri bridge, so the same page logic can later run under an MSFS/Coherent-GT host that is NOT built in this run. Concretely: freeze the page-facing interface and the shell-vs-page ownership boundary as a contract a future host implements; close the two gaps intake found (the built-in STATUS page calls the closured `bridge` import directly at app.js:232-263 — `bridge.restartSidecar()`, `bridge.stopUplink()`, `bridge.startUplink()`; and `pageContext()` at app.js:120-128 hands every page `ctx.bridge` alongside `ctx.fmc`, so nothing stops a page reaching past the abstraction); resolve the hardcoded `bridge.isStub ? 'STUB BRIDGE' : 'TAURI'` label at app.js:492 one way or the other with a stated reason; and prove the boundary holds by driving the real pages against a third, synthetic host in headless Chromium. All source changes stay inside windows-client/ui/** — no src-tauri/**, no sidecar/**, no server code.",
+  "frozen_decisions": [
+    "As a CDU page developer, I want every CDU page to operate against a small abstract interface rather than calling Tauri commands directly, so that the same CDU logic can run in both the Windows desktop agent and the MSFS in-sim gauge.",
+    "## First Step\nRefactor CDU pages to depend only on the abstract interface.",
+    "Design is NOT skipped. This run defines a new frozen contract — the page-facing abstract interface and its ownership boundary — that later work (the actual MSFS bridge) depends on.",
+    "DevOps is skipped. No build, packaging, CI, or deploy surface changes; this is a windows-client/ui/** source refactor only.",
+    "Out of scope, explicitly: implementing the MSFS/Coherent GT bridge, any HTTP/WS protocol from inside the sim, or touching src-tauri/** / sidecar/** beyond what the interface freeze requires (expected: none).",
+    "No behavior regression: windows-client/ui/tools/render-check.mjs and windows-client/tools/contract-check.mjs still pass; the panel still boots and works against the stub bridge in a plain browser exactly as before."
+  ],
+  "sequencing_rationale": [
+    "Two phases, five tasks. Phase 1 ships the frozen contract itself — the DoD names it as a deliverable in its own right ('written down as a frozen contract a future MSFS/Coherent-GT host implementation can target'), and it is the only artifact the later MSFS run will read. Phase 2 ships the code that obeys it.",
+    "The refactor is one task, not three. app.js, pages/index.js and bridge.js change together: removing ctx.bridge/fmc.bridge from the shell and rewriting pages/index.js's `fmc.bridge.setConfig(patch)` call are two ends of the same edit, and a tree where one landed without the other does not boot. Splitting them would cost two cold spawns and buy a diagram.",
+    "The verification tools are a separate task with a different owner, on purpose. A checker written by the same agent that wrote the refactor passes by construction; the prior run made the same call for exactly this reason (see 2026-09-11 T-008's opening comment, 'importing the UI's table would make a renamed label pass its own test'). T-004's expectations come from design §2/§3/§5, transcribed, never from reading the refactored source and writing down what it happens to do.",
+    "The host-swap check (T-004) is what makes the DoD's central claim falsifiable. 'A future host can implement this without page-code changes' is unverifiable by inspection; installing a third, synthetic host object before boot and driving the real STATUS and CFG pages against it — with zero page-code edits and zero Tauri present — is a command that either exits 0 or does not.",
+    "The boundary is enforced by a tool, not by a review note, because the run that will violate it (the MSFS gauge) has not been written yet. A grep in a review report protects nothing six months out; windows-client/ui/tools/boundary-check.mjs run alongside the existing two checks does.",
+    "allowed_paths are disjoint by file, not by phase: T-003 owns windows-client/ui/src/** plus ui/index.html, T-004 owns windows-client/ui/tools/** only. They still run in sequence, since T-004's checks must be validated against the refactored tree, but the disjointness means a re-run of either after a request_changes cannot clobber the other.",
+    "The phase-2 reviewer is opus. The refactor moves the code path that masks the ingest token on the scratchpad (app.js:59-61 keys masking on state.pageId === 'NETWORK') and freezes a contract other runs will build on; both are cheap to get subtly wrong and expensive to find later."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Freeze the page-facing interface and the ownership boundary",
+      "ships": "A reviewed, frozen contract in design.md that states the exact small interface every CDU page may use, the shell-vs-page ownership boundary, what a host adapter must implement, and how a third host is installed — enough that the future MSFS/Coherent-GT run can write its adapter without reading or changing a single page.",
+      "tasks": ["T-001", "T-002"]
+    },
+    {
+      "phase": 2,
+      "name": "Make the code obey the contract, and prove it with a third host",
+      "ships": "Every registered CDU page (STATUS, MENU, NETWORK, SIM, TRAFFIC) reaches host state through the one interface; no page-level code touches the bridge or Tauri; the hardcoded TAURI label is resolved; and three commands prove it — render-check (no regression), contract-check (Rust/webview seam intact) and the new boundary + host-swap checks (the pages really run on a host that is neither Tauri nor the stub).",
+      "tasks": ["T-003", "T-004", "T-005"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the CDU page interface, the shell-vs-page ownership boundary, and the host-adapter contract",
+      "goal": "Write .claude/runs/2026-09-13-cdu-abstract-interface/design.md. Read windows-client/ui/src/app.js, bridge.js, pages/index.js and status.js in full first — this is a boundary freeze over code that already exists and mostly already has the seam, not a redesign, and the design must name real identifiers and real line numbers. Section numbering is part of the contract; every downstream task cites `.claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface <n>`, so the H2 headings must be exactly `## 1.` … `## 6.` in this order: 1 Scope, non-goals, and what already exists; 2 The page interface (the small abstract interface a CDU page may use); 3 Ownership boundary and the host-adapter contract (who may import bridge.js, what a non-Tauri host must implement, how a host is installed); 4 Migration of the code that exists today (STATUS page, ctx.bridge, pages/index.js, the bridge-mode label); 5 Enforcement and verification (the boundary-check rules, the host-swap check, the must-not-change list); 6 Alternatives considered and risks. Three decisions are yours to make and state a reason for, and the plan deliberately does not pre-empt them: (a) whether a page obtains the interface from the `window.FMC` global (as pages/index.js does today at line 3) or from the ctx argument or both, given a Coherent-GT host may load page modules differently; (b) whether the built-in STATUS page stays inline in app.js or moves into a page module, given its view element lives in index.html and is parked/unparked by the shell (app.js:34, statusView); (c) whether the `bridge.isStub ? 'STUB BRIDGE' : 'TAURI'` label at app.js:492 becomes a host descriptor on the adapter or is frozen as shell-only chrome outside the page contract. Hard constraints you are designing against, verified by the planner on this checkout: windows-client/tools/contract-check.mjs:21 hardcodes the path `ui/src/bridge.js` and greps it for the quoted literals config_get, config_set, config_path, uplink_start, uplink_stop, sidecar_restart, sidecar:status, sidecar:log, sidecar:exit — that file must keep its path and those literals; windows-client/ui/tools/render-check.mjs calls window.FMC.showPage, setScratchpad, getScratchpad, getConfigCache, getStatus and refreshConfig and reads window.__FMC_STUB__.calls filtered by method name 'setConfig', and asserts #bridge-mode's data-stub is 'true' under the stub host, so those names and that attribute survive the refactor or the harness stops being an independent regression check; bridge.js resolves its host once at module evaluation time (line 238, `const host = findHost()`), so any host-installation seam must be settable before app.js's module graph runs — puppeteer's evaluateOnNewDocument is how T-004 will do it, and the design must say so.",
+      "depends_on": [],
+      "allowed_paths": [".claude/runs/2026-09-13-cdu-abstract-interface/design.md"],
+      "acceptance_criteria": [
+        "design.md exists with H2 headings numbered exactly `## 1.` through `## 6.` in the order given in the goal, and `.claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 2 3 4 5` returns four non-empty, non-overlapping sections — run it and paste the first line of each into the report.",
+        "§2 lists every member of the page interface as a table: name, signature, return type, sync or async, and one sentence of semantics. It covers at minimum everything a page needs today — register a page, navigate, read and write the scratchpad (set/get/hasError), read the cached config, write the config, re-read the config, read the current status, start the uplink, stop the uplink, restart the sidecar — and states for each whether it is host-backed (the adapter must implement it) or shell-local (the shell implements it on any host).",
+        "§2 states explicitly how a page receives status updates and log/exit events — today the shell subscribes via bridge.onStatus/onLog/onExit (app.js:511-513) and calls the page's own onStatus (app.js:315-322). Say whether that stays, and say plainly whether a page may subscribe to host events directly. If it may not, §2 says so in one sentence a reviewer can check by grep.",
+        "§2 states what the page context object passed to render/onLsk/onKey contains after this run, member by member, and states that `bridge` is not among them — with the reason (a page that can reach the adapter is a page that will, and the boundary stops being checkable).",
+        "§3 gives the host-adapter contract as a table an MSFS/Coherent-GT implementer can work from without reading any page: every method the adapter must provide, its arguments, what it resolves to, what a failure looks like (rejected promise vs thrown), and the unsubscribe semantics of the three event subscriptions. It states that windows-client/ui/src/bridge.js is the Tauri implementation of that contract and that the stub bridge (bridge.js:128-236) is a second, already-shipping implementation of it.",
+        "§3 names the host-installation seam: how a host object that is neither Tauri nor the stub is installed so that bridge.js's `findHost()` picks it up, given the host is resolved once at module evaluation (bridge.js:238). State the exact global or hook name, the precedence order against window.__TAURI__ / the stub, and the timing rule (installed before the app.js module graph evaluates; puppeteer evaluateOnNewDocument for the automated check). State in one sentence why this seam is not a dev-only branch to be stripped.",
+        "§3 states the import rule as a checkable sentence: exactly which file(s) under windows-client/ui/src/ may import ./bridge.js, and that no file under windows-client/ui/src/pages/ may import it, reference a `bridge` identifier, or mention __TAURI__ / __TAURI_INTERNALS__.",
+        "§4 resolves the STATUS-page gap concretely: it names the three call sites (app.js:253 bridge.restartSidecar, app.js:306 bridge.stopUplink, app.js:307 bridge.startUplink), states which interface member each becomes, and states whether toggleUplink/runCommand stay shell-private helpers or become interface members — with the reason.",
+        "§4 resolves the ctx.bridge pass-through: it states the exact post-refactor body of pageContext() (app.js:120-128) and the exact post-refactor member list of window.FMC (app.js:495-505), naming which member is removed and what pages/index.js:155 (`fmc.bridge.setConfig(patch)`) becomes.",
+        "§4 resolves the bridge-mode label (app.js:490-493, index.html:119) one way or the other — generalized behind the adapter as a host descriptor, or frozen as shell-only chrome outside the page contract — and gives the reason in at least two sentences, including what a third host would render under the chosen answer. Whichever way it goes, §4 states that #bridge-mode keeps its id and its data-stub attribute, and that data-stub is 'true' under the stub host, because render-check.mjs:98 asserts it.",
+        "§4 states what happens to the NETWORK-entry scratchpad masking rule at app.js:59-61, which keys on `state.pageId === 'NETWORK'`: whether it stays shell-owned as-is or moves, and if it moves, that the token still never reaches the DOM as plain text (render-check.mjs:168-173, 197 assert exactly this).",
+        "§5 specifies windows-client/ui/tools/boundary-check.mjs as a rule list an implementer can write to without judgement calls: each rule as (what is scanned, what pattern is a violation, what the one-line failure message says). It states the tool reads only application source files, prints PASS/FAIL lines in the style of tools/contract-check.mjs, exits 0 when clean and 1 on any violation, and needs no browser and no server.",
+        "§5 specifies the host-swap check: which host-adapter methods the synthetic host records, which real pages it drives (at minimum STATUS's uplink toggle and sidecar restart, and one CFG page save), what it asserts landed on the synthetic host, and the assertion that neither window.__TAURI__ nor the stub bridge is present in that run. It states that this check is the evidence for the DoD's 'a future host can implement this without page-code changes'.",
+        "§5 carries a must-not-change list naming, with file and line: the window.FMC member names render-check.mjs calls, window.__FMC_STUB__ and its recorded method names, the ui/src/bridge.js path and the nine quoted command/event literals contract-check.mjs greps for, and the frozen DOM hooks the panel already ships (#fmc-screen data-page, #scratchpad data-message-kind, #bridge-mode data-stub, [data-field-value], [data-config-feedback]).",
+        "§5 names the exact verification commands, copy-pasteable, with the nvm prefix from .claude/ENVIRONMENT.md and run from windows-client/ — including that render-check.mjs must be given an explicit output directory argument under the session scratchpad, because with no argument it overwrites .claude/runs/2026-09-11-tauri-windows-client/prototypes/*.png (render-check.mjs:12).",
+        "§1 states in one sentence each: that no file under src/**, client/**, agent/**, windows-client/src-tauri/** or windows-client/sidecar/** is modified by this run, and that the MSFS/Coherent-GT adapter itself is not built here.",
+        "§6 records at least three alternatives considered and rejected, each with the reason — at minimum the three decisions named in the goal (interface delivery to pages, STATUS page placement, the label), plus the option of leaving the boundary as convention with no checker."
+      ],
+      "context": [
+        "windows-client/ui/src/app.js",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/src/pages/index.js",
+        "windows-client/ui/src/status.js",
+        "windows-client/ui/tools/render-check.mjs",
+        "windows-client/tools/contract-check.mjs",
+        "windows-client/ui/index.html",
+        "user_stories/msfs_client.md",
+        ".claude/runs/2026-09-13-cdu-abstract-interface/intake.md",
+        ".claude/tools/ctx.sh design 2026-09-11-tauri-windows-client 5.1 5.2 5.3 6.1 6.2 6.3 6.4 8",
+        ".claude/ENVIRONMENT.md"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "reviewer",
+      "title": "Review the frozen interface contract before any code is written",
+      "goal": "Review .claude/runs/2026-09-13-cdu-abstract-interface/design.md against the code it claims to describe. This design is the only artifact the future MSFS/Coherent-GT run will read, and every claim in it about today's code is checkable right now — so check them rather than trusting them. Be hardest on three things: whether the host-adapter contract in §3 is complete enough that someone could implement it for Coherent GT without opening a page file (walk the page code and find anything a page needs that §3 does not provide); whether the must-not-change list in §5 actually covers everything render-check.mjs and contract-check.mjs depend on (re-derive it from those two tools yourself, do not copy the design's list); and whether the three decisions the design was asked to make are actually decided with reasons rather than deferred to the implementer.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [".claude/runs/2026-09-13-cdu-abstract-interface/reviews/**"],
+      "acceptance_criteria": [
+        "Every file:line citation in design.md is opened and confirmed to say what the design says it says; any drift is a numbered finding.",
+        "The reviewer independently lists, from reading windows-client/ui/tools/render-check.mjs and windows-client/tools/contract-check.mjs, every window.FMC member, every window.__FMC_STUB__ member, every DOM id/attribute and every quoted literal those two tools depend on, and compares that list against design §5's must-not-change list. Anything present in the tools and absent from §5 is a finding.",
+        "The reviewer walks windows-client/ui/src/pages/index.js and the STATUS/MENU page objects in app.js and confirms that every host-backed thing they do has a named member in design §2 and a named adapter method in design §3. A capability used by a page with no home in the contract is a finding.",
+        "The report states plainly whether §4 resolves all three of: the STATUS page's three direct bridge calls, the ctx.bridge / fmc.bridge pass-through, and the hardcoded TAURI label — each with a stated reason, not a 'the implementer may choose'.",
+        "`.claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 2 3 4 5` is run by the reviewer and its output confirmed to slice cleanly (four non-empty, non-overlapping sections); the actual first line of each is pasted.",
+        "The report confirms design §5's host-swap check is actually implementable as specified against bridge.js's module-evaluation-time host resolution (bridge.js:238), or files a finding saying why it is not.",
+        "Verdict is approve or request_changes with numbered findings, each naming file, line and the command or reading that exposed it, written to .claude/runs/2026-09-13-cdu-abstract-interface/reviews/."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 1 2 3 4 5 6",
+        ".claude/runs/2026-09-13-cdu-abstract-interface/intake.md",
+        "windows-client/ui/src/app.js",
+        "windows-client/ui/src/pages/index.js",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/tools/render-check.mjs",
+        "windows-client/tools/contract-check.mjs"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "frontend_sr",
+      "title": "Refactor the shell and the pages onto the frozen interface, and resolve the label",
+      "goal": "Apply the frozen contract to windows-client/ui/src/** (and windows-client/ui/index.html if §4 requires it). Implement exactly what design §2, §3 and §4 froze — the interface member list, the host-adapter contract and its installation seam, the post-refactor pageContext() and window.FMC bodies, the STATUS page's three call sites, pages/index.js's setConfig call, and the bridge-mode label decision. This is a refactor with no intended behaviour change: the panel must boot, navigate, validate, mask the token and save config exactly as it does today, and render-check.mjs must pass unchanged — you do not own windows-client/ui/tools/**, so if you believe a check needs to change, stop and say so in your report rather than editing it. Write the boundary down in the code as well as in design.md: the module that owns the host adapter and the module that owns the shell each carry a header comment stating who may import what, in the voice of the existing bridge.js header (bridge.js:1-10), so the next person to open the file learns the rule from the file. Do not touch windows-client/src-tauri/**, windows-client/sidecar/**, src/**, client/**, agent/**, or any README. When you run render-check.mjs, pass an explicit output directory under the session scratchpad — with no argument it overwrites .claude/runs/2026-09-11-tauri-windows-client/prototypes/*.png (render-check.mjs:12).",
+      "depends_on": ["T-002"],
+      "allowed_paths": [
+        "windows-client/ui/src/**",
+        "windows-client/ui/index.html",
+        ".claude/runs/2026-09-13-cdu-abstract-interface/reports/**"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; cd windows-client && node ui/tools/render-check.mjs \"$SCRATCH/render-out\"` exits 0 with every PASS line the pre-refactor run produced — paste the full output, and state that the only non-repo writes were under the scratchpad.",
+        "`cd windows-client && node tools/contract-check.mjs` exits 0 and prints PASS for all nine command/event names, with the webview locations still in ui/src/bridge.js — paste the output.",
+        "`grep -rn '__TAURI__\\|__TAURI_INTERNALS__' windows-client/ui/src/` matches only windows-client/ui/src/bridge.js; paste the output.",
+        "`grep -rn 'bridge' windows-client/ui/src/pages/` returns no match, and no file under windows-client/ui/src/pages/ imports ./bridge.js by any path; paste both commands and their output.",
+        "`grep -rn 'ctx\\.bridge\\|fmc\\.bridge\\|\\.bridge\\b' windows-client/ui/src/` shows no page-level or context-level access to the adapter — every remaining hit is inside the module design §3 named as the adapter's owner. Paste the output and name the file of every remaining hit.",
+        "The STATUS page's three former direct calls (app.js:253 restartSidecar, app.js:306 stopUplink, app.js:307 startUplink) now go through the interface exactly as design §4 froze; the report shows the before and after of each of the three lines.",
+        "pageContext() and window.FMC match design §4's frozen bodies member for member; the report pastes both post-refactor bodies next to the design's text.",
+        "The bridge-mode label is implemented as design §4 decided; the report states which way it went and pastes the resulting code. `#bridge-mode` still has its id and its data-stub attribute, and render-check.mjs:98's assertion that data-stub is 'true' under the stub host still passes (it is in the render-check output above).",
+        "The ingest token still never reaches the DOM as plain text: the report names the render-check assertions that cover it (render-check.mjs:168-173 and :197) and confirms they passed in this run's output.",
+        "`git status --porcelain` shows changes only under windows-client/ui/src/, windows-client/ui/index.html and .claude/runs/2026-09-13-cdu-abstract-interface/; in particular `git status --porcelain windows-client/src-tauri windows-client/sidecar src client agent windows-client/ui/tools` is empty and .claude/runs/2026-09-11-tauri-windows-client/prototypes/ is no dirtier than it was when the task started (record it before and after).",
+        "The adapter module and the shell module each carry a header comment stating the import rule from design §3 in prose; paste both comments."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 2 3 4",
+        ".claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 5",
+        "windows-client/ui/src/app.js",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/src/pages/index.js",
+        "windows-client/ui/index.html",
+        ".claude/ENVIRONMENT.md"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "frontend_jr",
+      "title": "Boundary check and host-swap check: prove the pages run on a third host",
+      "goal": "Add two verification tools under windows-client/ui/tools/, written to design §5's spec and to nothing else — transcribe the rules from the design, do not read the refactored source and write down what it happens to do, because a check derived from the implementation passes by construction. windows-client/ui/tools/boundary-check.mjs is a static check: it scans the UI source and fails, one line per violation, when a rule from design §3/§5 is broken (a page importing the adapter, a page mentioning Tauri, the adapter reachable from the page context or from window.FMC, the adapter imported by a module that may not import it). No browser, no server, PASS/FAIL lines in the style of windows-client/tools/contract-check.mjs, exit 1 on any violation. windows-client/ui/tools/host-swap-check.mjs is the live proof: it serves windows-client/ui over a scratch port on 127.0.0.1 (never 3000), installs a synthetic host adapter that is neither Tauri nor the stub via the seam design §3 named — before the module graph evaluates, i.e. puppeteer's evaluateOnNewDocument — drives the real pages through real clicks, and asserts the calls landed on the synthetic host. Model both on the existing render-check.mjs/contract-check.mjs structure, including their cleanup discipline: the browser and the scratch server close on every path, success and failure alike. You do not own windows-client/ui/src/** — if a check cannot pass without a source change, report it as a finding for the reviewer instead of editing the source.",
+      "depends_on": ["T-003"],
+      "allowed_paths": [
+        "windows-client/ui/tools/**",
+        ".claude/runs/2026-09-13-cdu-abstract-interface/reports/**"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20; cd windows-client && node ui/tools/boundary-check.mjs` exits 0 against the current tree and prints one PASS line per rule from design §5; paste the output.",
+        "boundary-check.mjs is proven to fail, not just to pass: for each rule, copy the UI tree to the session scratchpad, introduce that one violation in the copy, run the tool against the copy, and paste the exit code and the failure line. The repo is never edited to do this — the report shows `git status --porcelain windows-client/ui/src` empty afterwards.",
+        "`cd windows-client && node ui/tools/host-swap-check.mjs` exits 0; paste the output. It reports the scratch port it used and that port is not 3000.",
+        "The host-swap check asserts, and the report names the assertion for each: window.__TAURI__ and window.__TAURI_INTERNALS__ are absent in that run; the stub bridge is not the host in use (window.__FMC_STUB__ is not what the calls landed on); STATUS's uplink toggle reaches the synthetic host's startUplink/stopUplink; STATUS's restart prompt reaches the synthetic host's restartSidecar; and one CFG page save reaches the synthetic host's setConfig with the patch the page built.",
+        "The host-swap check drives the panel through the same surface a user does — real clicks on [data-lsk]/[data-key] elements and real keyboard events, as render-check.mjs does — not by calling page internals directly. The report quotes the lines that do it.",
+        "Not one byte of windows-client/ui/src/** is changed by this task: `git status --porcelain windows-client/ui/src windows-client/ui/index.html` is empty; paste it.",
+        "Both tools release their resources on failure as well as success: the report shows the finally-block of each, and demonstrates a deliberate failure (e.g. an assertion forced to fail in a scratchpad copy) leaving no listening port and no orphaned Chromium — `ss -ltnp` or equivalent pasted after the forced failure.",
+        "Neither tool reads any file under .claude/runs/ and neither writes into .claude/runs/2026-09-11-tauri-windows-client/; any screenshot or artifact path defaults to somewhere harmless and is overridable by argv, stated in the tool's header comment.",
+        "The report states which design §5 rules were implemented and, if any rule was not implementable as written, says so as a finding rather than silently weakening it."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 3 5",
+        "windows-client/ui/tools/render-check.mjs",
+        "windows-client/tools/contract-check.mjs",
+        ".claude/ENVIRONMENT.md"
+      ]
+    },
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Review phase 2 and close the run: the boundary holds, nothing regressed",
+      "goal": "Review T-003 and T-004 together and decide whether this run's Definition of Done is actually met. Re-run all four checks yourself — render-check, contract-check, boundary-check, host-swap-check — and do not take a report's word for any of them. Be hardest on three things. First, the credential path: the refactor moved code around the scratchpad masking rule that keeps the ingest token off the screen and out of the DOM (app.js:59-61 before the change, render-check.mjs:168-173 and :197 assert it), so confirm by your own reading, not just by a green check, that a typed token still cannot be painted or saved into an attribute. Second, the boundary: verify by your own greps that no page-level code can reach the adapter, and judge whether boundary-check.mjs would actually catch a future violation — break it yourself in a scratchpad copy. Third, the claim the whole run exists to support: read design §3's host-adapter contract and the synthetic host in host-swap-check.mjs side by side and state plainly whether an MSFS/Coherent-GT implementer could write their adapter against that contract without touching a page file — if anything in the page layer still assumes Tauri, that is a finding, not a note.",
+      "depends_on": ["T-003", "T-004"],
+      "allowed_paths": [".claude/runs/2026-09-13-cdu-abstract-interface/reviews/**"],
+      "acceptance_criteria": [
+        "All four checks are re-run by the reviewer under Node 20 from windows-client/ and their actual output recorded: `node ui/tools/render-check.mjs \"$SCRATCH/review-render\"`, `node tools/contract-check.mjs`, `node ui/tools/boundary-check.mjs`, `node ui/tools/host-swap-check.mjs`. render-check is given an explicit scratchpad output directory so .claude/runs/2026-09-11-tauri-windows-client/prototypes/ is not overwritten; the reviewer records that directory's `git status --porcelain` before and after.",
+        "The reviewer independently re-breaks the boundary — at minimum a page importing ./bridge.js and a page mentioning __TAURI__ — in a copy of the tree under the session scratchpad, confirms boundary-check.mjs exits 1 with a one-line reason for each, and confirms the repo was never edited (`git status --porcelain` pasted).",
+        "Every member of design §2's interface table and design §3's adapter table is traced to the code that implements it, by file and line; a member frozen in the design and missing from the code, or a method the code has that the design does not, is a numbered finding.",
+        "The reviewer's own greps confirm the DoD's first bullet: no page-level code calls the adapter directly and no file outside ui/src/bridge.js mentions __TAURI__/__TAURI_INTERNALS__. The commands and their output are pasted, not summarised.",
+        "The token-masking path is reviewed line by line after the refactor and the review states plainly whether a typed token can reach the DOM, an attribute, a title, or a saved config it should not — with the reasoning, not just a reference to a passing check.",
+        "The bridge-mode label decision is checked against design §4: the review states which way it was decided, confirms the code matches, and says what a third host renders today under that decision.",
+        "Scope is verified: `git status --porcelain windows-client/src-tauri windows-client/sidecar src client agent tests` is empty, the root package.json and lockfile are unmodified, and every changed file is under windows-client/ui/ or .claude/runs/2026-09-13-cdu-abstract-interface/.",
+        "The review states which parts of the DoD could not be verified on this Linux machine (a real WebView2 host, a real MSFS/Coherent-GT host) and what would falsify the design if they were available.",
+        "Verdict is approve or request_changes with numbered findings, each naming file, line and the command that exposed it, written to .claude/runs/2026-09-13-cdu-abstract-interface/reviews/."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-cdu-abstract-interface 2 3 4 5",
+        ".claude/runs/2026-09-13-cdu-abstract-interface/intake.md",
+        "windows-client/ui/src/app.js",
+        "windows-client/ui/src/bridge.js",
+        "windows-client/ui/src/pages/index.js",
+        "windows-client/ui/tools/boundary-check.mjs",
+        "windows-client/ui/tools/host-swap-check.mjs"
+      ],
+      "model_hint": "opus"
+    }
+  ]
+}
