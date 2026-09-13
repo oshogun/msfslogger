@@ -29,6 +29,32 @@ function legTrackChains(legs: JourneyLeg[]): [number, number][][] {
   return unwrapLonChains(sortedLegs(legs).map(l => l.track as [number, number][]));
 }
 
+// Airport markers need the same unwrapped reference frame as the leg
+// polylines above them, or an airport near the antimeridian renders at its
+// raw longitude — detached from the unwrapped track approaching it. `ordered`
+// and `trackChains` are already aligned by index (both derived from the same
+// seq-sorted legs), so each leg's chain endpoints give an unwrapped position
+// for its departure/arrival ICAO. An airport visited more than once keeps the
+// position from its first occurrence, matching the server's own tie-break for
+// a repeatedly-visited airport.
+export function airportPositions(
+  ordered: JourneyLeg[],
+  trackChains: [number, number][][]
+): Map<string, [number, number]> {
+  const positions = new Map<string, [number, number]>();
+  ordered.forEach((leg, i) => {
+    const chain = trackChains[i];
+    if (chain.length === 0) return;
+    if (leg.departureIcao !== null && !positions.has(leg.departureIcao)) {
+      positions.set(leg.departureIcao, chain[0]);
+    }
+    if (leg.arrivalIcao !== null && !positions.has(leg.arrivalIcao)) {
+      positions.set(leg.arrivalIcao, chain[chain.length - 1]);
+    }
+  });
+  return positions;
+}
+
 function FitAll({ legs }: { legs: JourneyLeg[] }) {
   const map = useMap();
   useEffect(() => {
@@ -53,6 +79,7 @@ export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) 
 
   const ordered = sortedLegs(legs);
   const trackChains = legTrackChains(legs);
+  const unwrappedAirportPositions = airportPositions(ordered, trackChains);
 
   return (
     <MapContainer style={{ height: '100%' }} zoom={4} center={ordered[0].track[0] ?? [0, 0]} preferCanvas>
@@ -90,7 +117,7 @@ export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) 
       {airports.map(a => (
         <CircleMarker
           key={a.icao}
-          center={[a.lat, a.lon]}
+          center={unwrappedAirportPositions.get(a.icao) ?? [a.lat, a.lon]}
           radius={a.visits > 1 ? 5 : 3.5}
           pathOptions={{ color: '#e2e8f0', weight: 1.5, fillColor: '#0f1117', fillOpacity: 1 }}
         >
