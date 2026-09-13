@@ -75,6 +75,13 @@ export interface Trip {
   planned_legs: PlannedLegWithChildren[];
 }
 
+// ── Settings ──────────────────────────────────────────────────────────────
+
+/** GET and PUT /api/settings/simbrief. Absence is `null`, never a 404. */
+export interface SimbriefSettings {
+  simbrief_user_id: string | null;
+}
+
 // ── Planned legs ──────────────────────────────────────────────────────────────
 //
 // Mirrors src/types.ts and src/lnmpln.ts field-for-field, including
@@ -254,6 +261,36 @@ export interface PlannedLegImportResponse {
    * (phase-1 review finding F-3). Branch on `batch?.ordering`, never assume it.
    */
   batch?: { ordering: 'chain' | 'upload'; reason: BatchChainReason };
+}
+
+/**
+ * A warning surfaced by the SimBrief import. `code` is a plain string, not a
+ * union: the server can add a warning code without this client failing to
+ * compile, since only `message` is ever rendered.
+ */
+export interface SimbriefWarning {
+  code: string;
+  message: string;
+}
+
+/** POST /api/trips/:id/planned-legs/simbrief response's `result` field. */
+export interface SimbriefImportResult {
+  status: 'imported' | 'duplicate';
+  planned_leg_id: number;
+  label: string;
+  warnings: SimbriefWarning[];
+  /** Set for 'duplicate': a one-line reason, shown to the user (not an error). */
+  error?: string;
+}
+
+/**
+ * 201 on a new import, 200 on a duplicate (nothing failed, nothing changed).
+ * `imported` holds at most one leg — one fetch is one plan — unlike the
+ * .lnmpln batch route's `imported` array, which can hold several.
+ */
+export interface SimbriefImportResponse {
+  imported: PlannedLegWithChildren[];
+  result: SimbriefImportResult;
 }
 
 /** GET and PUT /api/active-trip (future phase; declared here ahead of the endpoint). */

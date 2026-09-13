@@ -6,7 +6,7 @@ import { StatsGrid } from '../components/StatsGrid';
 import { interleaveTripRows, GhostLegRow, plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
 import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
-import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip } from '../types';
+import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip, SimbriefSettings, SimbriefImportResponse, SimbriefImportResult } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 // Client-side windowing of the legs table: 20 rows per
@@ -44,6 +44,22 @@ export function TripDetail() {
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [reorderError, setReorderError] = useState('');
   const [reorderingLegId, setReorderingLegId] = useState<number | null>(null);
+
+  // SimBrief User ID setting: prefilled from GET /api/settings/simbrief on
+  // load, saved via PUT. simbriefSaved is `undefined` until that GET resolves
+  // (the "loading" state), then the stored value (string) or null (unset) —
+  // no separate loading flag needed.
+  const [simbriefUserId, setSimbriefUserId] = useState('');
+  const [simbriefSaved, setSimbriefSaved] = useState<string | null | undefined>(undefined);
+  const [simbriefSaving, setSimbriefSaving] = useState(false);
+  const [simbriefSettingsError, setSimbriefSettingsError] = useState('');
+
+  // The import itself: POST /api/trips/:id/planned-legs/simbrief. simbriefResult
+  // holds the last outcome (imported or duplicate — both are 2xx, neither is
+  // simbriefError) so it can render alongside a stale-but-still-valid legs table.
+  const [simbriefImporting, setSimbriefImporting] = useState(false);
+  const [simbriefError, setSimbriefError] = useState('');
+  const [simbriefResult, setSimbriefResult] = useState<SimbriefImportResult | null>(null);
 
   // Active-trip toggle.
   const [activeBusy, setActiveBusy] = useState(false);
@@ -83,6 +99,16 @@ export function TripDetail() {
         document.title = `${t.name} — msfslogger`;
       })
       .catch(err => setLoadError((err as Error).message));
+
+    // A user-level setting, not trip-scoped — loaded alongside the trip but
+    // failing independently of it, so a settings-load failure never blocks
+    // the rest of the page (including the .lnmpln import section below).
+    apiFetch<SimbriefSettings>('/api/settings/simbrief')
+      .then(s => {
+        setSimbriefSaved(s.simbrief_user_id);
+        setSimbriefUserId(s.simbrief_user_id ?? '');
+      })
+      .catch(err => setSimbriefSettingsError((err as Error).message));
   }, [id, navigate]);
 
   useEffect(() => {
@@ -229,6 +255,58 @@ export function TripDetail() {
     } finally {
       setImporting(false);
       if (importInputRef.current) importInputRef.current.value = '';
+    }
+  }
+
+  async function handleSaveSimbriefId() {
+    setSimbriefSaving(true);
+    setSimbriefSettingsError('');
+    try {
+      const result = await apiFetch<SimbriefSettings>('/api/settings/simbrief', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ simbrief_user_id: simbriefUserId.trim() || null }),
+      });
+      setSimbriefSaved(result.simbrief_user_id);
+      setSimbriefUserId(result.simbrief_user_id ?? '');
+    } catch (err) {
+      // Reject and revert: the field only ever represents what is actually
+      // stored server-side, so a rejected edit does not linger on screen
+      // looking as if it might have taken.
+      setSimbriefUserId(simbriefSaved ?? '');
+      setSimbriefSettingsError((err as Error).message);
+    } finally {
+      setSimbriefSaving(false);
+    }
+  }
+
+  /**
+   * Imports the operator's latest SimBrief OFP as a new planned leg. Success
+   * (201, a new leg) and duplicate (200, nothing changed) are both `res.ok` —
+   * apiFetch returns normally for either, and only the trip is re-fetched on
+   * an actual import, so a duplicate never disturbs the legs already on
+   * screen. Any non-2xx throws with the server's frozen user-facing message
+   * (apiFetch reads body.error), which lands in simbriefError untouched.
+   */
+  async function handleImportSimbrief() {
+    setSimbriefImporting(true);
+    setSimbriefError('');
+    setSimbriefResult(null);
+    try {
+      const body = await apiFetch<SimbriefImportResponse>(`/api/trips/${id}/planned-legs/simbrief`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allow_duplicates: false }),
+      });
+      setSimbriefResult(body.result);
+      if (body.result.status === 'imported') {
+        const updated = await apiFetch<Trip>(`/api/trips/${id}`);
+        setTrip(updated);
+      }
+    } catch (err) {
+      setSimbriefError((err as Error).message);
+    } finally {
+      setSimbriefImporting(false);
     }
   }
 
@@ -428,6 +506,17 @@ export function TripDetail() {
   }
 
   const planCount = trip.flights.filter(f => f.flight_plan_name).length;
+  const simbriefSettingsLoading = simbriefSaved === undefined && !simbriefSettingsError;
+  const simbriefIdDirty = simbriefUserId !== (simbriefSaved ?? '');
+  // A click must never use a stale server-side value (dirty) or fire against
+  // no saved ID at all (null) — the hint explains whichever one blocks it.
+  const simbriefImportHint = simbriefSettingsLoading
+    ? null
+    : simbriefIdDirty
+      ? 'Save your SimBrief User ID first.'
+      : (simbriefSaved == null ? 'Enter your SimBrief Pilot ID to enable import.' : null);
+  const simbriefImportDisabled =
+    simbriefSettingsLoading || simbriefSaving || simbriefImporting || simbriefIdDirty || simbriefSaved == null;
   // trip.planned_legs is always [] for a trip with no imported plans, so this
   // is a no-op for every trip that predates this feature.
   const mergedRows = interleaveTripRows(trip.flights, trip.planned_legs);
@@ -598,6 +687,55 @@ export function TripDetail() {
           </ul>
         )}
         {reorderError && <p className="edit-error">{reorderError}</p>}
+      </div>
+
+      <div className="simbrief-import-section">
+        <div className="section-title">Import from SimBrief</div>
+        <div className="flight-plan-upload">
+          <label htmlFor="simbrief-user-id" className="simbrief-id-label">SimBrief User ID</label>
+          <input
+            id="simbrief-user-id"
+            type="text"
+            className="simbrief-id-input"
+            value={simbriefUserId}
+            placeholder={simbriefSettingsLoading ? 'Loading…' : ''}
+            disabled={simbriefSettingsLoading || simbriefSaving}
+            onChange={e => setSimbriefUserId(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={simbriefSettingsLoading || simbriefSaving || !simbriefIdDirty}
+            onClick={handleSaveSimbriefId}
+          >{simbriefSaving ? 'Saving…' : 'Save'}</button>
+        </div>
+        {simbriefSettingsError && <span className="edit-error">{simbriefSettingsError}</span>}
+        <div className="flight-plan-upload">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={simbriefImportDisabled}
+            onClick={handleImportSimbrief}
+          >{simbriefImporting ? 'Importing…' : 'Import from SimBrief'}</button>
+          {simbriefImporting && <span className="flight-plan-status">Importing from SimBrief…</span>}
+          {!simbriefImporting && simbriefImportHint && <span className="flight-plan-status">{simbriefImportHint}</span>}
+        </div>
+        {simbriefError && <span className="edit-error">{simbriefError}</span>}
+        {simbriefResult?.status === 'imported' && (
+          <>
+            <p className="import-notice">Imported {simbriefResult.label} as a new planned leg.</p>
+            {simbriefResult.warnings.length > 0 && (
+              <ul className="import-results">
+                {simbriefResult.warnings.map((w, i) => (
+                  <li key={`${w.code}-${i}`} className="import-result-warning">{w.message}</li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+        {simbriefResult?.status === 'duplicate' && (
+          <p className="import-notice">{simbriefResult.error}</p>
+        )}
       </div>
 
       <div className="legs-section">

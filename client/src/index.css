@@ -455,6 +455,21 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .import-result-error { font-size: 0.8rem; color: #f87171; }
 .import-result-warning { font-size: 0.8rem; color: #f59e0b; }
 
+.simbrief-import-section { margin-bottom: 1.5rem; }
+.simbrief-id-label { font-size: 0.78rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.simbrief-id-input {
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  padding: 0.45rem 0.65rem;
+  font-family: inherit;
+  width: 160px;
+  transition: border-color 0.15s;
+}
+.simbrief-id-input:focus { outline: none; border-color: #3b82f6; }
+
 .tr-ghost { opacity: 0.65; }
 .tr-ghost td { font-style: italic; }
 .leg-color-swatch--ghost {

@@ -1,0 +1,256 @@
+{
+  "run_id": "2026-09-13-simbrief-import",
+  "goal": "Add SimBrief as a second planned-leg import source alongside the existing Little Navmap (.lnmpln) import. The operator saves one SimBrief User ID server-side; clicking \"Import from SimBrief\" on a trip page fetches their latest OFP/route from SimBrief's API, parses it into the same planned_legs/planned_waypoints/planned_alternates shape the .lnmpln import already produces, and appends it to that trip's planned legs. A failed fetch leaves existing planned legs untouched and shows an actionable message. The .lnmpln path keeps working unchanged.",
+
+  "frozen_decisions": [
+    "AC1: A visible SimBrief User ID field exists and accepts valid input.",
+    "AC2: The SimBrief User ID is stored and prefilled on next app load/session.",
+    "AC3: Clicking \"Import from SimBrief\" triggers a fetch for the latest SimBrief plan for that User ID.",
+    "AC4: Imported route legs appear in planned legs without manual re-entry.",
+    "AC5: If fetch fails (invalid ID, network/API error, no recent plan), the user sees a clear error message and existing planned legs remain unchanged.",
+    "AC6: Little Navmap integration continues to work as before.",
+    "Non-functional: reasonable import latency; user-friendly/actionable error states; import success/failure logged for troubleshooting.",
+    "The SimBrief User ID field and the \"Import from SimBrief\" button live inline on client/src/pages/TripDetail.tsx, next to the existing \"Import Planned Route (.lnmpln)\" section - not a new settings page and not a new route.",
+    "One global saved User ID, reused for every trip's import. src/auth/password.ts documents a \"single operator account\", which confirms this - no multi-user model exists to contradict it.",
+    "A NEW small key/value settings table, not a reuse of app_secret (src/db.ts:256-262), whose own doc comment scopes it to server-generated secrets.",
+    "The User ID is persisted server-side, never in browser localStorage - the server makes the outbound call.",
+    "A new parser module src/simbrief.ts declaring its own ParsedSimbriefPlan type, structurally compatible with db.ts's CreatePlannedLegPlan but not imported from it, wired together in src/server.ts - the same seam the .lnmpln parser uses.",
+    "Native Node 20 fetch. No new runtime dependency. The fetch function is injectable (a parameter defaulting to global fetch) so the orchestration logic has a unit-test seam.",
+    "The exact SimBrief endpoint, response format and field names are NOT yet verified. Verifying them against the live service is the Designer's job (T-001) and gates every implementation task.",
+    "DevOps is skipped for this run: no new dependency, no build/packaging/deploy change expected.",
+    "Never touch the running server on port 3000 or the live flights.db. Anything needing a live server uses PORT=3100 against a scratch db copy.",
+    "Node 20 via nvm for every command: export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20",
+    "No task straddles backend and frontend. Backend: src/**, tests/**, samples/**. Frontend: client/**."
+  ],
+
+  "sequencing_rationale": [
+    "Design comes first and alone gates everything, because the wire format is unverified: endpoint, JSON-vs-XML, field paths and the \"no recent plan\" signal all shape the parser type, the error taxonomy and the UI states. This mirrors the XSD-verification gate the 2026-09-04-lnmpln-trip-planner run put ahead of its parser task.",
+    "Phase 1 ships persistence only (AC1, AC2). Storing and prefilling the ID is independently useful and independently falsifiable, and it isolates the one schema change in the run behind its own review gate before any outbound network code exists.",
+    "Phase 2 ships the import itself (AC3, AC4, AC5, AC6) on top of a setting already proven durable.",
+    "The risky part is split into two modules with a CLI inspector: src/simbrief.ts is pure (parse only - no network, no db) and src/simbriefClient.ts owns the network behind an injectable fetch. Both are falsifiable by npm test with no network, and by npx ts-node src/inspect-simbrief.ts against committed fixtures, without the sim and without a live server.",
+    "SimBrief gets a SIBLING route; the existing multer-backed POST /api/trips/:id/planned-legs handler is not modified. AC6 is then protected structurally rather than by care, and every task carries a git-diff criterion that says so.",
+    "src/server.ts is touched by T-002 and T-006, and client/src/pages/TripDetail.tsx by T-003 and T-007. Those pairs sit in different phases on purpose: the phase-1 reviewer gate (T-004) is the mechanism that stops them ever running concurrently. Nothing inside a phase shares a path.",
+    "T-005 and T-006 are consecutive backend_sr tasks on one dependency chain and should go to a single implementer agent, batched - they are split here only because their verification modes differ (hermetic unit tests and a CLI inspector versus a scratch server and curl), which makes the review verdicts separable.",
+    "No DevOps task: native fetch adds no dependency, and if design wants a base-URL override for end-to-end verification it must read it in the SimBrief module itself (the EXPORT_BASE_URL precedent at src/pdfExport.ts:28), not in src/config.ts - src/config.ts owns security-relevant env only, and its ENV_VARS list is asserted by tests/config.test.ts."
+  ],
+
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Save a SimBrief User ID",
+      "ships": "The trip page has a SimBrief User ID field that saves server-side, rejects bad input with a visible reason, and comes back prefilled on the next page load. AC1 and AC2.",
+      "tasks": ["T-001", "T-002", "T-003", "T-004"]
+    },
+    {
+      "phase": 2,
+      "name": "Import from SimBrief",
+      "ships": "Clicking \"Import from SimBrief\" on a trip fetches the saved user's latest OFP and appends its route to that trip's planned legs; every failure mode shows an actionable message and leaves existing legs untouched; the .lnmpln import is unchanged. AC3, AC4, AC5, AC6.",
+      "tasks": ["T-005", "T-006", "T-007", "T-008"]
+    }
+  ],
+
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Verify SimBrief's real API and freeze the whole contract",
+      "goal": "Fetch SimBrief's API for real, record what it actually returns, and freeze design.md as eight numbered sections covering: the verified API, the settings table, the settings endpoints, ParsedSimbriefPlan and its mapping onto db.ts's CreatePlannedLegPlan, the fetch client and error taxonomy, the import endpoint, the client contract plus the end-to-end verification recipe, and the .lnmpln surfaces that must not change. No code is written in this task.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-13-simbrief-import/design.md",
+        ".claude/runs/2026-09-13-simbrief-import/contracts/**"
+      ],
+      "acceptance_criteria": [
+        "A real, unedited SimBrief response is saved under .claude/runs/2026-09-13-simbrief-import/contracts/ with the exact request URL and fetch date recorded next to it. If no response can be obtained without the operator's own account, return blocked naming exactly what is needed (a User ID to test with, or a saved OFP export file) - do not design against a remembered or documented shape.",
+        "design.md section 1 states, citing the captured sample and the URL it came from, the endpoint, its query parameters, whether the response is JSON or XML, whether any auth is needed, and the literal field paths for: departure ICAO, destination ICAO, the en-route waypoint list (ident, lat, lon, altitude, airway/type), alternates, cruise altitude, aircraft type, flight rules, OFP id and generation time. Every claim names the line of the sample it came from.",
+        "Section 1 also states how \"unknown user id\" and \"no recent plan\" are signalled - HTTP status, body shape, literal error string - quoted from actual failing requests made during this task, not inferred.",
+        "Section 2 freezes the settings table: DDL, column names, where it goes inside the existing CREATE TABLE IF NOT EXISTS block in src/db.ts, the accessor signatures, and one sentence on why app_secret is not reused.",
+        "Section 3 freezes the settings endpoints: method and path for read and write, request and response JSON, the validation rule for a SimBrief User ID (character set, length, trimming, case), and the status plus body for every rejection.",
+        "Section 4 freezes ParsedSimbriefPlan field by field and its mapping onto CreatePlannedLegPlan (src/db.ts:767-851): which SimBrief field feeds which, which CreatePlannedLegPlan fields have no SimBrief source and what value they take instead, and what source_filename and source_sha256 hold for a non-file import (planned_legs declares both NOT NULL, src/db.ts:187-188). State explicitly whether re-importing the same OFP is detectable via findPlannedLegBySource's (trip_id, source_sha256) key, given that two fetches of the same plan may not be byte-identical.",
+        "Section 5 freezes the fetch client: the exported signature including the injectable fetch parameter and its default, the timeout, and a complete error taxonomy - code, log line format, user-facing message - covering at least unknown/invalid user id, no recent plan, network failure, non-200 status, and an unparseable body.",
+        "Section 6 freezes the import endpoint: method and path (a sibling route - the existing POST /api/trips/:id/planned-legs is not modified), request body, success and failure response shapes, duplicate handling, and the guarantee that a failed import writes nothing at all.",
+        "Section 7 freezes the client contract - the types added to client/src/types.ts, where the field and button sit on TripDetail.tsx, every state rendered - AND the end-to-end verification recipe: precisely how an implementer exercises a SUCCESSFUL import on PORT=3100 against a scratch db copy without the operator's SimBrief account. If that needs a base-URL override, it is read inside the SimBrief module itself, following the EXPORT_BASE_URL precedent at src/pdfExport.ts:28, never added to src/config.ts's ENV_VARS.",
+        "Section 8 lists the .lnmpln surfaces that must stay unchanged, by file and line range, so each later task can assert it with git diff.",
+        "Every heading is of the form '## <n>. <title>' so that .claude/tools/ctx.sh design 2026-09-13-simbrief-import <n> returns exactly that one section. Run it for each of 1 through 8 and paste the first line of each result."
+      ],
+      "context": [
+        ".claude/runs/2026-09-13-simbrief-import/intake.md",
+        "src/lnmpln.ts:186-250 (ParsedFlightPlan - the shape to mirror)",
+        "src/db.ts:90-226 (planned_legs schema), 256-262 (app_secret), 767-851 (CreatePlannedLegPlan/CreatePlannedLegInput)",
+        "src/server.ts:519-654 (the .lnmpln import route and its neighbours)",
+        "client/src/pages/TripDetail.tsx:189-233,560-600 (existing import UI and handler)",
+        "src/auth/middleware.ts (requireAuth and requireSameOrigin already gate /api)"
+      ]
+    },
+
+    {
+      "id": "T-002",
+      "role": "backend_sr",
+      "title": "Settings table, User ID validation, and the settings endpoints",
+      "goal": "Persist one SimBrief User ID server-side and expose it over the API exactly as frozen in design sections 2 and 3. The table and its accessors go in src/db.ts; the routes in src/server.ts behind the existing /api auth gate; the User ID validation is a pure exported function in the new src/simbrief.ts (which gains its parser in T-005).",
+      "depends_on": ["T-001"],
+      "allowed_paths": ["src/db.ts", "src/server.ts", "src/simbrief.ts", "tests/simbrief.test.ts"],
+      "acceptance_criteria": [
+        "The settings table is created by the existing CREATE TABLE IF NOT EXISTS block in src/db.ts - no versioned-migration machinery is introduced. Copy flights.db plus its -wal and -shm files to the scratchpad, open the copy with the new code under Node 20, and show the new table present and SELECT count(*) FROM planned_legs unchanged. Report the live flights.db md5 before and after the task; they must match.",
+        "Opening the same scratch database a second time is a no-op: run the open twice and show no error and no duplicate row.",
+        "On a scratch server (PORT=3100, scratch db copy): the read route returns the frozen \"unset\" body from design section 3 before anything is saved; the write route with a valid ID returns the frozen success body; a second read returns the saved ID. Paste all three curl commands and their responses.",
+        "Every invalid input listed in design section 3 is rejected with the frozen status and body, and after each rejection the read route still returns the previously saved value - paste one curl pair per rejection case.",
+        "Both routes are behind the existing requireAuth gate: curl without a session cookie gets 401 on each. No new bypass is added to src/auth/ or to the gate ordering in src/server.ts.",
+        "The validation function is pure: grep -n \"import\\|require\" src/simbrief.ts shows no import of ./db, express, fs, http or https.",
+        "tests/simbrief.test.ts covers the accepted and rejected forms of a User ID from design section 3 and passes under npm test. npm run test:types and npx tsc --noEmit pass.",
+        "The .lnmpln import is untouched: git diff src/server.ts shows no change inside the POST /api/trips/:id/planned-legs handler (src/server.ts:523-643), and posting a file from samples/lnmpln/ to the scratch server still returns 201."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 2 3 8",
+        "src/db.ts:256-262 (app_secret table shape), 265-310 (the additive-migration pattern), 1457-1476 (getAppSecret/getOrCreateAppSecret accessor style)",
+        "src/auth/middleware.ts (requireAuth 401 body; requireSameOrigin lets a header-less curl through)"
+      ]
+    },
+
+    {
+      "id": "T-003",
+      "role": "frontend_jr",
+      "title": "SimBrief User ID field on the trip page",
+      "goal": "Add the labelled SimBrief User ID input and its save action to client/src/pages/TripDetail.tsx, inline next to the existing \"Import Planned Route (.lnmpln)\" section, prefilled from the settings endpoint on load, per design sections 3 and 7.",
+      "depends_on": ["T-002"],
+      "allowed_paths": ["client/src/pages/TripDetail.tsx", "client/src/types.ts", "client/src/index.css"],
+      "acceptance_criteria": [
+        "The field renders next to the existing \"Import Planned Route (.lnmpln)\" section (TripDetail.tsx:567-580), not on a new page or route - client/src/App.tsx is unchanged (git diff shows no entry for it).",
+        "Against a scratch server (PORT=3100, scratch db copy): saving a valid ID and then reloading the page shows it prefilled. Evidence is the rendered value plus the GET response that backs it, both pasted.",
+        "A server-rejected ID renders the server's message inline near the field, the previously saved value is still displayed, and a follow-up GET shows the stored value unchanged - paste the rejection response and the follow-up GET.",
+        "Request and response types live in client/src/types.ts and match design section 3 field for field. npm run build succeeds and leaves the tree in a shippable state.",
+        "The browser never calls SimBrief directly: grep -rn \"simbrief.com\" client/src returns nothing.",
+        "The .lnmpln file input, its status text and its results list still render and still import successfully on the scratch server."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 3 7",
+        "client/src/pages/TripDetail.tsx:189-233 (handleImportPlannedLegs), 560-600 (the import section markup)",
+        "client/src/utils/api.ts (apiFetch, UnauthorizedError - and why the .lnmpln handler deliberately bypasses apiFetch)"
+      ]
+    },
+
+    {
+      "id": "T-004",
+      "role": "reviewer",
+      "title": "Phase 1 gate - settings persistence",
+      "goal": "Re-run the evidence for T-002 and T-003 rather than trusting their reports, and decide approve or request_changes for phase 1. This is the gate that keeps phase 2's edits to src/server.ts and TripDetail.tsx from ever overlapping phase 1's.",
+      "depends_on": ["T-002", "T-003"],
+      "allowed_paths": [".claude/runs/2026-09-13-simbrief-import/reviews/**"],
+      "acceptance_criteria": [
+        "npm test, npm run test:types, npx tsc --noEmit and npm run build are re-run here, on a fresh scratch db copy, and each verdict names the command and quotes its output. No verdict rests on an implementer's report.",
+        "The full settings curl sequence - unset read, valid write, read back, every rejection case from design section 3, and an unauthenticated 401 on both routes - is re-run against a scratch server the reviewer starts and stops itself.",
+        "The schema change is confirmed additive and idempotent: open the same scratch database twice, show planned_legs, trips and flights row counts unchanged, and show the new table present.",
+        "The .lnmpln import still works end-to-end: POST a file from samples/lnmpln/ to the existing endpoint on the scratch server and get 201 with a planned leg, and confirm git diff shows no change inside that handler.",
+        "The live flights.db md5 is reported and matches its pre-phase value, and nothing was started, stopped or rebuilt on port 3000.",
+        "Any drift between design sections 2-3 and the code as built is request_changes, not a note.",
+        "The verdict is written to .claude/runs/2026-09-13-simbrief-import/reviews/phase-1.md with an explicit approve or request_changes and, if the latter, the specific task id to send it back to."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 2 3 8",
+        ".claude/tools/ctx.sh task 2026-09-13-simbrief-import T-002 T-003"
+      ],
+      "model_hint": "opus"
+    },
+
+    {
+      "id": "T-005",
+      "role": "backend_sr",
+      "title": "SimBrief OFP parser, injectable fetch client, fixtures and CLI inspector",
+      "goal": "Build the two modules the import stands on, per design sections 1, 4 and 5: parseSimbriefPlan in src/simbrief.ts (pure - no network, no db, no fs) returning ParsedSimbriefPlan, and fetchSimbriefPlan in src/simbriefClient.ts, which owns the network behind a fetch parameter defaulting to global fetch. Plus committed fixtures and src/inspect-simbrief.ts so both are falsifiable without a server.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        "src/simbrief.ts",
+        "src/simbriefClient.ts",
+        "src/inspect-simbrief.ts",
+        "samples/simbrief/**",
+        "tests/simbrief.test.ts",
+        "tests/simbriefClient.test.ts"
+      ],
+      "acceptance_criteria": [
+        "The real captured response from design section 1 is committed unedited under samples/simbrief/, copied from .claude/runs/2026-09-13-simbrief-import/contracts/, alongside a short README naming the request URL and capture date - the samples/lnmpln/README.md convention.",
+        "npx ts-node src/inspect-simbrief.ts samples/simbrief/<real fixture> prints departure ident, destination ident, waypoint count, cruise altitude, alternate count and any warnings, and exits 0. Paste the output next to the same values read by hand out of the fixture; they must agree.",
+        "parseSimbriefPlan returns exactly the ParsedSimbriefPlan shape frozen in design section 4, and every field the mapping marks required is non-null for the real fixture.",
+        "Malformed input is rejected with a typed error carrying a code and a one-line reason - never a stack trace, never a partially populated object - for each case listed in design section 5, at minimum: a body that is not parseable at all, a well-formed body with no route, a body carrying the \"no recent plan\" signal, and a route with an out-of-range coordinate. Each is committed as a fixture under samples/simbrief/synthetic/ and the inspector exits non-zero with a one-line reason for each; paste all four.",
+        "src/simbrief.ts touches no network, no database and no filesystem: grep -n \"fetch\\|https\\?\\|from './db'\\|require('fs')\\|from 'fs'\" src/simbrief.ts shows no match.",
+        "fetchSimbriefPlan takes a fetch function as a parameter defaulting to global fetch, per design section 5, and tests/simbriefClient.test.ts drives every branch of the error taxonomy with a stub fetch. No test performs a real network call - the stub is the only fetch the suite ever sees.",
+        "No new runtime dependency: git diff package.json package-lock.json is empty.",
+        "npm test, npm run test:types and npx tsc --noEmit pass."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 1 4 5",
+        "src/lnmpln.ts:186-250 (ParsedFlightPlan), 478-520 (parse entry point, warnings and LnmplnParseError style)",
+        "src/inspect-lnmpln.ts (inspector output and exit-code conventions)",
+        "tests/lnmpln.test.ts:1-40 (fixture-path and no-network test conventions), tests/helpers/index.ts"
+      ]
+    },
+
+    {
+      "id": "T-006",
+      "role": "backend_sr",
+      "title": "Import-from-SimBrief endpoint",
+      "goal": "Add the sibling route frozen in design section 6: read the saved User ID, call fetchSimbriefPlan, and append the parsed plan to the trip's planned legs through the existing createPlannedLeg path. The multer-backed POST /api/trips/:id/planned-legs handler is not modified.",
+      "depends_on": ["T-005"],
+      "allowed_paths": ["src/server.ts"],
+      "acceptance_criteria": [
+        "Using the verification recipe frozen in design section 7, a successful import on a scratch server (PORT=3100, scratch db copy) returns the frozen success body, and GET /api/trips/:id/planned-legs afterwards shows the new leg with its waypoints in route order. Paste both responses.",
+        "For each failure case in design section 5 - no User ID saved, unknown/invalid ID, network failure, non-200, no recent plan, unparseable body - the endpoint returns the frozen status and message, and GET /api/trips/:id/planned-legs returns JSON byte-identical to the pre-attempt capture. Paste the before/after diff (expected: empty) for every one of them. This is AC5 and it is measured, not argued.",
+        "Every attempt logs exactly one line on success and one on failure, in the format frozen in design section 5, carrying the outcome and enough identity to troubleshoot. Paste the scratch server's stdout for one success and one failure.",
+        "The new route is registered among the literal /api/trips routes ahead of app.get('*') (see the comment at src/server.ts:519-522), and is behind requireAuth - an unauthenticated curl gets 401.",
+        "The .lnmpln route is unmodified: git diff src/server.ts shows no change inside the POST /api/trips/:id/planned-legs handler, and posting a file from samples/lnmpln/ to it on the same scratch server still returns 201 with a planned leg.",
+        "npx tsc --noEmit, npm test and npm run build pass, and the tree is left shippable.",
+        "The live flights.db md5 is reported unchanged, and the scratch server is shut down before the task reports."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 5 6 7 8",
+        "src/server.ts:519-654 (the .lnmpln route, its route-ordering comment, and GET planned-legs)",
+        "src/db.ts:767-851 (CreatePlannedLegPlan/CreatePlannedLegInput), createPlannedLeg, findPlannedLegBySource, getPlannedLegById"
+      ]
+    },
+
+    {
+      "id": "T-007",
+      "role": "frontend_jr",
+      "title": "\"Import from SimBrief\" button and its error states",
+      "goal": "Add the import button next to the User ID field on TripDetail.tsx, wire it to the endpoint from design section 6, refresh the planned-legs table on success, and render each frozen failure message on failure - per design sections 5, 6 and 7.",
+      "depends_on": ["T-006"],
+      "allowed_paths": ["client/src/pages/TripDetail.tsx", "client/src/types.ts", "client/src/index.css"],
+      "acceptance_criteria": [
+        "Clicking \"Import from SimBrief\" POSTs to the route from design section 6 and, on success, the imported legs appear in the trip's planned-legs table without a manual page reload. Demonstrate on a scratch server (PORT=3100, scratch db copy) using the design section 7 recipe, and paste the resulting table contents or DOM evidence.",
+        "While the request is in flight the button is disabled and a progress state is shown, so a second click cannot fire a second import. Show the disabled state.",
+        "Each failure case from design section 5 renders its frozen user-facing message near the button - not a bare status code, not a stack trace, not a silent no-op - and the planned-legs table on screen is unchanged. Show at least the \"no saved User ID\", \"unknown User ID\" and \"no recent plan\" cases.",
+        "With no User ID saved, the button is disabled and states why.",
+        "Types live in client/src/types.ts and match design sections 6 and 7 field for field; npm run build passes and leaves the tree shippable.",
+        "The .lnmpln file input, its warnings/results list and its import still work unchanged on the same scratch server - paste the 201 response and the rendered result.",
+        "grep -rn \"simbrief.com\" client/src returns nothing: the browser calls only the app's own API."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 5 6 7",
+        "client/src/pages/TripDetail.tsx:189-233 (importing/importError/importResults state pattern), 560-600 (import section markup)",
+        "client/src/types.ts:244-257 (PlannedLegImportResponse - the analogous response type)"
+      ]
+    },
+
+    {
+      "id": "T-008",
+      "role": "reviewer",
+      "title": "Phase 2 gate - the import end to end",
+      "goal": "Re-run the evidence for T-005, T-006 and T-007 and decide approve or request_changes for the feature as a whole, measuring AC4, AC5 and AC6 rather than reading claims about them.",
+      "depends_on": ["T-005", "T-006", "T-007"],
+      "allowed_paths": [".claude/runs/2026-09-13-simbrief-import/reviews/**"],
+      "acceptance_criteria": [
+        "npm test, npm run test:types, npx tsc --noEmit and npm run build are re-run here; the inspector is re-run over every committed fixture under samples/simbrief/ including the synthetic bad ones; each verdict names its command and quotes its output.",
+        "The reviewer starts its own scratch server (PORT=3100, scratch db copy), runs the success path and every failure case from design section 5, and for each failure captures GET /api/trips/:id/planned-legs before and after and diffs them - an empty diff is the only pass for AC5.",
+        "AC6 is measured: a .lnmpln import on the same scratch server returns 201 and renders, and git diff src/server.ts shows the existing handler unmodified.",
+        "AC4 is measured: the waypoints of an imported SimBrief leg are read back out of the scratch database with better-sqlite3 under Node 20 and match the fixture's route, in order.",
+        "No new runtime dependency (git diff package.json package-lock.json empty) and no browser-side call to simbrief.com.",
+        "The success and failure log lines required by the non-functional requirement are observed in the scratch server's own stdout, not quoted from a report.",
+        "The live flights.db md5 is reported unchanged and port 3000 was never touched.",
+        "The verdict is written to .claude/runs/2026-09-13-simbrief-import/reviews/phase-2.md with an explicit approve or request_changes, the task id to send it back to if changes are needed, and a separate list of anything that belongs in a follow-up run rather than blocking this one."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-13-simbrief-import 4 5 6 8",
+        ".claude/tools/ctx.sh task 2026-09-13-simbrief-import T-005 T-006 T-007"
+      ]
+    }
+  ]
+}

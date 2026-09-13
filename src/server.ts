@@ -3,7 +3,7 @@ import session from 'express-session';
 import multer, { MulterError } from 'multer';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
-import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, setPlannedLegHandOutcome, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError } from './db';
+import { getFlights, getFlightById, deleteFlight, updateFlight, combineFlights, getFlightPointCount, createTrip, getTrips, getTripById, updateTrip, deleteTrip, assignFlightToTrip, removeFlightFromTrip, setFlightPlanName, clearFlightPlanName, createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, deletePlannedLeg, reorderPlannedLegs, setActiveTrip, getActiveTripId, setPlannedLegStatus, setPlannedLegHandOutcome, linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg, PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError, getSetting, setSetting } from './db';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from './flightPlans';
 import { renderPdf, appendPdfs } from './pdfExport';
 import {
@@ -22,6 +22,11 @@ import { getConfig } from './config';
 import { getOrCreateAppSecret } from './db';
 import { SqliteSessionStore } from './auth/sessionStore';
 import { requireAuth, requireSameOrigin, sessionCookieFrom, SESSION_COOKIE_NAME } from './auth/middleware';
+import {
+  SIMBRIEF_USER_ID_SETTING, validateSimbriefUserId, parseSimbriefPlan, SimbriefParseError,
+  type ParsedSimbriefPlan,
+} from './simbrief';
+import { fetchSimbriefPlan, SimbriefFetchError, type SimbriefErrorCode } from './simbriefClient';
 import { createAuthRouter } from './auth/routes';
 
 // Multer's own defaults are `fields: Infinity` and `fieldSize: 1MB`, so a
@@ -70,6 +75,20 @@ function looksLikeXml(buf: Buffer): boolean {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   return text.trimStart().startsWith('<');
 }
+
+/**
+ * How a failed SimBrief request is reported. 502/504 rather than 500 because
+ * the failure is upstream, and the distinction is what makes the log usable
+ * when the operator reports "the import is broken".
+ */
+const SIMBRIEF_FAILURE_STATUS: Record<SimbriefErrorCode, number> = {
+  UNKNOWN_USER: 400,
+  NO_PLAN: 404,
+  TIMEOUT: 504,
+  NETWORK: 502,
+  BAD_STATUS: 502,
+  BAD_BODY: 502,
+};
 
 /** ASCII-safe slug, so Content-Disposition needs no RFC 5987 encoding. */
 function slugify(value: string): string {
@@ -516,6 +535,39 @@ export function createServer(flightManager: FlightManager): express.Express {
     }
   });
 
+  // ── Settings ───────────────────────────────────────────────────────────────
+  // Under /api, so requireAuth gates both and requireSameOrigin already
+  // CSRF-defends the write.
+
+  app.get('/api/settings/simbrief', (_req, res) => {
+    // Always 200: an unset setting is a value (null), not a 404, so the client
+    // never branches on a status to render an empty text box.
+    res.json({ simbrief_user_id: getSetting(SIMBRIEF_USER_ID_SETTING) });
+  });
+
+  app.put('/api/settings/simbrief', (req, res) => {
+    const body = req.body as unknown;
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
+      return;
+    }
+
+    const result = validateSimbriefUserId((body as Record<string, unknown>).simbrief_user_id);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error, code: result.code });
+      return;
+    }
+
+    try {
+      setSetting(SIMBRIEF_USER_ID_SETTING, result.userId);
+      // Echo what was stored, post-trim, so the client renders what was saved
+      // rather than what it typed.
+      res.json({ simbrief_user_id: result.userId });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // ── Planned legs ───────────────────────────────────────────────────────────
   // Registered after ── Trips ── and before ── PDF export ──, so every literal
   // route here stays ahead of app.get('*').
@@ -640,6 +692,108 @@ export function createServer(flightManager: FlightManager): express.Express {
     }
     const batch = { ordering: (order.resolved ? 'chain' : 'upload') as 'chain' | 'upload', reason: order.reason };
     res.status(201).json({ imported, batch, results });
+  });
+
+  // A sibling of the .lnmpln import above, not an extension of it: one request
+  // to SimBrief is one plan, so this route takes a JSON body and answers with a
+  // single `result` object rather than a `results` array a caller might assume
+  // can be empty. The extra path segment means it never collides with the route
+  // above, and it is registered here so the literal path stays ahead of
+  // app.get('*').
+  //
+  // The step order is the contract, not an implementation detail: the trip
+  // lookup, the settings read, the network call, the parse and the duplicate
+  // check all happen before createPlannedLeg, which is the first and only
+  // write and is itself a transaction. Every failure below therefore returns
+  // with the trip's existing planned legs untouched, byte for byte. Do not
+  // introduce a second write, and do not move one earlier.
+  app.post('/api/trips/:id/planned-legs/simbrief', async (req, res) => {
+    const tripId = parseInt(req.params.id, 10);
+    if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id', code: 'INVALID_TRIP' }); return; }
+    if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found', code: 'NOT_FOUND' }); return; }
+
+    // A JSON boolean, unlike the .lnmpln route's `=== '1'` — that string check
+    // is a multipart form-field artifact and stays where it is.
+    const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === true;
+
+    // The pilot ID is never taken from the request: it is the operator's saved
+    // setting, so an authenticated page cannot use this route to pull an
+    // arbitrary third party's flight plan.
+    const userId = getSetting(SIMBRIEF_USER_ID_SETTING);
+    if (userId === null) {
+      console.error(`[SIMBRIEF] import failed: NO_USER_ID (trip ${tripId})`);
+      res.status(400).json({
+        error: 'No SimBrief User ID is saved. Enter your SimBrief Pilot ID above and save it, then try again.',
+        code: 'NO_USER_ID',
+      });
+      return;
+    }
+
+    let plan: ParsedSimbriefPlan;
+    try {
+      plan = parseSimbriefPlan(await fetchSimbriefPlan(userId));
+    } catch (err) {
+      if (err instanceof SimbriefFetchError) {
+        console.error(`[SIMBRIEF] import failed: ${err.message}`);
+        res.status(SIMBRIEF_FAILURE_STATUS[err.code]).json({ error: err.userMessage, code: err.code });
+        return;
+      }
+      if (err instanceof SimbriefParseError) {
+        // The request succeeded and SimBrief said Success; the payload just had
+        // no usable route in it. Still upstream's doing, so 502 and not 500.
+        console.error(`[SIMBRIEF] import failed: BAD_BODY (${err.code}: ${err.message})`);
+        res.status(502).json({ error: 'SimBrief returned a plan with no usable route.', code: 'BAD_BODY' });
+        return;
+      }
+      console.error(`[SIMBRIEF] import failed: INTERNAL (${String(err)})`);
+      res.status(500).json({ error: String(err) });
+      return;
+    }
+
+    const label = `${plan.departure.ident} → ${plan.destination.ident}${plan.ofp.flightNumber ? ` (${plan.ofp.flightNumber})` : ''}`;
+    const ofpId = plan.ofp.requestId ?? 'unknown';
+    // NOT the hash of the response body, which the .lnmpln path uses on file
+    // bytes: two requests for the same unchanged OFP come back differing in
+    // SimBrief's own server-timing field, so a body hash would never match and
+    // every re-import would land as a new leg. These three fields identify the
+    // OFP itself and are stable across requests, while a newly generated OFP
+    // changes them.
+    const sha256 = createHash('sha256')
+      .update(`simbrief\n${plan.ofp.requestId ?? ''}\n${plan.ofp.sequenceId ?? ''}\n${plan.ofp.timeGenerated ?? ''}`)
+      .digest('hex');
+
+    if (!allowDuplicates) {
+      const existing = findPlannedLegBySource(tripId, sha256);
+      if (existing) {
+        // 200, not 4xx: nothing failed and nothing changed.
+        console.log(`[SIMBRIEF] import duplicate: trip ${tripId} leg ${existing.id} ${plan.departure.ident}->${plan.destination.ident} ofp ${ofpId}`);
+        res.json({
+          imported: [],
+          result: {
+            status: 'duplicate', planned_leg_id: existing.id, label, warnings: [],
+            error: `This SimBrief plan is already imported into this trip as leg ${existing.seq}. Generate a new OFP on simbrief.com, or re-import to add it again.`,
+          },
+        });
+        return;
+      }
+    }
+
+    try {
+      const legId = createPlannedLeg({
+        tripId, plan, sourceFilename: `simbrief-${ofpId}.json`, sourceSha256: sha256,
+      });
+      console.log(
+        `[SIMBRIEF] import ok: trip ${tripId} leg ${legId} ${plan.departure.ident}->${plan.destination.ident} ` +
+        `${plan.waypoints.length} wpts ${plan.approxDistanceNm.toFixed(1)}nm ofp ${ofpId}`,
+      );
+      res.status(201).json({
+        imported: [getPlannedLegById(legId)!],
+        result: { status: 'imported', planned_leg_id: legId, label, warnings: plan.warnings },
+      });
+    } catch (err) {
+      console.error(`[SIMBRIEF] import failed: DB_ERROR (trip ${tripId}, ofp ${ofpId}, ${String(err)})`);
+      res.status(500).json({ error: String(err), code: 'DB_ERROR' });
+    }
   });
 
   app.get('/api/trips/:id/planned-legs', (req, res) => {
@@ -961,7 +1115,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     res.sendFile(path.join(process.cwd(), 'client', 'dist', 'index.html'));
   });
 
-  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (err instanceof MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         // err.field distinguishes which multer instance hit its limit: the
@@ -978,6 +1132,13 @@ export function createServer(flightManager: FlightManager): express.Express {
         return;
       }
       res.status(400).json({ error: err.message });
+      return;
+    }
+    // express.json() rejects a malformed body before any route runs, so the
+    // settings routes cannot answer it themselves. Scoped to /api/settings/ so
+    // every other route keeps the default handling it has always had.
+    if (err instanceof SyntaxError && 'body' in err && req.path.startsWith('/api/settings/')) {
+      res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
       return;
     }
     next(err);

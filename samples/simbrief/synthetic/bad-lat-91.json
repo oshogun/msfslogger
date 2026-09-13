@@ -1,0 +1,91 @@
+{
+ "fetch": {
+  "userid": "1099607",
+  "static_id": {},
+  "status": "Success",
+  "time": "0.0023"
+ },
+ "params": {
+  "request_id": "186182026",
+  "sequence_id": "60bafd06304e",
+  "static_id": {},
+  "user_id": "1099607",
+  "time_generated": "1789306516",
+  "airac": "2609"
+ },
+ "general": {
+  "initial_altitude": "28000",
+  "flight_number": "SHG037",
+  "route": "SAMI4L SAMIK T577 UB",
+  "sid_ident": "SAMI4L",
+  "star_ident": "LEKP4V",
+  "sid_trans": {},
+  "star_trans": {},
+  "route_distance": "754"
+ },
+ "origin": {
+  "icao_code": "UHPP",
+  "icao_region": "UH",
+  "name": "YELIZOVO",
+  "pos_lat": "53.169444",
+  "pos_long": "158.450556",
+  "elevation": "128",
+  "plan_rwy": "34L",
+  "faa_code": {}
+ },
+ "destination": {
+  "icao_code": "UHSS",
+  "icao_region": "UH",
+  "name": "KHOMUTOVO",
+  "pos_lat": "46.888611",
+  "pos_long": "142.717500",
+  "elevation": "59",
+  "plan_rwy": "19",
+  "faa_code": {}
+ },
+ "alternate": {},
+ "atc": {
+  "flight_rules": "I"
+ },
+ "aircraft": {
+  "icao_code": "BE20",
+  "name": "KING AIR 200"
+ },
+ "navlog": {
+  "fix": [
+   {
+    "ident": "SAMIK",
+    "name": "SAMIK",
+    "type": "wpt",
+    "via_airway": "T577",
+    "pos_lat": "53.0",
+    "pos_long": "157.6",
+    "altitude_feet": "25200",
+    "stage": "CLB",
+    "icao_region": "UH"
+   },
+   {
+    "ident": "BADLAT",
+    "name": "BADLAT",
+    "type": "wpt",
+    "via_airway": "T577",
+    "pos_lat": "91.5",
+    "pos_long": "157.0",
+    "altitude_feet": "25200",
+    "stage": "CLB",
+    "icao_region": "UH"
+   },
+   {
+    "ident": "UHSS",
+    "name": "KHOMUTOVO",
+    "type": "apt",
+    "via_airway": "LEKP4V",
+    "pos_lat": "46.888611",
+    "pos_long": "142.717500",
+    "altitude_feet": "25200",
+    "stage": "DSC",
+    "icao_region": "UH"
+   }
+  ]
+ }
+}

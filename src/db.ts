@@ -260,6 +260,20 @@ export function initDb(): Database.Database {
       value      TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    -- Operator-editable settings, entered through the UI and read by the
+    -- server. Deliberately separate from app_secret, which holds values the
+    -- server generates and the operator never sees: a DELETE-by-name bug here
+    -- must not be able to log everyone out, and a future "show me the
+    -- settings" endpoint must not be one SELECT * away from the session
+    -- secret. Nothing here is a credential — the only row today is the
+    -- SimBrief pilot ID, a public identifier SimBrief's API accepts
+    -- unauthenticated.
+    CREATE TABLE IF NOT EXISTS app_setting (
+      name       TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   // Migrate existing DBs that predate the notes and trip_id columns
@@ -1474,6 +1488,30 @@ export function getOrCreateAppSecret(name: string, generate: () => string): stri
       .run(name, value, new Date().toISOString());
     return value;
   })();
+}
+
+/** Returns null when the setting has never been set, or was cleared. */
+export function getSetting(name: string): string | null {
+  const row = db.prepare('SELECT value FROM app_setting WHERE name = ?').get(name) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+/**
+ * Upserts a setting. A null or empty value deletes the row, so "unset" has
+ * exactly one representation and getSetting() stays total and single-valued.
+ */
+export function setSetting(name: string, value: string | null): void {
+  if (value === null || value === '') {
+    db.prepare('DELETE FROM app_setting WHERE name = ?').run(name);
+    return;
+  }
+  db.prepare(`
+    INSERT INTO app_setting (name, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      value      = excluded.value,
+      updated_at = excluded.updated_at
+  `).run(name, value, new Date().toISOString());
 }
 
 /** expires_at is epoch milliseconds; expiry itself is the store's business. */
