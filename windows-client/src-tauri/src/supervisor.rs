@@ -180,6 +180,10 @@ impl Worker {
         let Some(directory) = entry.parent().and_then(|dist| dist.parent()) else {
             self.log("error", "Sidecar entry has no parent directory"); self.synthetic("app.crashed"); return;
         };
+        eprintln!(
+            "[sidecar] about to spawn: node={node:?} entry={:?} used_resource_entry={} config={:?} cwd={:?}",
+            entry, self.resource_entry.as_ref().is_some_and(|p| p.is_file()), self.config.path, directory,
+        );
         let mut command = Command::new(node);
         command.arg(&entry).arg("--config").arg(&self.config.path).current_dir(directory)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
