@@ -8,8 +8,7 @@ The project consists of:
 
 - an Express and TypeScript server in `src/`;
 - a React and Vite web client in `client/`;
-- a supported Node.js SimConnect agent in `agent/` for a separate Windows PC;
-- an in-development Tauri desktop replacement in `windows-client/`.
+- a supported Node.js SimConnect agent in `agent/` for a separate Windows PC.
 
 Full usage and administration documentation is in the
 [msfslogger wiki](https://github.com/oshogun/msfslogger/wiki).
@@ -172,5 +171,7 @@ the main file. See [Operations and backups](https://github.com/oshogun/msfslogge
 - [Operations and backups](https://github.com/oshogun/msfslogger/wiki/Operations-and-Backups)
 - [Development](https://github.com/oshogun/msfslogger/wiki/Development)
 
-The experimental desktop client has its own
-[build and test guide](windows-client/README.md).
+The Node.js agent in `agent/` remains the supported, default way to connect a
+simulator on a separate Windows PC. A separate, optional Tauri/MCDU-style
+desktop client is developed independently at
+[oshogun/msfslogger_mcdu](https://github.com/oshogun/msfslogger_mcdu).
