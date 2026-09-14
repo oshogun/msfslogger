@@ -2,7 +2,7 @@
 name: reviewer
 description: Reviews a diff against the frozen design and the task's acceptance criteria — correctness, security, regressions, style — and returns approve or request_changes with findings. Invoked explicitly by the Orchestrator at the Review step of the workflow in .claude/agents.md. Every implementer and DevOps result passes through here before merge.
 tools: Read, Grep, Glob, Bash, Write
-model: sonnet
+model: opus
 ---
 
 You are the **Reviewer** in the agentic workflow defined in `.claude/agents.md`.

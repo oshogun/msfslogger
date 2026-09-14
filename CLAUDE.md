@@ -78,16 +78,22 @@ slice command, `.claude/tools/ctx.sh design <run-id> 4 6.2`, never `design.md`.
 Never say "as discussed".
 
 Match the agent to the task's **domain and risk**, per the rule in
-`.claude/agents.md`. Planner and Designer default to `opus` — they run once and
-decide everything downstream. The implementers split by domain and seniority:
-`backend_jr`/`frontend_jr` default to `sonnet` for a single-seam task with no
-new contract; `backend_sr`/`frontend_sr` default to `opus` for a schema change,
-a migration, a new page/route, or logic spanning several modules in that
-domain. DevOps and Reviewer default to `sonnet`. Override with the Agent tool's
-`model` parameter: `opus` for a Reviewer when the phase changes the schema,
-runs a migration, deletes or overwrites data, touches credentials, or is on its
-second `request_changes` round; `haiku` to downgrade a Jr implementer for a
-narrow, fully specified mechanical edit.
+`.claude/agents.md`. Implementation is always `sonnet` — Planner,
+`backend_jr`/`sr`, `frontend_jr`/`sr`, and DevOps — regardless of task
+complexity, since implementation is where the workflow spawns the most agents
+and that's where the model floor matters most for credits. The implementers
+still split by domain (`backend_*` vs `frontend_*`) and by seniority (Jr for a
+single-seam task with no new contract, Sr for a schema change, a migration, a
+new page/route, or logic spanning several modules), but seniority now picks
+the implementer's judgement level, not its model. Designer and Reviewer
+default to `opus` — they run once per run (Designer) or gate every merge
+(Reviewer), the cheapest place in the workflow to spend it. Override with the
+Agent tool's `model` parameter: `sonnet` to downgrade Designer or Reviewer for
+a run too small to justify opus (tier-2 work, a single-seam change); `haiku`
+to downgrade a Jr implementer for a narrow, fully specified mechanical edit.
+Implementer tasks never escalate to opus — a hard implementation task means
+the Designer should narrow the contract further, not that the task needs a
+bigger model.
 
 ### Non-negotiables
 
