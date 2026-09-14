@@ -9,13 +9,14 @@
 //   npx ts-node src/inspect-kml.ts --db <dir-containing-a-copy> --trip 7
 //   npx ts-node src/inspect-kml.ts --db <path> --flights 63,59,71 --out /tmp/x.kml
 //
-// `--db` is mandatory and never optional: src/db.ts's initDb() opens the file
-// read-write, sets WAL and runs `CREATE TABLE IF NOT EXISTS` migrations, so
-// pointing this at the live flights.db would write to the user's real
-// logbook. Requiring an explicit path makes that impossible by accident.
+// `--db` is mandatory and never optional: src/db/connection.ts's initDb()
+// opens the file read-write, sets WAL and runs `CREATE TABLE IF NOT EXISTS`
+// migrations, so pointing this at the live flights.db would write to the
+// user's real logbook. Requiring an explicit path makes that impossible by
+// accident.
 //
-// src/db.ts:9 freezes DB_PATH = path.join(process.cwd(), 'flights.db') at
-// module load, so a --db flag alone does nothing — './db' must not be
+// src/db/connection.ts freezes DB_PATH = path.join(process.cwd(), 'flights.db')
+// at module load, so a --db flag alone does nothing — './db' must not be
 // imported at the top of this file. The require() in main(), after the
 // chdir, is the first import of that module in this process: the same idiom,
 // and the same reason, as src/inspect-legmatch.ts:404-423.

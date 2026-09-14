@@ -7,8 +7,9 @@
 //
 // Imports ONLY ./geo. No ./db, no ./server, no ./flightManager, no ./types,
 // no ./legMatcher, no fs, no http. The composition — pairing this gate with
-// the writer in src/db.ts — happens in the endpoint (src/server.ts), which is
-// what lets this file and src/db.ts be written independently of each other.
+// the writer in src/db/plannedLegs.ts — happens in the endpoint
+// (src/routes/plannedLegs.ts), which is what lets this file and
+// src/db/plannedLegs.ts be written independently of each other.
 //
 // This module must not import or reference ARRIVAL_RADIUS_NM, and 'diverted'
 // must never appear as an output: a hand-mark is ALWAYS the status the user

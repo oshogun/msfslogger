@@ -121,7 +121,7 @@ read read-only from `samples/lnmpln/`. `npm run test:watch` for watch mode,
 for the design (mock shapes, fake-clock pattern, fixture conventions) and worked
 example.
 
-`src/trafficStore.ts`, `src/db.ts` and `src/ingest.ts` have no unit coverage yet —
+`src/trafficStore.ts`, `src/db/` and `src/ingest.ts` have no unit coverage yet —
 good candidates for a follow-up run, deliberately out of scope for the first pass.
 
 Beyond unit tests, verification is still `npx tsc` / `npm run build`, `curl`

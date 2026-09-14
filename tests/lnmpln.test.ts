@@ -177,7 +177,7 @@ describe('parseLnmpln: route-matching surface pins', () => {
 // ── string vs Buffer input, and the BOM fixture ────────────────────────────────
 
 describe('parseLnmpln: string and Buffer input', () => {
-  it('accepts a Buffer (the real call shape — src/server.ts:481 passes file.buffer)', () => {
+  it('accepts a Buffer (the real call shape — src/routes/plannedLegs.ts passes file.buffer)', () => {
     const file = 'VFR Santa Barbara Muni (KSBA) to Monterey Rgnl (KMRY).lnmpln';
     const buf = readReal(file);
     expect(Buffer.isBuffer(buf)).toBe(true);
