@@ -19,6 +19,7 @@ import { createTripsRouter } from './routes/trips';
 import { createSettingsRouter } from './routes/settings';
 import { createPlannedLegsRouter } from './routes/plannedLegs';
 import { createExportsRouter } from './routes/exports';
+import { createAcarsRouter } from './routes/acars';
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
@@ -148,6 +149,13 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   app.use('/api', createExportsRouter());
 
+  // ── ACARS ──────────────────────────────────────────────────────────────────
+  // Mounted before the SPA catch-all, like every other /api router. Nothing
+  // already registered can capture /api/flights/:id/acars-messages: the flights
+  // router's /flights/:id handlers match a two-segment path, this is three.
+
+  app.use('/api', createAcarsRouter());
+
   // Catch-all: let React Router handle client-side routes
   app.get('*', (_req, res) => {
     res.sendFile(path.join(process.cwd(), 'client', 'dist', 'index.html'));
@@ -173,9 +181,11 @@ export function createServer(flightManager: FlightManager): express.Express {
       return;
     }
     // express.json() rejects a malformed body before any route runs, so the
-    // settings routes cannot answer it themselves. Scoped to /api/settings/ so
-    // every other route keeps the default handling it has always had.
-    if (err instanceof SyntaxError && 'body' in err && req.path.startsWith('/api/settings/')) {
+    // settings and ACARS routes cannot answer it themselves. Scoped to their
+    // two paths so every other route keeps the default handling it has always
+    // had.
+    if (err instanceof SyntaxError && 'body' in err &&
+        (req.path.startsWith('/api/settings/') || req.path.endsWith('/acars-messages'))) {
       res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
       return;
     }

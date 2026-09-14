@@ -1,0 +1,17 @@
+{
+  "story": "acars_weather_request.md",
+  "note": "The crew asks; that is a downlink whatever the story's prose calls it (see design.md section 3.2). Flight-scoped: the weather page is used in flight.",
+  "scope": "flight",
+  "message": {
+    "flight_id": "{flight_id}",
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "wx",
+    "label": "WX REQUEST EGLL",
+    "body": "WX REQUEST EGLL",
+    "payload_json": "{\"icao\":\"EGLL\"}",
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T10:00:00.000Z"
+  }
+}

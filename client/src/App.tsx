@@ -5,6 +5,7 @@ import { RequireAuth } from './components/RequireAuth';
 import { Home } from './pages/Home';
 import { AllFlights } from './pages/AllFlights';
 import { FlightDetail } from './pages/FlightDetail';
+import { AcarsMessages } from './pages/AcarsMessages';
 import { TripDetail } from './pages/TripDetail';
 import { Device } from './pages/Device';
 import { Override } from './pages/Override';
@@ -27,6 +28,7 @@ function AppShell() {
             <Route path="/" element={<Home status={status} />} />
             <Route path="/flights" element={<AllFlights />} />
             <Route path="/flight/:id" element={<FlightDetail />} />
+            <Route path="/flight/:id/acars" element={<AcarsMessages />} />
             <Route path="/trip/:id" element={<TripDetail />} />
             <Route path="/device" element={<Device />} />
             <Route path="/override" element={<Override />} />

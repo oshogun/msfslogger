@@ -1,0 +1,17 @@
+{
+  "story": "acars_position_reports.md",
+  "note": "AC2: at least one between OFF and ON when a route is attached. Position, altitude and ETA to the next fix go in payload_json as well as the body, so a client can plot them without re-parsing text.",
+  "scope": "flight",
+  "message": {
+    "flight_id": "{flight_id}",
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "position-report",
+    "label": "POS",
+    "body": "POS N5209.1 E00434.7 FL360 1042Z\nNEXT REDFA 1051Z\nDEST EGLL 1125Z",
+    "payload_json": "{\"lat\":52.152,\"lon\":4.578,\"alt_ft\":36000,\"next_fix\":\"REDFA\",\"next_fix_eta\":\"2026-09-14T10:51:00.000Z\",\"dest_eta\":\"2026-09-14T11:25:00.000Z\"}",
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T10:42:00.000Z"
+  }
+}

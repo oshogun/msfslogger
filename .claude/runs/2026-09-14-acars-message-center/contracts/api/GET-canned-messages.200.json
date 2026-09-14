@@ -1,0 +1,7 @@
+{
+  "messages": [
+    { "id": "wx-request",       "label": "WX REQUEST",       "body": "WX REQUEST",       "category": "freetext", "direction": "downlink" },
+    { "id": "gate-request",     "label": "GATE REQUEST",     "body": "GATE REQUEST",     "category": "freetext", "direction": "downlink" },
+    { "id": "request-pushback", "label": "REQUEST PUSHBACK", "body": "REQUEST PUSHBACK", "category": "freetext", "direction": "downlink" }
+  ]
+}

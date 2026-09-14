@@ -1,0 +1,17 @@
+{
+  "story": "acars_message_center.md",
+  "note": "This run's own write path: the canned send from the web page. Same second as sample 10 on purpose, so the (sent_at, id) tiebreak in section 4.3 is exercised.",
+  "scope": "flight",
+  "message": {
+    "flight_id": "{flight_id}",
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "freetext",
+    "label": "REQUEST PUSHBACK",
+    "body": "REQUEST PUSHBACK",
+    "payload_json": null,
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T10:42:00.000Z"
+  }
+}

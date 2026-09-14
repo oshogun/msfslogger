@@ -1,0 +1,17 @@
+{
+  "story": "acars_pdc_request.md",
+  "note": "Step 3 of its user flow: the crew sends REQUEST CLEARANCE from the datalink page before pushback. No flights row exists yet, so the row is leg-scoped.",
+  "scope": "leg",
+  "message": {
+    "flight_id": null,
+    "planned_leg_id": "{planned_leg_id}",
+    "direction": "downlink",
+    "category": "pdc",
+    "label": "REQUEST CLEARANCE",
+    "body": "REQUEST CLEARANCE",
+    "payload_json": null,
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:00:00.000Z"
+  }
+}

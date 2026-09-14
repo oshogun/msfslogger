@@ -1,0 +1,121 @@
+## LOGIN url: http://127.0.0.1:3100/
+## A. THREAD (seeded uplinks only)
+{
+ "subtitle": "2 messages · including planned leg 29",
+ "empty": null,
+ "rows": [
+  {
+   "rowClass": "acars-msg acars-msg--uplink",
+   "badges": [
+    "badge badge-uplink=\"Dispatch\"",
+    "badge badge-acars-wx=\"wx\""
+   ],
+   "head": "DISPATCH WX METAR SBGL Sep 14, 2026, 10:05 AM",
+   "body": "SBGL 141000Z 09008KT 9999 FEW020 24/19 Q1016"
+  },
+  {
+   "rowClass": "acars-msg acars-msg--uplink",
+   "badges": [
+    "badge badge-uplink=\"Dispatch\"",
+    "badge badge-acars-pdc=\"pdc\""
+   ],
+   "head": "DISPATCH PDC PDC Sep 14, 2026, 10:00 AM",
+   "body": "CLRD TO SBGR OFF 09R VIA SID KOKPA1B\nSQUAWK 4517"
+  }
+ ],
+ "buttons": [
+  {
+   "text": "WX REQUEST",
+   "disabled": false
+  },
+  {
+   "text": "GATE REQUEST",
+   "disabled": false
+  },
+  {
+   "text": "REQUEST PUSHBACK",
+   "disabled": false
+  }
+ ],
+ "sendError": null
+}
+## B. CANNED LABELS: ["WX REQUEST","GATE REQUEST","REQUEST PUSHBACK"]
+## C. POST RESPONSES
+201 {"id":3,"flight_id":81,"planned_leg_id":null,"direction":"downlink","category":"freetext","label":"WX REQUEST","body":"WX REQUEST","payload_json":null,"correlation_id":null,"dedup_key":null,"sent_at":"2026-09-14T16:12:53.592Z","read_at":null}
+201 {"id":4,"flight_id":81,"planned_leg_id":null,"direction":"downlink","category":"freetext","label":"GATE REQUEST","body":"GATE REQUEST","payload_json":null,"correlation_id":null,"dedup_key":null,"sent_at":"2026-09-14T16:12:53.642Z","read_at":null}
+201 {"id":5,"flight_id":81,"planned_leg_id":null,"direction":"downlink","category":"freetext","label":"REQUEST PUSHBACK","body":"REQUEST PUSHBACK","payload_json":null,"correlation_id":null,"dedup_key":null,"sent_at":"2026-09-14T16:12:53.676Z","read_at":null}
+## D. THREAD AFTER CLICKS (no reload, no refetch)
+{
+ "subtitle": "5 messages · including planned leg 29",
+ "empty": null,
+ "rows": [
+  {
+   "rowClass": "acars-msg acars-msg--downlink",
+   "badges": [
+    "badge badge-downlink=\"Cockpit\"",
+    "badge badge-acars-freetext=\"freetext\""
+   ],
+   "head": "COCKPIT FREETEXT REQUEST PUSHBACK Sep 14, 2026, 4:12 PM",
+   "body": "REQUEST PUSHBACK"
+  },
+  {
+   "rowClass": "acars-msg acars-msg--downlink",
+   "badges": [
+    "badge badge-downlink=\"Cockpit\"",
+    "badge badge-acars-freetext=\"freetext\""
+   ],
+   "head": "COCKPIT FREETEXT GATE REQUEST Sep 14, 2026, 4:12 PM",
+   "body": "GATE REQUEST"
+  },
+  {
+   "rowClass": "acars-msg acars-msg--downlink",
+   "badges": [
+    "badge badge-downlink=\"Cockpit\"",
+    "badge badge-acars-freetext=\"freetext\""
+   ],
+   "head": "COCKPIT FREETEXT WX REQUEST Sep 14, 2026, 4:12 PM",
+   "body": "WX REQUEST"
+  },
+  {
+   "rowClass": "acars-msg acars-msg--uplink",
+   "badges": [
+    "badge badge-uplink=\"Dispatch\"",
+    "badge badge-acars-wx=\"wx\""
+   ],
+   "head": "DISPATCH WX METAR SBGL Sep 14, 2026, 10:05 AM",
+   "body": "SBGL 141000Z 09008KT 9999 FEW020 24/19 Q1016"
+  },
+  {
+   "rowClass": "acars-msg acars-msg--uplink",
+   "badges": [
+    "badge badge-uplink=\"Dispatch\"",
+    "badge badge-acars-pdc=\"pdc\""
+   ],
+   "head": "DISPATCH PDC PDC Sep 14, 2026, 10:00 AM",
+   "body": "CLRD TO SBGR OFF 09R VIA SID KOKPA1B\nSQUAWK 4517"
+  }
+ ],
+ "buttons": [
+  {
+   "text": "WX REQUEST",
+   "disabled": false
+  },
+  {
+   "text": "GATE REQUEST",
+   "disabled": false
+  },
+  {
+   "text": "REQUEST PUSHBACK",
+   "disabled": false
+  }
+ ],
+ "sendError": null
+}
+## E. NO FREE TEXT INPUT ON PAGE: 0
+## F. EMPTY THREAD: {"subtitle":"0 messages · including planned leg 26","empty":"No ACARS messages for this flight yet.","buttons":3}
+## G. NOT FOUND: {"error":"Flight not found","back":"← Flight #999999","thread":0,"send":0}
+## H. LOADING: {"status":"Loading messages…","sendButtons":0}
+## I. SEND IN FLIGHT: [{"text":"Sending…","disabled":true},{"text":"GATE REQUEST","disabled":true},{"text":"REQUEST PUSHBACK","disabled":true}]
+## J. SEND REJECTED: {"sendError":"canned_id must be one of: wx-request, gate-request, request-pushback","rowsBefore":6,"rowsAfter":6,"buttonsReEnabled":true}
+## K. CANNED UNAVAILABLE: {"error":"Canned messages unavailable","buttons":0,"rows":6}
+## L. 401 PATH: {"url":"http://127.0.0.1:3100/login","inlineError":null,"loginForm":1}

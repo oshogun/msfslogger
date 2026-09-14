@@ -1,0 +1,17 @@
+{
+  "story": "acars_position_reports.md",
+  "note": "AC1: exactly one message per OOOI transition. 'oooi' is a category the message-center story's own five do not include, which is why section 2 refuses a CHECK constraint. dedup_key makes 'exactly one' a database guarantee rather than a promise about the state machine.",
+  "scope": "flight",
+  "message": {
+    "flight_id": "{flight_id}",
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "oooi",
+    "label": "OUT",
+    "body": "OUT 1005Z EHAM",
+    "payload_json": "{\"event\":\"OUT\",\"ts\":\"2026-09-14T10:05:00.000Z\",\"icao\":\"EHAM\"}",
+    "correlation_id": null,
+    "dedup_key": "oooi:{flight_id}:OUT",
+    "sent_at": "2026-09-14T10:05:00.000Z"
+  }
+}

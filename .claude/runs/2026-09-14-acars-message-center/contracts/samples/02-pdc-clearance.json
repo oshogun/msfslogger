@@ -1,0 +1,17 @@
+{
+  "story": "acars_pdc_request.md",
+  "note": "AC1 and AC2: departure, destination, route, initial altitude and squawk, issued once per leg. dedup_key is what makes the re-request return this same row instead of a second clearance.",
+  "scope": "leg",
+  "message": {
+    "flight_id": null,
+    "planned_leg_id": "{planned_leg_id}",
+    "direction": "uplink",
+    "category": "pdc",
+    "label": "PDC",
+    "body": "PDC EHAM\nCLEARED TO EGLL VIA WESLA5\nROUTE SUSEY UN57 LAM\nINITIAL FL100\nSQUAWK 4271\nSIMULATED CLEARANCE - NOT FOR REAL WORLD USE",
+    "payload_json": "{\"departure\":\"EHAM\",\"destination\":\"EGLL\",\"route\":\"SUSEY UN57 LAM\",\"initial_alt_ft\":10000,\"squawk\":\"4271\"}",
+    "correlation_id": "{id:01-pdc-request}",
+    "dedup_key": "pdc:leg:{planned_leg_id}",
+    "sent_at": "2026-09-14T09:00:03.000Z"
+  }
+}

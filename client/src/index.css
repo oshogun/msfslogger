@@ -954,3 +954,36 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   border-radius: 6px;
   padding: 0.5rem 0.7rem;
 }
+
+/* ── ACARS message center ── */
+.acars-thread { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem; }
+.acars-msg {
+  background: #151822;
+  border: 1px solid #2d3148;
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+}
+.acars-msg--uplink   { border-left-color: #38bdf8; }
+.acars-msg--downlink { border-left-color: #34d399; }
+.acars-msg-head { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.acars-msg-time { margin-left: auto; font-size: 0.72rem; color: #64748b; }
+.acars-msg-body {
+  margin: 0.4rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: #e2e8f0;
+  white-space: pre-wrap;   /* a PDC and a METAR are line-structured */
+  word-break: break-word;
+}
+.badge-uplink   { color: #38bdf8; background: #0c2434; border: 1px solid #14405c; }
+.badge-downlink { color: #34d399; background: #0f2a20; border: 1px solid #1c4a37; }
+.badge-acars-pdc             { color: #a78bfa; background: #1e1b2e; border: 1px solid #332c52; }
+.badge-acars-wx              { color: #38bdf8; background: #0c2434; border: 1px solid #14405c; }
+.badge-acars-dispatch        { color: #fbbf24; background: #2d2410; border: 1px solid #4a3a12; }
+.badge-acars-position-report { color: #34d399; background: #0f2a20; border: 1px solid #1c4a37; }
+.badge-acars-oooi            { color: #f472b6; background: #2d1522; border: 1px solid #4a2033; }
+.badge-acars-freetext        { color: #94a3b8; background: #1e2130; border: 1px solid #2d3148; }
+.badge-acars-other           { color: #94a3b8; background: #1e2130; border: 1px solid #2d3148; }
+.acars-send { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0 0; }
+.acars-empty { color: #64748b; font-style: italic; }

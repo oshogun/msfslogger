@@ -1,0 +1,17 @@
+{
+  "story": "acars_dispatch_loadsheet.md",
+  "note": "AC2: fuel, payload and ZFW as ACARS-style fixed fields, correlated to the request. The figures are illustrative, which the body says out loud.",
+  "scope": "leg",
+  "message": {
+    "flight_id": null,
+    "planned_leg_id": "{planned_leg_id}",
+    "direction": "uplink",
+    "category": "dispatch",
+    "label": "LOADSHEET",
+    "body": "LOADSHEET EHAM-EGLL\nBLOCK FUEL  05400 KG\nPAYLOAD     12500 KG\nZFW         48200 KG\nESTIMATED - NOT A PERFORMANCE CALCULATION",
+    "payload_json": "{\"block_fuel_kg\":5400,\"payload_kg\":12500,\"zfw_kg\":48200,\"estimated\":true}",
+    "correlation_id": "{id:04-loadsheet-request}",
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:20:02.000Z"
+  }
+}

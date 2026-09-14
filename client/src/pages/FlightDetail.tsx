@@ -447,6 +447,7 @@ export function FlightDetail() {
       <div className="flight-actions">
         <Link to="/" className="btn btn-ghost">← Back</Link>
         <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
+        <Link to={`/flight/${flight.id}/acars`} className="btn btn-ghost">ACARS Messages</Link>
         <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
           {exporting ? 'Generating PDF…' : 'Export PDF'}
         </button>

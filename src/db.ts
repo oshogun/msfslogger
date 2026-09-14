@@ -9,3 +9,4 @@ export * from './db/flights';
 export * from './db/trips';
 export * from './db/plannedLegs';
 export * from './db/settings';
+export * from './db/acarsMessages';
