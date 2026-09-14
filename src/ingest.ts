@@ -127,6 +127,27 @@ export function createIngestRouter(
   ingestConfig: IngestConfig,
 ): Router {
   const router = express.Router();
+
+  router.use((req, res, next) => {
+    const origin = req.get('origin');
+    if (origin) res.vary('Origin');
+    if (origin !== 'coui://html_ui') {
+      next();
+      return;
+    }
+
+    res.set('Access-Control-Allow-Origin', 'coui://html_ui');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, X-Ingest-Token');
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+
+    next();
+  });
+
   // The token comes from AppConfig, not process.env: src/config.ts is the only
   // module that reads the environment for security settings, and it already
   // refused to start unless the token is set or ALLOW_UNAUTHENTICATED_INGEST
