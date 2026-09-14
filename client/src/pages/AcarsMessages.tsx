@@ -2,7 +2,16 @@ import { useState, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch, UnauthorizedError } from '../utils/api';
 import { formatDate } from '../utils/format';
-import type { AcarsMessage, AcarsThread, CannedAcarsMessage, CannedAcarsMessageList } from '../types';
+import type {
+  AcarsMessage,
+  AcarsThread,
+  CannedAcarsMessage,
+  CannedAcarsMessageList,
+  LoadsheetRequestResponse,
+} from '../types';
+
+/** Sentinel id for sendingId while a load sheet request is in flight — cannot collide with a canned id. */
+const LOADSHEET_SENDING_ID = 'loadsheet';
 
 /**
  * The categories this client has a badge colour for. Any other well-shaped
@@ -107,6 +116,36 @@ export function AcarsMessages() {
     }
   }
 
+  async function handleRequestLoadsheet() {
+    if (plannedLegId === null) return;
+    setSendingId(LOADSHEET_SENDING_ID);
+    setSendError('');
+    try {
+      const response = await apiFetch<LoadsheetRequestResponse>(
+        `/api/planned-legs/${plannedLegId}/acars-messages/loadsheet`,
+        { method: 'POST' },
+      );
+      // A re-request returns the same stored pair (created: false), already in
+      // the thread — merge by id rather than push, or the duplicate rows would
+      // collide on React key.
+      setMessages(prev => {
+        const merged = [...prev];
+        for (const m of [response.request, response.reply]) {
+          const existingIndex = merged.findIndex(existing => existing.id === m.id);
+          if (existingIndex === -1) merged.push(m);
+          else merged[existingIndex] = m;
+        }
+        merged.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id - b.id);
+        return merged;
+      });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
   const backLink = <Link to={`/flight/${id}`} className="back-link">← Flight #{id}</Link>;
 
   if (loadError) {
@@ -156,6 +195,14 @@ export function AcarsMessages() {
                     {sendingId === m.id ? 'Sending…' : m.label}
                   </button>
                 ))}
+                <button
+                  className="btn btn-ghost"
+                  disabled={plannedLegId === null || sendingId !== null}
+                  title={plannedLegId === null ? 'No planned leg linked to this flight' : undefined}
+                  onClick={handleRequestLoadsheet}
+                >
+                  {sendingId === LOADSHEET_SENDING_ID ? 'Requesting…' : 'REQUEST LOADSHEET'}
+                </button>
               </div>
             )}
             {sendError && <p className="edit-error">{sendError}</p>}

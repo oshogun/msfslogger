@@ -1,0 +1,50 @@
+{
+  "planned_leg_id": 42,
+  "created": true,
+  "request": {
+    "id": 44,
+    "flight_id": null,
+    "planned_leg_id": 42,
+    "direction": "downlink",
+    "category": "dispatch",
+    "label": "REQUEST LOADSHEET",
+    "body": "REQUEST LOADSHEET\nUHPP UHSS FLT SHG037",
+    "payload_json": null,
+    "correlation_id": null,
+    "dedup_key": "loadsheet-req:leg:42",
+    "sent_at": "2026-09-14T09:22:01.000Z",
+    "read_at": null
+  },
+  "reply": {
+    "id": 45,
+    "flight_id": null,
+    "planned_leg_id": 42,
+    "direction": "uplink",
+    "category": "dispatch",
+    "label": "LOADSHEET",
+    "body": "LOADSHEET\nFLT SHG037 UHPP UHSS\nACFT BE20 N201SB\nUNITS KG\nBLOCK FUEL      1241\nTAXI FUEL         82\nTAKEOFF FUEL    1159\nTRIP FUEL        872\nPAX                7\nCARGO             86\nPAYLOAD          642\nDRY OPER WT     3869\nZERO FUEL WT    4511 MAX 4990\nTAKEOFF WT      5670\nLANDING WT      4798\nISSUED 2026-09-14T09:22:01.000Z\nESTIMATED FIGURES - SIMULATION ONLY - NOT FOR ACTUAL LOADING",
+    "payload_json": "{\"units\":\"kgs\",\"block_fuel\":1241,\"taxi_fuel\":82,\"takeoff_fuel\":1159,\"trip_fuel\":872,\"payload\":642,\"payload_source\":\"simbrief\",\"zero_fuel_weight\":4511,\"zfw_source\":\"simbrief\",\"max_zero_fuel_weight\":4990,\"dry_operating_weight\":3869,\"takeoff_weight\":5670,\"landing_weight\":4798,\"pax_count\":7,\"cargo\":86,\"estimated\":true}",
+    "correlation_id": 44,
+    "dedup_key": "loadsheet:leg:42",
+    "sent_at": "2026-09-14T09:22:01.000Z",
+    "read_at": null
+  },
+  "sheet": {
+    "units": "kgs",
+    "block_fuel": 1241,
+    "taxi_fuel": 82,
+    "takeoff_fuel": 1159,
+    "trip_fuel": 872,
+    "payload": 642,
+    "payload_source": "simbrief",
+    "zero_fuel_weight": 4511,
+    "zfw_source": "simbrief",
+    "max_zero_fuel_weight": 4990,
+    "dry_operating_weight": 3869,
+    "takeoff_weight": 5670,
+    "landing_weight": 4798,
+    "pax_count": 7,
+    "cargo": 86,
+    "estimated": true
+  }
+}

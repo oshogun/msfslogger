@@ -6,7 +6,8 @@
  * src/routes/acars.ts; neither vocabulary is duplicated there.
  */
 
-import type { AcarsDirection, CannedAcarsMessage } from './types';
+import type { AcarsDirection, CannedAcarsMessage, DispatchPayload, LoadsheetFigures } from './types';
+import type { ParsedSimbriefPlan } from './simbrief';
 
 /** The two directions the codebase knows. The column itself has no CHECK. */
 export const ACARS_DIRECTIONS = ['uplink', 'downlink'] as const;
@@ -116,4 +117,284 @@ export function validateAcarsBody(raw: unknown): AcarsBodyResult {
 /** 'wx-request, gate-request, request-pushback' — the tail of the error text. */
 export function cannedMessageIdList(): string {
   return CANNED_MESSAGES.map(m => m.id).join(', ');
+}
+
+// ── Dispatch release + load sheet ───────────────────────────────────────────
+//
+// Server-generated messages: a SimBrief import files a dispatch release, and a
+// pilot action files a load-sheet request/reply pair, both keyed to a planned
+// leg rather than a flight (a planned leg exists before pushback, when there is
+// no flights row yet). Every function below is pure — no clock, no database —
+// so the emitter (src/routes/plannedLegs.ts, src/routes/acars.ts) and the
+// reader cannot disagree about a dedup key or a body's wording.
+
+export const DISPATCH_RELEASE_LABEL = 'DISPATCH RELEASE';
+export const LOADSHEET_REQUEST_LABEL = 'REQUEST LOADSHEET';
+export const LOADSHEET_LABEL = 'LOADSHEET';
+/** The one definition of the rejection phrase a missing dispatch record answers with. */
+export const NO_DISPATCH_DATA_MESSAGE = 'NO DISPATCH DATA ON FILE';
+/** Ceiling on the filed route inside a message body, so no body can exceed MAX_ACARS_BODY_LENGTH. */
+export const MAX_ROUTE_BODY_CHARS = 900;
+
+/** Keyed on the planned leg, not the OFP: a re-imported OFP is a new leg and gets its own release. */
+export function dispatchDedupKey(legId: number): string {
+  return `dispatch:leg:${legId}`;
+}
+export function loadsheetRequestDedupKey(legId: number): string {
+  return `loadsheet-req:leg:${legId}`;
+}
+export function loadsheetReplyDedupKey(legId: number): string {
+  return `loadsheet:leg:${legId}`;
+}
+
+// ── Shared formatters ────────────────────────────────────────────────────────
+// Used by both the dispatch-release body and the load-sheet bodies, so the two
+// messages cannot disagree about how a number looks.
+
+/** null, non-finite or negative -> '----'. Otherwise HHMM, seconds discarded (never rounded up). */
+export function hhmm(sec: number | null): string {
+  if (sec === null || !Number.isFinite(sec) || sec < 0) return '----';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return `${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}`;
+}
+
+/** null -> 'UNKNOWN'. >= 18000 ft -> flight level, e.g. 'FL280'. Otherwise '8000FT'. */
+export function levelText(ft: number | null): string {
+  if (ft === null) return 'UNKNOWN';
+  const r = Math.round(ft);
+  return r >= 18000 ? `FL${String(Math.round(r / 100)).padStart(3, '0')}` : `${r}FT`;
+}
+
+/** null -> '----'. Otherwise the rounded value, no thousands separator, no unit suffix. */
+export function qty(v: number | null): string {
+  return v === null ? '----' : String(Math.round(v));
+}
+
+/** 'kgs'/'kg' -> 'KG'; 'lbs'/'lb' -> 'LB'; anything else including null -> 'UNITS UNKNOWN'. */
+export function unitText(units: string | null): string {
+  const u = (units ?? '').toLowerCase();
+  return u === 'kgs' || u === 'kg' ? 'KG' : u === 'lbs' || u === 'lb' ? 'LB' : 'UNITS UNKNOWN';
+}
+
+/** null -> 'NIL'. At or under the cap, verbatim. Otherwise truncated with a trailing '...'. */
+export function clampRoute(route: string | null): string {
+  if (route === null) return 'NIL';
+  return route.length <= MAX_ROUTE_BODY_CHARS ? route : `${route.slice(0, MAX_ROUTE_BODY_CHARS - 3)}...`;
+}
+
+/** label.padEnd(14) + value.padStart(6) — the fixed-field grid the load sheet's body is built from. */
+export function field(label: string, value: string): string {
+  return `${label.padEnd(14, ' ')}${value.padStart(6, ' ')}`;
+}
+
+/** Field copy, no arithmetic, no unit conversion — the parser's numbers, unmodified. */
+export function buildDispatchPayload(plan: ParsedSimbriefPlan): DispatchPayload {
+  const d = plan.dispatch;
+  return {
+    v: 1,
+    source: 'simbrief',
+    ofp: {
+      request_id: plan.ofp.requestId,
+      sequence_id: plan.ofp.sequenceId,
+      time_generated: plan.ofp.timeGenerated,
+    },
+    flight_number: plan.ofp.flightNumber,
+    aircraft_type: plan.aircraftType,
+    aircraft_reg: d.aircraftReg,
+    origin: plan.departure.ident,
+    destination: plan.destination.ident,
+    alternates: plan.alternates.map((a) => a.ident),
+    route: plan.ofp.routeString,
+    cruise_alt_ft: plan.cruiseAltFt,
+    units: d.units,
+    ete_sec: d.estTimeEnrouteSec,
+    block_time_sec: d.estBlockSec,
+    fuel: {
+      ramp: d.planRamp,
+      takeoff: d.planTakeoff,
+      landing: d.planLanding,
+      taxi: d.taxi,
+      enroute_burn: d.enrouteBurn,
+      contingency: d.contingency,
+      reserve: d.reserve,
+      alternate_burn: d.alternateBurn,
+    },
+    weights: {
+      oew: d.oew,
+      payload: d.payload,
+      est_zfw: d.estZfw,
+      max_zfw: d.maxZfw,
+      est_tow: d.estTow,
+      est_ldw: d.estLdw,
+      pax_count: d.paxCount,
+      cargo: d.cargo,
+    },
+  };
+}
+
+/**
+ * Total: never throws. `null` is "no usable dispatch data on file" — an absent
+ * or unparseable blob, or one written by a schema version this build does not
+ * know. A string is written by us, in one place; a scalar that arrives as a
+ * string here means the stored data is not what we wrote, so it is dropped
+ * rather than coerced.
+ */
+export function parseDispatchPayload(raw: string | null): DispatchPayload | null {
+  if (raw === null || raw === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const p = parsed as Record<string, unknown>;
+  if (p['v'] !== 1 || p['source'] !== 'simbrief') return null;
+
+  const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+  const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  const rec = (v: unknown): Record<string, unknown> => (typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {});
+  const ofp = rec(p['ofp']);
+  const fuel = rec(p['fuel']);
+  const weights = rec(p['weights']);
+  const alternatesRaw = p['alternates'];
+
+  return {
+    v: 1,
+    source: 'simbrief',
+    ofp: {
+      request_id: strOrNull(ofp['request_id']),
+      sequence_id: strOrNull(ofp['sequence_id']),
+      time_generated: strOrNull(ofp['time_generated']),
+    },
+    flight_number: strOrNull(p['flight_number']),
+    aircraft_type: strOrNull(p['aircraft_type']),
+    aircraft_reg: strOrNull(p['aircraft_reg']),
+    origin: strOrNull(p['origin']),
+    destination: strOrNull(p['destination']),
+    alternates: Array.isArray(alternatesRaw) ? alternatesRaw.filter((s): s is string => typeof s === 'string') : [],
+    route: strOrNull(p['route']),
+    cruise_alt_ft: numOrNull(p['cruise_alt_ft']),
+    units: strOrNull(p['units']),
+    ete_sec: numOrNull(p['ete_sec']),
+    block_time_sec: numOrNull(p['block_time_sec']),
+    fuel: {
+      ramp: numOrNull(fuel['ramp']),
+      takeoff: numOrNull(fuel['takeoff']),
+      landing: numOrNull(fuel['landing']),
+      taxi: numOrNull(fuel['taxi']),
+      enroute_burn: numOrNull(fuel['enroute_burn']),
+      contingency: numOrNull(fuel['contingency']),
+      reserve: numOrNull(fuel['reserve']),
+      alternate_burn: numOrNull(fuel['alternate_burn']),
+    },
+    weights: {
+      oew: numOrNull(weights['oew']),
+      payload: numOrNull(weights['payload']),
+      est_zfw: numOrNull(weights['est_zfw']),
+      max_zfw: numOrNull(weights['max_zfw']),
+      est_tow: numOrNull(weights['est_tow']),
+      est_ldw: numOrNull(weights['est_ldw']),
+      pax_count: numOrNull(weights['pax_count']),
+      cargo: numOrNull(weights['cargo']),
+    },
+  };
+}
+
+/** The dispatch-release body: route, cruise altitude, planned fuel, alternates, ETE. */
+export function buildDispatchReleaseBody(p: DispatchPayload, issuedAt: string): string {
+  const lines = [
+    'DISPATCH RELEASE',
+    `FLT ${p.flight_number ?? 'UNKNOWN'}`,
+    `${p.origin ?? '????'} ${p.destination ?? '????'} ALTN ${p.alternates.length ? p.alternates.join(' ') : 'NONE'}`,
+    `ACFT ${p.aircraft_type ?? 'UNKNOWN'} ${p.aircraft_reg ?? 'NOREG'}`,
+    `CRZ ${levelText(p.cruise_alt_ft)}`,
+    `ETE ${hhmm(p.ete_sec)}`,
+    `FUEL ${unitText(p.units)} BLOCK ${qty(p.fuel.ramp)} TRIP ${qty(p.fuel.enroute_burn)} RESV ${qty(p.fuel.reserve)} ALTN ${qty(p.fuel.alternate_burn)} CONT ${qty(p.fuel.contingency)} TAXI ${qty(p.fuel.taxi)}`,
+    `RTE ${clampRoute(p.route)}`,
+    `OFP ${p.ofp.request_id ?? 'UNKNOWN'} ISSUED ${issuedAt}`,
+    'SIMULATED DISPATCH RELEASE - NOT FOR REAL WORLD USE',
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Derives block fuel, payload and zero-fuel weight from the dispatch payload.
+ * Payload is resolved before ZFW, and ZFW's fallback consumes the
+ * already-resolved payload, so the two fallbacks can never both fire on the
+ * same plan.
+ */
+export function buildLoadsheetFigures(p: DispatchPayload): LoadsheetFigures {
+  const f = p.fuel;
+  const w = p.weights;
+
+  const blockFuel = f.ramp !== null ? f.ramp
+    : f.takeoff !== null && f.taxi !== null ? f.takeoff + f.taxi
+      : null;
+
+  const payload = w.payload !== null ? w.payload
+    : w.est_zfw !== null && w.oew !== null ? w.est_zfw - w.oew
+      : null;
+  const payloadSource: LoadsheetFigures['payload_source'] =
+    w.payload !== null ? 'simbrief' : payload !== null ? 'derived' : 'unavailable';
+
+  const zfw = w.est_zfw !== null ? w.est_zfw
+    : w.oew !== null && payload !== null ? w.oew + payload
+      : null;
+  const zfwSource: LoadsheetFigures['zfw_source'] =
+    w.est_zfw !== null ? 'simbrief' : zfw !== null ? 'derived' : 'unavailable';
+
+  return {
+    units: p.units,
+    block_fuel: blockFuel,
+    taxi_fuel: f.taxi,
+    takeoff_fuel: f.takeoff,
+    trip_fuel: f.enroute_burn,
+    payload,
+    payload_source: payloadSource,
+    zero_fuel_weight: zfw,
+    zfw_source: zfwSource,
+    max_zero_fuel_weight: w.max_zfw,
+    dry_operating_weight: w.oew,
+    takeoff_weight: w.est_tow,
+    landing_weight: w.est_ldw,
+    pax_count: w.pax_count,
+    cargo: w.cargo,
+    estimated: true,
+  };
+}
+
+/** The pilot's load-sheet request: two lines, no figures — the figures arrive in the reply. */
+export function buildLoadsheetRequestBody(p: DispatchPayload): string {
+  const fltClause = p.flight_number ? ` FLT ${p.flight_number}` : '';
+  return `REQUEST LOADSHEET\n${p.origin ?? '????'} ${p.destination ?? '????'}${fltClause}`;
+}
+
+/** The generated load-sheet reply: fixed-field figures, in `field()`'s aligned grid. */
+export function buildLoadsheetReplyBody(p: DispatchPayload, sheet: LoadsheetFigures, issuedAt: string): string {
+  const zfwLine = sheet.max_zero_fuel_weight === null
+    ? field('ZERO FUEL WT', qty(sheet.zero_fuel_weight))
+    : `${field('ZERO FUEL WT', qty(sheet.zero_fuel_weight))} MAX ${qty(sheet.max_zero_fuel_weight)}`;
+
+  const lines = [
+    'LOADSHEET',
+    `FLT ${p.flight_number ?? 'UNKNOWN'} ${p.origin ?? '????'} ${p.destination ?? '????'}`,
+    `ACFT ${p.aircraft_type ?? 'UNKNOWN'} ${p.aircraft_reg ?? 'NOREG'}`,
+    `UNITS ${unitText(sheet.units)}`,
+    field('BLOCK FUEL', qty(sheet.block_fuel)),
+    field('TAXI FUEL', qty(sheet.taxi_fuel)),
+    field('TAKEOFF FUEL', qty(sheet.takeoff_fuel)),
+    field('TRIP FUEL', qty(sheet.trip_fuel)),
+    field('PAX', qty(sheet.pax_count)),
+    field('CARGO', qty(sheet.cargo)),
+    field('PAYLOAD', qty(sheet.payload)),
+    field('DRY OPER WT', qty(sheet.dry_operating_weight)),
+    zfwLine,
+    field('TAKEOFF WT', qty(sheet.takeoff_weight)),
+    field('LANDING WT', qty(sheet.landing_weight)),
+    `ISSUED ${issuedAt}`,
+    'ESTIMATED FIGURES - SIMULATION ONLY - NOT FOR ACTUAL LOADING',
+  ];
+  return lines.join('\n');
 }

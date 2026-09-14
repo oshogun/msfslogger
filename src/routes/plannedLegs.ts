@@ -17,6 +17,8 @@ import {
 } from '../simbrief';
 import { fetchSimbriefPlan, SimbriefFetchError, type SimbriefErrorCode } from '../simbriefClient';
 import { uploadLnmpln, MAX_LNMPLN_FILES } from './uploads';
+import { insertAcarsMessageOnce } from '../db/acarsMessages';
+import { DISPATCH_RELEASE_LABEL, buildDispatchPayload, buildDispatchReleaseBody, dispatchDedupKey } from '../acars';
 import type { FlightManager } from '../flightManager';
 import type { PlannedLegWithChildren } from '../types';
 
@@ -197,7 +199,11 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
   // check all happen before createPlannedLeg, which is the first and only
   // write and is itself a transaction. Every failure below therefore returns
   // with the trip's existing planned legs untouched, byte for byte. Do not
-  // introduce a second write, and do not move one earlier.
+  // move `createPlannedLeg` earlier, and do not add a second write to
+  // `planned_legs`. The ACARS dispatch release written after it is the one
+  // permitted extra write: it targets a different table, it runs only after
+  // the leg is committed, and its own try/catch keeps a message failure from
+  // changing this route's response.
   router.post('/trips/:id/planned-legs/simbrief', async (req, res) => {
     const tripId = parseInt(req.params.id, 10);
     if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id', code: 'INVALID_TRIP' }); return; }
@@ -277,6 +283,31 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
         `[SIMBRIEF] import ok: trip ${tripId} leg ${legId} ${plan.departure.ident}->${plan.destination.ident} ` +
         `${plan.waypoints.length} wpts ${plan.approxDistanceNm.toFixed(1)}nm ofp ${ofpId}`,
       );
+
+      // Files the dispatch release into the new leg's ACARS thread. Its own
+      // try/catch, and deliberately so: the leg is already committed by the
+      // time this runs, so a failure here must not turn a successful import
+      // into an error response — the user's leg exists either way, and a
+      // missing message is recoverable while a 500 on a committed insert is
+      // not. The key is the leg id, so running this twice for one leg is a
+      // no-op rather than a second release.
+      try {
+        const issuedAt = new Date().toISOString();
+        const payload = buildDispatchPayload(plan);
+        insertAcarsMessageOnce({
+          planned_leg_id: legId,
+          direction: 'uplink',
+          category: 'dispatch',
+          label: DISPATCH_RELEASE_LABEL,
+          body: buildDispatchReleaseBody(payload, issuedAt),
+          payload_json: JSON.stringify(payload),
+          dedup_key: dispatchDedupKey(legId),
+          sent_at: issuedAt,
+        });
+      } catch (err) {
+        console.error(`[SIMBRIEF] dispatch release not filed: leg ${legId} ofp ${ofpId} (${String(err)})`);
+      }
+
       res.status(201).json({
         imported: [getPlannedLegById(legId)!],
         result: { status: 'imported', planned_leg_id: legId, label, warnings: plan.warnings },

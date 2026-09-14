@@ -420,11 +420,109 @@ export interface SendCannedAcarsMessageRequest {
   category?: AcarsCategory;
 }
 
+/**
+ * The machine-readable twin of the dispatch-release body, stored in that
+ * message's payload_json and read back — possibly days later — by the
+ * load-sheet route. Deliberately self-contained: it is the only record of the
+ * OFP's fuel and weight figures, and nothing may re-fetch or re-derive them.
+ */
+export interface DispatchPayload {
+  /** Schema version of this blob. A reader that does not know it treats the payload as absent. */
+  v: 1;
+  /** Which upstream produced the figures. 'simbrief' is the only value today. */
+  source: 'simbrief';
+  ofp: {
+    request_id: string | null;
+    sequence_id: string | null;
+    /** Epoch seconds, as a string, exactly as SimBrief sent it. */
+    time_generated: string | null;
+  };
+  flight_number: string | null;
+  aircraft_type: string | null;
+  aircraft_reg: string | null;
+  origin: string | null;
+  destination: string | null;
+  /** ICAO idents in plan order. [] when the plan was filed with none. */
+  alternates: string[];
+  /** The filed route string, untruncated. Truncation is a display rule. */
+  route: string | null;
+  cruise_alt_ft: number | null;
+  /** 'kgs' | 'lbs' as SimBrief spelled it. Every weight below is in this unit. */
+  units: string | null;
+  ete_sec: number | null;
+  block_time_sec: number | null;
+  fuel: {
+    ramp: number | null;
+    takeoff: number | null;
+    landing: number | null;
+    taxi: number | null;
+    enroute_burn: number | null;
+    contingency: number | null;
+    reserve: number | null;
+    alternate_burn: number | null;
+  };
+  weights: {
+    oew: number | null;
+    payload: number | null;
+    est_zfw: number | null;
+    max_zfw: number | null;
+    est_tow: number | null;
+    est_ldw: number | null;
+    pax_count: number | null;
+    cargo: number | null;
+  };
+}
+
+/**
+ * The generated load sheet's figures. Stored as the reply message's
+ * payload_json and returned alongside it, so the row and the response can
+ * never disagree. Illustrative planning numbers, never a loading calculation.
+ */
+export interface LoadsheetFigures {
+  /** 'kgs' | 'lbs' as SimBrief spelled it, or null. Every weight is in this unit. */
+  units: string | null;
+  block_fuel: number | null;
+  taxi_fuel: number | null;
+  takeoff_fuel: number | null;
+  trip_fuel: number | null;
+  payload: number | null;
+  /** 'derived' means est_zfw - oew; 'unavailable' means the figure is null. */
+  payload_source: 'simbrief' | 'derived' | 'unavailable';
+  zero_fuel_weight: number | null;
+  /** 'derived' means oew + payload. */
+  zfw_source: 'simbrief' | 'derived' | 'unavailable';
+  max_zero_fuel_weight: number | null;
+  dry_operating_weight: number | null;
+  takeoff_weight: number | null;
+  landing_weight: number | null;
+  pax_count: number | null;
+  cargo: number | null;
+  /** Always true: SimBrief planning figures, not a loading calculation. */
+  estimated: boolean;
+}
+
+/**
+ * POST /api/planned-legs/:legId/acars-messages/loadsheet — 201 when the pair
+ * was written, 200 when it already existed. The request takes no body.
+ */
+export interface LoadsheetRequestResponse {
+  planned_leg_id: number;
+  /** false when this leg already had a load sheet and these are the stored rows. */
+  created: boolean;
+  /** direction 'downlink', label 'REQUEST LOADSHEET'. */
+  request: AcarsMessage;
+  /** direction 'uplink', label 'LOADSHEET'. correlation_id === request.id. */
+  reply: AcarsMessage;
+  /** The figures, already parsed, so no client has to scrape the body text. */
+  sheet: LoadsheetFigures;
+}
+
 /** Every ACARS rejection body: { error, code }. */
 export interface AcarsErrorBody {
   error: string;
   code:
     | 'INVALID_ID' | 'FLIGHT_NOT_FOUND' | 'INVALID_BODY'
     | 'UNKNOWN_CANNED_MESSAGE' | 'NOT_A_CANNED_MESSAGE'
-    | 'DIRECTION_NOT_PERMITTED' | 'CATEGORY_NOT_PERMITTED';
+    | 'DIRECTION_NOT_PERMITTED' | 'CATEGORY_NOT_PERMITTED'
+    | 'PLANNED_LEG_NOT_FOUND' | 'NO_DISPATCH_DATA';
 }

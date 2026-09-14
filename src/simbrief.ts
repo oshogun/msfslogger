@@ -83,7 +83,8 @@ export type SimbriefWarningCode =
   | 'FIX_MISSING_POSITION'
   | 'NO_CRUISE_ALTITUDE'
   | 'ORIGIN_IN_NAVLOG'
-  | 'PSEUDO_WAYPOINTS';
+  | 'PSEUDO_WAYPOINTS'
+  | 'NO_DISPATCH_FIGURES';
 
 export interface SimbriefWarning {
   code: SimbriefWarningCode;
@@ -146,6 +147,60 @@ export interface SimbriefAlternate {
   lat: number | null;
   lon: number | null;
   altFt: number | null;
+}
+
+/**
+ * The dispatch/load-planning figures, in whatever unit `units` names. SimBrief
+ * plans in one unit system per OFP and this carries its numbers forward
+ * unconverted — nothing downstream multiplies a weight by anything.
+ *
+ * Every member is nullable: an OFP with no `fuel` node is still a usable route,
+ * and nothing here may refuse a plan.
+ */
+export interface SimbriefDispatchFigures {
+  /** params.units, verbatim: 'kgs' or 'lbs'. null when absent. */
+  units: string | null;
+  /** aircraft.reg, e.g. 'N201SB'. */
+  aircraftReg: string | null;
+
+  /** fuel.plan_ramp — block/ramp fuel, the load sheet's headline figure. */
+  planRamp: number | null;
+  /** fuel.plan_takeoff */
+  planTakeoff: number | null;
+  /** fuel.plan_landing */
+  planLanding: number | null;
+  /** fuel.taxi */
+  taxi: number | null;
+  /** fuel.enroute_burn — trip fuel. */
+  enrouteBurn: number | null;
+  /** fuel.contingency */
+  contingency: number | null;
+  /** fuel.reserve */
+  reserve: number | null;
+  /** fuel.alternate_burn */
+  alternateBurn: number | null;
+
+  /** times.est_time_enroute, SECONDS. */
+  estTimeEnrouteSec: number | null;
+  /** times.est_block, SECONDS, gate to gate. */
+  estBlockSec: number | null;
+
+  /** weights.oew — dry operating weight. */
+  oew: number | null;
+  /** weights.payload */
+  payload: number | null;
+  /** weights.est_zfw */
+  estZfw: number | null;
+  /** weights.max_zfw */
+  maxZfw: number | null;
+  /** weights.est_tow */
+  estTow: number | null;
+  /** weights.est_ldw */
+  estLdw: number | null;
+  /** weights.pax_count — a head count, not a weight. */
+  paxCount: number | null;
+  /** weights.cargo */
+  cargo: number | null;
 }
 
 /**
@@ -217,6 +272,13 @@ export interface ParsedSimbriefPlan {
     /** The pilot id the plan belongs to, from params.user_id. */
     userId: string | null;
   };
+
+  /**
+   * Fuel, time and weight planning figures. Not part of CreatePlannedLegPlan;
+   * read by the import route when it files the dispatch release. Every member
+   * is nullable: an OFP with no `fuel` node is still a usable route.
+   */
+  dispatch: SimbriefDispatchFigures;
 
   warnings: SimbriefWarning[];
 }
@@ -499,6 +561,42 @@ export function parseSimbriefPlan(body: unknown): ParsedSimbriefPlan {
   const generatedSeconds = num(timeGenerated);
   const createdAt = generatedSeconds === null ? null : new Date(generatedSeconds * 1000).toISOString();
 
+  // ── Dispatch figures ────────────────────────────────────────────────────────
+  // Cannot reject a plan: a missing fuel/times/weights node just yields a node
+  // of all-null members, and the route the OFP describes is unaffected.
+
+  const fuelNode = rec(root['fuel']);
+  const timesNode = rec(root['times']);
+  const weightsNode = rec(root['weights']);
+  const aircraftNode = rec(root['aircraft']);
+  const units = str(params?.['units']);
+
+  const dispatch: SimbriefDispatchFigures = {
+    units,
+    aircraftReg: str(aircraftNode?.['reg']),
+    planRamp: num(fuelNode?.['plan_ramp']),
+    planTakeoff: num(fuelNode?.['plan_takeoff']),
+    planLanding: num(fuelNode?.['plan_landing']),
+    taxi: num(fuelNode?.['taxi']),
+    enrouteBurn: num(fuelNode?.['enroute_burn']),
+    contingency: num(fuelNode?.['contingency']),
+    reserve: num(fuelNode?.['reserve']),
+    alternateBurn: num(fuelNode?.['alternate_burn']),
+    estTimeEnrouteSec: num(timesNode?.['est_time_enroute']),
+    estBlockSec: num(timesNode?.['est_block']),
+    oew: num(weightsNode?.['oew']),
+    payload: num(weightsNode?.['payload']),
+    estZfw: num(weightsNode?.['est_zfw']),
+    maxZfw: num(weightsNode?.['max_zfw']),
+    estTow: num(weightsNode?.['est_tow']),
+    estLdw: num(weightsNode?.['est_ldw']),
+    paxCount: num(weightsNode?.['pax_count']),
+    cargo: num(weightsNode?.['cargo']),
+  };
+  if (dispatch.planRamp === null && dispatch.estZfw === null) {
+    warn('NO_DISPATCH_FIGURES', 'SimBrief returned no fuel or weight figures; the dispatch release will carry no load data');
+  }
+
   let approxDistanceNm = 0;
   for (let i = 1; i < waypoints.length; i++) {
     approxDistanceNm += haversineNm(waypoints[i - 1].lat, waypoints[i - 1].lon, waypoints[i].lat, waypoints[i].lon);
@@ -548,6 +646,7 @@ export function parseSimbriefPlan(body: unknown): ParsedSimbriefPlan {
       routeString,
       userId: str(params?.['user_id']),
     },
+    dispatch,
     warnings,
   };
 }

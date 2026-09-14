@@ -467,3 +467,43 @@ export interface SendCannedAcarsMessageRequest {
   /** If present, must equal the canned entry's category. */
   category?: AcarsCategory;
 }
+
+/** The generated load sheet's figures — illustrative planning numbers, not a loading calculation. */
+export interface LoadsheetFigures {
+  /** 'kgs' | 'lbs' as SimBrief spelled it, or null. Every weight is in this unit. */
+  units: string | null;
+  block_fuel: number | null;
+  taxi_fuel: number | null;
+  takeoff_fuel: number | null;
+  trip_fuel: number | null;
+  payload: number | null;
+  payload_source: 'simbrief' | 'derived' | 'unavailable';
+  zero_fuel_weight: number | null;
+  zfw_source: 'simbrief' | 'derived' | 'unavailable';
+  max_zero_fuel_weight: number | null;
+  dry_operating_weight: number | null;
+  takeoff_weight: number | null;
+  landing_weight: number | null;
+  pax_count: number | null;
+  cargo: number | null;
+  /** Always true. Never present these as authoritative loading data. */
+  estimated: boolean;
+}
+
+/**
+ * POST /api/planned-legs/:legId/acars-messages/loadsheet 200/201 body. The
+ * request takes no body at all.
+ *
+ * `created` is false when the leg already had a load sheet: the two messages
+ * are then the stored ones, already in the thread, so they are merged into
+ * local state by id rather than appended.
+ */
+export interface LoadsheetRequestResponse {
+  planned_leg_id: number;
+  created: boolean;
+  /** direction 'downlink', label 'REQUEST LOADSHEET'. */
+  request: AcarsMessage;
+  /** direction 'uplink', label 'LOADSHEET'. correlation_id === request.id. */
+  reply: AcarsMessage;
+  sheet: LoadsheetFigures;
+}

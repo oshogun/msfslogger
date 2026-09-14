@@ -1,0 +1,81 @@
+── plan.dispatch (§3.1) ──
+{
+  "units": "kgs",
+  "aircraftReg": "N201SB",
+  "planRamp": 1241,
+  "planTakeoff": 1159,
+  "planLanding": 287,
+  "taxi": 82,
+  "enrouteBurn": 872,
+  "contingency": 65,
+  "reserve": 222,
+  "alternateBurn": 0,
+  "estTimeEnrouteSec": 12033,
+  "estBlockSec": 13713,
+  "oew": 3869,
+  "payload": 642,
+  "estZfw": 4511,
+  "maxZfw": 4990,
+  "estTow": 5670,
+  "estLdw": 4798,
+  "paxCount": 7,
+  "cargo": 86
+}
+
+── payload_json (§4.2), as stored ──
+{"v":1,"source":"simbrief","ofp":{"request_id":"186182026","sequence_id":"60bafd06304e","time_generated":"1789306516"},"flight_number":"SHG037","aircraft_type":"BE20","aircraft_reg":"N201SB","origin":"UHPP","destination":"UHSS","alternates":[],"route":"SAMI4L SAMIK T577 UB P176 NAMUL P175 ROMUK R810 BELNA DCT LEKPA LEKP4V","cruise_alt_ft":28000,"units":"kgs","ete_sec":12033,"block_time_sec":13713,"fuel":{"ramp":1241,"takeoff":1159,"landing":287,"taxi":82,"enroute_burn":872,"contingency":65,"reserve":222,"alternate_burn":0},"weights":{"oew":3869,"payload":642,"est_zfw":4511,"max_zfw":4990,"est_tow":5670,"est_ldw":4798,"pax_count":7,"cargo":86}}
+
+── dispatch-release body (§5.2) ──
+DISPATCH RELEASE
+FLT SHG037
+UHPP UHSS ALTN NONE
+ACFT BE20 N201SB
+CRZ FL280
+ETE 0320
+FUEL KG BLOCK 1241 TRIP 872 RESV 222 ALTN 0 CONT 65 TAXI 82
+RTE SAMI4L SAMIK T577 UB P176 NAMUL P175 ROMUK R810 BELNA DCT LEKPA LEKP4V
+OFP 186182026 ISSUED 2026-09-14T09:22:01.000Z
+SIMULATED DISPATCH RELEASE - NOT FOR REAL WORLD USE
+
+── loadsheet request body (§6.4) ──
+REQUEST LOADSHEET
+UHPP UHSS FLT SHG037
+
+── loadsheet reply body (§6.4) ──
+LOADSHEET
+FLT SHG037 UHPP UHSS
+ACFT BE20 N201SB
+UNITS KG
+BLOCK FUEL      1241
+TAXI FUEL         82
+TAKEOFF FUEL    1159
+TRIP FUEL        872
+PAX                7
+CARGO             86
+PAYLOAD          642
+DRY OPER WT     3869
+ZERO FUEL WT    4511 MAX 4990
+TAKEOFF WT      5670
+LANDING WT      4798
+ISSUED 2026-09-14T09:22:01.000Z
+ESTIMATED FIGURES - SIMULATION ONLY - NOT FOR ACTUAL LOADING
+
+── LoadsheetFigures (§6.3) ──
+{
+  "units": "kgs",
+  "block_fuel": 1241,
+  "taxi_fuel": 82,
+  "takeoff_fuel": 1159,
+  "trip_fuel": 872,
+  "payload": 642,
+  "payload_source": "simbrief",
+  "zero_fuel_weight": 4511,
+  "zfw_source": "simbrief",
+  "max_zero_fuel_weight": 4990,
+  "dry_operating_weight": 3869,
+  "takeoff_weight": 5670,
+  "landing_weight": 4798,
+  "pax_count": 7,
+  "cargo": 86,
+  "estimated": true
+}

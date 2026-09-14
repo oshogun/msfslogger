@@ -67,6 +67,14 @@ function report(file: string, plan: ParsedSimbriefPlan): void {
   console.log(`   flight no.   ${nullable(plan.ofp.flightNumber)}`);
   console.log(`   remarks      ${nullable(plan.remarks)}`);
 
+  const disp = plan.dispatch;
+  console.log(
+    `   dispatch     units=${nullable(disp.units)}  block=${nullable(disp.planRamp)}  trip=${nullable(disp.enrouteBurn)}  resv=${nullable(disp.reserve)}  ete=${disp.estTimeEnrouteSec === null ? '—' : `${disp.estTimeEnrouteSec}s`}`,
+  );
+  console.log(
+    `   weights      oew=${nullable(disp.oew)}  payload=${nullable(disp.payload)}  zfw=${nullable(disp.estZfw)}/${nullable(disp.maxZfw)}  tow=${nullable(disp.estTow)}  ldw=${nullable(disp.estLdw)}  pax=${nullable(disp.paxCount)}`,
+  );
+
   const p = plan.procedures;
   console.log(
     `   procedures   SID ${nullable(p.sidName)}/${nullable(p.sidRunway)}/${nullable(p.sidTransition)}   STAR ${nullable(p.starName)}/${nullable(p.starRunway)}/${nullable(p.starTransition)}`,

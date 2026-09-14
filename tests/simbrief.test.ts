@@ -24,6 +24,7 @@ import {
   SIMBRIEF_USER_ID_SETTING,
   SimbriefParseError,
   type ParsedSimbriefPlan,
+  type SimbriefDispatchFigures,
   type SimbriefRejectCode,
 } from '../src/simbrief';
 
@@ -157,6 +158,104 @@ describe('parseSimbriefPlan: the real captured OFP', () => {
   it('warns about the empty alternate list and the pseudo-waypoints, and nothing else', () => {
     expect(plan.warnings.map((w) => w.code).sort()).toEqual(['NO_ALTERNATES', 'PSEUDO_WAYPOINTS']);
     expect(plan.alternates).toEqual([]);
+  });
+
+  it('carries the fuel, time and weight figures a dispatch release and load sheet are built from', () => {
+    const dispatch: SimbriefDispatchFigures = plan.dispatch;
+    expect(dispatch).toEqual({
+      units: 'kgs',
+      aircraftReg: 'N201SB',
+      planRamp: 1241,
+      planTakeoff: 1159,
+      planLanding: 287,
+      taxi: 82,
+      enrouteBurn: 872,
+      contingency: 65,
+      reserve: 222,
+      alternateBurn: 0,
+      estTimeEnrouteSec: 12033,
+      estBlockSec: 13713,
+      oew: 3869,
+      payload: 642,
+      estZfw: 4511,
+      maxZfw: 4990,
+      estTow: 5670,
+      estLdw: 4798,
+      paxCount: 7,
+      cargo: 86,
+    });
+  });
+
+  it('does not warn NO_DISPATCH_FIGURES when the OFP carries real figures', () => {
+    expect(plan.warnings.map((w) => w.code)).not.toContain('NO_DISPATCH_FIGURES');
+  });
+});
+
+// ── plan.dispatch: absent and partial figures ─────────────────────────────────
+
+describe('parseSimbriefPlan: dispatch figures, absent or partial', () => {
+  it('yields an all-null dispatch node rather than rejecting the plan when fuel/times/weights are missing', () => {
+    const body = realBody();
+    delete body.fuel;
+    delete body.times;
+    delete body.weights;
+    const plan = parseSimbriefPlan(body);
+    expect(plan.dispatch).toEqual({
+      units: 'kgs',
+      aircraftReg: 'N201SB',
+      planRamp: null,
+      planTakeoff: null,
+      planLanding: null,
+      taxi: null,
+      enrouteBurn: null,
+      contingency: null,
+      reserve: null,
+      alternateBurn: null,
+      estTimeEnrouteSec: null,
+      estBlockSec: null,
+      oew: null,
+      payload: null,
+      estZfw: null,
+      maxZfw: null,
+      estTow: null,
+      estLdw: null,
+      paxCount: null,
+      cargo: null,
+    });
+    // The route itself is untouched — this is not a rejection condition.
+    expect(plan.departure.ident).toBe('UHPP');
+    expect(plan.destination.ident).toBe('UHSS');
+  });
+
+  it('warns NO_DISPATCH_FIGURES only when both plan_ramp and est_zfw are absent', () => {
+    const body = realBody();
+    delete body.fuel;
+    delete body.weights;
+    const plan = parseSimbriefPlan(body);
+    expect(plan.dispatch.planRamp).toBeNull();
+    expect(plan.dispatch.estZfw).toBeNull();
+    const warning = plan.warnings.find((w) => w.code === 'NO_DISPATCH_FIGURES');
+    expect(warning?.message).toBe(
+      'SimBrief returned no fuel or weight figures; the dispatch release will carry no load data',
+    );
+  });
+
+  it('does not warn when fuel is missing but weights still carries est_zfw', () => {
+    const body = realBody();
+    delete body.fuel;
+    const plan = parseSimbriefPlan(body);
+    expect(plan.dispatch.planRamp).toBeNull();
+    expect(plan.dispatch.estZfw).toBe(4511);
+    expect(plan.warnings.map((w) => w.code)).not.toContain('NO_DISPATCH_FIGURES');
+  });
+
+  it('does not warn when weights is missing but fuel still carries plan_ramp', () => {
+    const body = realBody();
+    delete body.weights;
+    const plan = parseSimbriefPlan(body);
+    expect(plan.dispatch.planRamp).toBe(1241);
+    expect(plan.dispatch.estZfw).toBeNull();
+    expect(plan.warnings.map((w) => w.code)).not.toContain('NO_DISPATCH_FIGURES');
   });
 });
 

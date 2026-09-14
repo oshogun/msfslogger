@@ -1,0 +1,17 @@
+{
+  "400 — :legId is not an integer": {
+    "error": "Invalid id",
+    "code": "INVALID_ID"
+  },
+  "404 — no planned_legs row with that id": {
+    "error": "Planned leg 42 not found",
+    "code": "PLANNED_LEG_NOT_FOUND"
+  },
+  "409 — no usable dispatch data on the leg": {
+    "error": "NO DISPATCH DATA ON FILE",
+    "code": "NO_DISPATCH_DATA"
+  },
+  "500 — anything thrown": {
+    "error": "Error: <String(err)>"
+  }
+}

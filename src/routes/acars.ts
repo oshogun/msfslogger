@@ -1,11 +1,17 @@
 import express, { Router } from 'express';
 import { getFlightById } from '../db/flights';
-import { insertAcarsMessage, listAcarsMessagesForFlight } from '../db/acarsMessages';
+import {
+  insertAcarsMessage, insertAcarsMessageOnce, listAcarsMessagesForFlight, findAcarsMessageByDedupKey,
+} from '../db/acarsMessages';
+import { getPlannedLegById } from '../db/plannedLegs';
 import {
   CANNED_MESSAGES, CLIENT_DIRECTION, cannedMessageIdList,
   findCannedMessage, findCannedMessageByBody,
+  LOADSHEET_REQUEST_LABEL, LOADSHEET_LABEL, NO_DISPATCH_DATA_MESSAGE,
+  dispatchDedupKey, loadsheetRequestDedupKey, loadsheetReplyDedupKey,
+  parseDispatchPayload, buildLoadsheetFigures, buildLoadsheetRequestBody, buildLoadsheetReplyBody,
 } from '../acars';
-import type { AcarsThread, CannedAcarsMessageList } from '../types';
+import type { AcarsThread, CannedAcarsMessageList, LoadsheetRequestResponse } from '../types';
 
 /**
  * /api/flights/:id/acars-messages and /api/acars/canned-messages — mounted at
@@ -124,6 +130,71 @@ export function createAcarsRouter(): Router {
         body: canned.body,
       });
       res.status(201).json(message);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Leg-scoped, not flight-scoped: a load sheet is generated from the leg's
+  // on-file dispatch release, which exists before a flights row does. Takes
+  // no request body — the leg id in the path is the only input. Idempotent:
+  // a second call for the same leg returns the same pair rather than filing
+  // a second one, because the figures come from the same immutable payload
+  // and a repeat would be a byte-identical duplicate.
+  router.post('/planned-legs/:legId/acars-messages/loadsheet', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      if (!getPlannedLegById(legId)) {
+        res.status(404).json({ error: `Planned leg ${legId} not found`, code: 'PLANNED_LEG_NOT_FOUND' });
+        return;
+      }
+
+      const dispatchMessage = findAcarsMessageByDedupKey(dispatchDedupKey(legId));
+      const payload = parseDispatchPayload(dispatchMessage?.payload_json ?? null);
+      if (!payload) {
+        res.status(409).json({ error: NO_DISPATCH_DATA_MESSAGE, code: 'NO_DISPATCH_DATA' });
+        return;
+      }
+
+      const sheet = buildLoadsheetFigures(payload);
+      if (sheet.block_fuel === null && sheet.payload === null && sheet.zero_fuel_weight === null) {
+        res.status(409).json({ error: NO_DISPATCH_DATA_MESSAGE, code: 'NO_DISPATCH_DATA' });
+        return;
+      }
+
+      const issuedAt = new Date().toISOString();
+
+      const requestResult = insertAcarsMessageOnce({
+        planned_leg_id: legId,
+        direction: 'downlink',
+        category: 'dispatch',
+        label: LOADSHEET_REQUEST_LABEL,
+        body: buildLoadsheetRequestBody(payload),
+        dedup_key: loadsheetRequestDedupKey(legId),
+        sent_at: issuedAt,
+      });
+      const replyResult = insertAcarsMessageOnce({
+        planned_leg_id: legId,
+        direction: 'uplink',
+        category: 'dispatch',
+        label: LOADSHEET_LABEL,
+        body: buildLoadsheetReplyBody(payload, sheet, issuedAt),
+        payload_json: JSON.stringify(sheet),
+        correlation_id: requestResult.message.id,
+        dedup_key: loadsheetReplyDedupKey(legId),
+        sent_at: issuedAt,
+      });
+
+      const body: LoadsheetRequestResponse = {
+        planned_leg_id: legId,
+        created: replyResult.created,
+        request: requestResult.message,
+        reply: replyResult.message,
+        sheet,
+      };
+      res.status(replyResult.created ? 201 : 200).json(body);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
