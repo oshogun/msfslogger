@@ -398,3 +398,47 @@ export function buildLoadsheetReplyBody(p: DispatchPayload, sheet: LoadsheetFigu
   ];
   return lines.join('\n');
 }
+
+// ── Weather request ──────────────────────────────────────────────────────────
+//
+// A crew-initiated request/reply pair, filed fresh on every call (no dedup
+// key, unlike the dispatch/loadsheet messages above): a WX request answers a
+// question about "right now," so repeating it is meaningful, not a duplicate.
+
+export const WX_UNAVAILABLE_LABEL = 'WX UNAVAILABLE';
+
+/** Trim, then uppercase. The one normalisation applied before validation,
+ *  caching (weatherClient's cache key), and storage (the request/reply body
+ *  and label both interpolate this normalised form, never the raw input). */
+export function normaliseIcao(raw: string): string {
+  return raw.trim().toUpperCase();
+}
+
+/** Shape check for a four-character alphanumeric ICAO. Applied to an
+ *  ALREADY-normalised string — call normaliseIcao() first. */
+export function isValidIcaoShape(v: string): boolean {
+  return /^[A-Z0-9]{4}$/.test(v);
+}
+
+/** 'WX REQUEST EGLL' — both the request row's label and its body, verbatim. */
+export function wxRequestLabelAndBody(icao: string): string {
+  return `WX REQUEST ${icao}`;
+}
+
+/** 'METAR EGLL' — the reply row's label when weather was found, regardless of
+ *  whether a TAF was also found. */
+export function wxReplyLabel(icao: string): string {
+  return `METAR ${icao}`;
+}
+
+/** metar, or metar + '\n' + taf when a TAF was found. Never adds a TAF header
+ *  line: the raw METAR and TAF text are each already self-identifying
+ *  ("METAR KJFK...", "TAF KJFK..."). */
+export function buildWxReplyBody(metar: string, taf: string | null): string {
+  return taf !== null ? `${metar}\n${taf}` : metar;
+}
+
+/** 'WX DATA UNAVAILABLE FOR ZZZZ' — the one definition of this literal string. */
+export function buildWxUnavailableBody(icao: string): string {
+  return `WX DATA UNAVAILABLE FOR ${icao}`;
+}

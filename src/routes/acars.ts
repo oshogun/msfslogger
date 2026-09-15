@@ -10,8 +10,13 @@ import {
   LOADSHEET_REQUEST_LABEL, LOADSHEET_LABEL, NO_DISPATCH_DATA_MESSAGE,
   dispatchDedupKey, loadsheetRequestDedupKey, loadsheetReplyDedupKey,
   parseDispatchPayload, buildLoadsheetFigures, buildLoadsheetRequestBody, buildLoadsheetReplyBody,
+  normaliseIcao, isValidIcaoShape, wxRequestLabelAndBody, wxReplyLabel,
+  buildWxReplyBody, buildWxUnavailableBody, WX_UNAVAILABLE_LABEL,
 } from '../acars';
-import type { AcarsThread, CannedAcarsMessageList, LoadsheetRequestResponse } from '../types';
+import { getCachedWeather, WeatherFetchError } from '../weatherClient';
+import type {
+  AcarsThread, CannedAcarsMessageList, LoadsheetRequestResponse, WxRequestResponse, WxWeatherPayload,
+} from '../types';
 
 /**
  * /api/flights/:id/acars-messages and /api/acars/canned-messages — mounted at
@@ -130,6 +135,97 @@ export function createAcarsRouter(): Router {
         body: canned.body,
       });
       res.status(201).json(message);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Flight-scoped, not leg-scoped: a crew can request weather for any ICAO —
+  // an alternate, a diversion field — not necessarily the linked leg's
+  // departure or destination. Not idempotent, unlike the loadsheet route
+  // below: there is no dedup key, so every accepted call inserts a brand-new
+  // request/reply pair, and both "METAR found" and "no data" are successful,
+  // request-was-processed outcomes rather than errors.
+  router.post('/flights/:id/acars-messages/wx', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      const flight = getFlightById(id);
+      if (!flight) { res.status(404).json({ error: `Flight ${id} not found`, code: 'FLIGHT_NOT_FOUND' }); return; }
+
+      const body = req.body as unknown;
+      if (typeof body !== 'object' || body === null || Array.isArray(body) ||
+          typeof (body as Record<string, unknown>).icao !== 'string' ||
+          (body as Record<string, unknown>).icao === '' ||
+          ((body as Record<string, unknown>).icao as string).trim() === '') {
+        res.status(400).json({ error: 'icao is required', code: 'INVALID_BODY' });
+        return;
+      }
+
+      const icao = normaliseIcao((body as Record<string, unknown>).icao as string);
+      if (!isValidIcaoShape(icao)) {
+        res.status(400).json({
+          error: 'icao must be 4 letters or digits (e.g. EGLL)',
+          code: 'INVALID_ICAO',
+        });
+        return;
+      }
+
+      const issuedAt = new Date().toISOString();
+      const requestMessage = insertAcarsMessage({
+        flight_id: id,
+        direction: 'downlink',
+        category: 'wx',
+        label: wxRequestLabelAndBody(icao),
+        body: wxRequestLabelAndBody(icao),
+        payload_json: JSON.stringify({ icao }),
+        sent_at: issuedAt,
+      });
+
+      let available: boolean;
+      let replyMessage;
+      let weather: WxWeatherPayload | null;
+
+      try {
+        const raw = await getCachedWeather(icao);
+        if (raw.metar === null) {
+          // Well-formed ICAO, upstream has nothing for it — a feature
+          // outcome, not a thrown error.
+          available = false;
+          weather = null;
+          replyMessage = insertAcarsMessage({
+            flight_id: id, direction: 'uplink', category: 'wx',
+            label: WX_UNAVAILABLE_LABEL, body: buildWxUnavailableBody(icao),
+            payload_json: JSON.stringify({ icao, reason: 'NO_DATA' }),
+            correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+          });
+        } else {
+          available = true;
+          weather = { icao, metar: raw.metar, taf: raw.taf, fetched_at: raw.fetched_at };
+          replyMessage = insertAcarsMessage({
+            flight_id: id, direction: 'uplink', category: 'wx',
+            label: wxReplyLabel(icao), body: buildWxReplyBody(raw.metar, raw.taf),
+            payload_json: JSON.stringify(weather),
+            correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        if (!(err instanceof WeatherFetchError)) throw err;
+        available = false;
+        weather = null;
+        replyMessage = insertAcarsMessage({
+          flight_id: id, direction: 'uplink', category: 'wx',
+          label: WX_UNAVAILABLE_LABEL, body: buildWxUnavailableBody(icao),
+          payload_json: JSON.stringify({ icao, reason: err.code }),
+          correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+        });
+      }
+
+      const responseBody: WxRequestResponse = {
+        flight_id: id, icao, available, request: requestMessage, reply: replyMessage, weather,
+      };
+      res.status(201).json(responseBody);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

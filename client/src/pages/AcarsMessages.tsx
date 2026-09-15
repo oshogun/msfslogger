@@ -8,10 +8,19 @@ import type {
   CannedAcarsMessage,
   CannedAcarsMessageList,
   LoadsheetRequestResponse,
+  PlannedLegWithChildren,
+  WxRequestResponse,
 } from '../types';
 
 /** Sentinel id for sendingId while a load sheet request is in flight — cannot collide with a canned id. */
 const LOADSHEET_SENDING_ID = 'loadsheet';
+/** Sentinel id for sendingId while a weather request is in flight — cannot collide with a canned id. */
+const WX_SENDING_ID = 'wx';
+
+/** A client-side-only sanity check; the server is still the authority (400 INVALID_ICAO). */
+function isPlausibleIcao(v: string): boolean {
+  return /^[A-Za-z0-9]{4}$/.test(v.trim());
+}
 
 /**
  * The categories this client has a badge colour for. Any other well-shaped
@@ -52,12 +61,14 @@ export function AcarsMessages() {
   const { id } = useParams<{ id: string }>();
   const [messages, setMessages] = useState<AcarsMessage[]>([]);
   const [plannedLegId, setPlannedLegId] = useState<number | null>(null);
+  const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
   const [canned, setCanned] = useState<CannedAcarsMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [cannedError, setCannedError] = useState('');
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [sendError, setSendError] = useState('');
+  const [wxIcao, setWxIcao] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +105,33 @@ export function AcarsMessages() {
       });
     return () => { cancelled = true; };
   }, [id]);
+
+  // Convenience-only lookup for the REQUEST WX default: a failure here means no
+  // suggested ICAO, not a page error. A 401 still bounces via apiFetch itself;
+  // anything else is swallowed silently — the quick-fill buttons simply don't
+  // render, same as a non-airport waypoint would.
+  useEffect(() => {
+    if (plannedLegId === null) {
+      setPlannedLeg(null);
+      return;
+    }
+    let cancelled = false;
+    apiFetch<PlannedLegWithChildren>(`/api/planned-legs/${plannedLegId}`)
+      .then(leg => { if (!cancelled) setPlannedLeg(leg); })
+      .catch(err => {
+        if (!(err instanceof UnauthorizedError)) setPlannedLeg(null);
+      });
+    return () => { cancelled = true; };
+  }, [plannedLegId]);
+
+  // Re-derive the default whenever the leg (or its absence) changes — but only
+  // while the user has not already typed something, so a fetched leg cannot
+  // clobber mid-edit input.
+  useEffect(() => {
+    if (wxIcao !== '') return;
+    if (plannedLeg?.destination_is_airport) setWxIcao(plannedLeg.destination_ident);
+    else if (plannedLeg?.departure_is_airport) setWxIcao(plannedLeg.departure_ident);
+  }, [plannedLeg]);
 
   async function handleSend(cannedId: string) {
     setSendingId(cannedId);
@@ -138,6 +176,28 @@ export function AcarsMessages() {
         merged.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id - b.id);
         return merged;
       });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  async function handleRequestWx() {
+    const icao = wxIcao.trim().toUpperCase();
+    setSendingId(WX_SENDING_ID);
+    setSendError('');
+    try {
+      const response = await apiFetch<WxRequestResponse>(`/api/flights/${id}/acars-messages/wx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ icao }),
+      });
+      // Every accepted call creates two brand-new rows — never rows already in
+      // state, unlike the load sheet's re-request. A plain append is correct
+      // here, the same shape as handleSend's canned-message append.
+      setMessages(prev => [...prev, response.request, response.reply]);
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
       setSendError((err as Error).message);
@@ -202,6 +262,38 @@ export function AcarsMessages() {
                   onClick={handleRequestLoadsheet}
                 >
                   {sendingId === LOADSHEET_SENDING_ID ? 'Requesting…' : 'REQUEST LOADSHEET'}
+                </button>
+                <input
+                  type="text"
+                  value={wxIcao}
+                  placeholder="ICAO"
+                  disabled={sendingId !== null}
+                  onChange={e => setWxIcao(e.target.value)}
+                />
+                {plannedLeg?.departure_is_airport ? (
+                  <button
+                    className="btn btn-ghost"
+                    disabled={sendingId !== null}
+                    onClick={() => setWxIcao(plannedLeg.departure_ident)}
+                  >
+                    {plannedLeg.departure_ident}
+                  </button>
+                ) : null}
+                {plannedLeg?.destination_is_airport ? (
+                  <button
+                    className="btn btn-ghost"
+                    disabled={sendingId !== null}
+                    onClick={() => setWxIcao(plannedLeg.destination_ident)}
+                  >
+                    {plannedLeg.destination_ident}
+                  </button>
+                ) : null}
+                <button
+                  className="btn btn-ghost"
+                  disabled={sendingId !== null || !isPlausibleIcao(wxIcao)}
+                  onClick={handleRequestWx}
+                >
+                  {sendingId === WX_SENDING_ID ? 'Requesting…' : 'REQUEST WX'}
                 </button>
               </div>
             )}

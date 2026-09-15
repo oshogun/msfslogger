@@ -1,0 +1,34 @@
+{
+  "flight_id": 81,
+  "icao": "ZZZZ",
+  "available": false,
+  "request": {
+    "id": 103,
+    "flight_id": 81,
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "wx",
+    "label": "WX REQUEST ZZZZ",
+    "body": "WX REQUEST ZZZZ",
+    "payload_json": "{\"icao\":\"ZZZZ\"}",
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:23:10.000Z",
+    "read_at": null
+  },
+  "reply": {
+    "id": 104,
+    "flight_id": 81,
+    "planned_leg_id": null,
+    "direction": "uplink",
+    "category": "wx",
+    "label": "WX UNAVAILABLE",
+    "body": "WX DATA UNAVAILABLE FOR ZZZZ",
+    "payload_json": "{\"icao\":\"ZZZZ\",\"reason\":\"NO_DATA\"}",
+    "correlation_id": 103,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:23:10.300Z",
+    "read_at": null
+  },
+  "weather": null
+}

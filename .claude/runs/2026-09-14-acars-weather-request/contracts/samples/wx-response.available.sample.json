@@ -1,0 +1,39 @@
+{
+  "flight_id": 81,
+  "icao": "KJFK",
+  "available": true,
+  "request": {
+    "id": 101,
+    "flight_id": 81,
+    "planned_leg_id": null,
+    "direction": "downlink",
+    "category": "wx",
+    "label": "WX REQUEST KJFK",
+    "body": "WX REQUEST KJFK",
+    "payload_json": "{\"icao\":\"KJFK\"}",
+    "correlation_id": null,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:22:01.000Z",
+    "read_at": null
+  },
+  "reply": {
+    "id": 102,
+    "flight_id": 81,
+    "planned_leg_id": null,
+    "direction": "uplink",
+    "category": "wx",
+    "label": "METAR KJFK",
+    "body": "METAR KJFK 142251Z 02013KT 10SM FEW060 22/08 A3014 RMK SLP198 T02280072 $\nTAF KJFK 142334Z 1500/1606 01011KT P6SM SKC FM150700 03008KT P6SM SKC",
+    "payload_json": "{\"icao\":\"KJFK\",\"metar\":\"METAR KJFK 142251Z 02013KT 10SM FEW060 22/08 A3014 RMK SLP198 T02280072 $\",\"taf\":\"TAF KJFK 142334Z 1500/1606 01011KT P6SM SKC FM150700 03008KT P6SM SKC\",\"fetched_at\":\"2026-09-14T09:22:01.500Z\"}",
+    "correlation_id": 101,
+    "dedup_key": null,
+    "sent_at": "2026-09-14T09:22:01.500Z",
+    "read_at": null
+  },
+  "weather": {
+    "icao": "KJFK",
+    "metar": "METAR KJFK 142251Z 02013KT 10SM FEW060 22/08 A3014 RMK SLP198 T02280072 $",
+    "taf": "TAF KJFK 142334Z 1500/1606 01011KT P6SM SKC FM150700 03008KT P6SM SKC",
+    "fetched_at": "2026-09-14T09:22:01.500Z"
+  }
+}

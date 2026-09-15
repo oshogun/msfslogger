@@ -517,6 +517,58 @@ export interface LoadsheetRequestResponse {
   sheet: LoadsheetFigures;
 }
 
+/** POST /api/flights/:id/acars-messages/wx request body. */
+export interface RequestWxRequest {
+  /** Any string; validated server-side (see isValidIcaoShape in src/acars.ts). */
+  icao: string;
+}
+
+/**
+ * The machine-readable twin of a successful WX reply's payload_json, and
+ * weatherClient.ts's own return type — the raw METAR/TAF response maps
+ * directly onto this shape, so no second struct exists for the same data.
+ */
+export interface WxWeatherPayload {
+  /** Normalised (trimmed, uppercased) — never the caller's raw casing. */
+  icao: string;
+  /** Raw METAR text, e.g. "METAR KJFK 142251Z 02013KT 10SM FEW060 22/08 A3014". */
+  metar: string;
+  /** Raw TAF text, or null — a station with no TAF on file is not an error. */
+  taf: string | null;
+  /** ISO 8601 UTC instant: when this fetch (or cache fill) happened. */
+  fetched_at: string;
+}
+
+/** Why a WX reply is the rejection rather than the metar/taf reply. */
+export type WxUnavailableReason =
+  | 'NO_DATA'       // well-formed ICAO, upstream has no current METAR for it
+  | 'NETWORK'       // could not reach the upstream at all
+  | 'TIMEOUT'       // upstream did not respond in time
+  | 'RATE_LIMITED'  // upstream answered 429
+  | 'BAD_STATUS'    // upstream answered an unexpected non-2xx/204 status
+  | 'BAD_BODY';     // upstream answered 200 with a body this client could not read
+
+/** The machine-readable twin of a WX rejection reply's payload_json. */
+export interface WxUnavailablePayload {
+  icao: string;
+  reason: WxUnavailableReason;
+}
+
+/** POST /api/flights/:id/acars-messages/wx 201 body. */
+export interface WxRequestResponse {
+  flight_id: number;
+  /** Normalised (trimmed, uppercased) ICAO actually looked up. */
+  icao: string;
+  /** true when `reply` carries METAR/TAF text; false when it is the rejection. */
+  available: boolean;
+  /** direction 'downlink', label `WX REQUEST <ICAO>`. */
+  request: AcarsMessage;
+  /** direction 'uplink'; label 'METAR <ICAO>' when available, 'WX UNAVAILABLE' otherwise. */
+  reply: AcarsMessage;
+  /** The parsed convenience payload, present iff available === true. Mirrors reply.payload_json. */
+  weather: WxWeatherPayload | null;
+}
+
 /** Every ACARS rejection body: { error, code }. */
 export interface AcarsErrorBody {
   error: string;
@@ -524,5 +576,6 @@ export interface AcarsErrorBody {
     | 'INVALID_ID' | 'FLIGHT_NOT_FOUND' | 'INVALID_BODY'
     | 'UNKNOWN_CANNED_MESSAGE' | 'NOT_A_CANNED_MESSAGE'
     | 'DIRECTION_NOT_PERMITTED' | 'CATEGORY_NOT_PERMITTED'
-    | 'PLANNED_LEG_NOT_FOUND' | 'NO_DISPATCH_DATA';
+    | 'PLANNED_LEG_NOT_FOUND' | 'NO_DISPATCH_DATA'
+    | 'INVALID_ICAO';
 }

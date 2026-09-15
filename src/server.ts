@@ -185,7 +185,9 @@ export function createServer(flightManager: FlightManager): express.Express {
     // two paths so every other route keeps the default handling it has always
     // had.
     if (err instanceof SyntaxError && 'body' in err &&
-        (req.path.startsWith('/api/settings/') || req.path.endsWith('/acars-messages'))) {
+        (req.path.startsWith('/api/settings/') ||
+         req.path.endsWith('/acars-messages') ||
+         req.path.endsWith('/acars-messages/wx'))) {
       res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
       return;
     }
