@@ -358,6 +358,23 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .recent-flight-date { font-size: 0.78rem; color: #64748b; }
 .landing-all-flights-link { align-self: flex-start; font-size: 0.85rem; color: #60a5fa; }
 
+/* ── Ground position ── */
+.ground-session-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  background: #1a1d27;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  color: #e2e8f0;
+  font-size: 0.88rem;
+}
+.ground-session-stand,
+.ground-session-started { color: #64748b; font-size: 0.82rem; }
+.ground-manual-form { margin-top: 0.75rem; }
+
 /* ── Map ── */
 .map-section { margin-bottom: 1.5rem; }
 .section-title { font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.6rem; }

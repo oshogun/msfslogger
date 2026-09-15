@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { Flight, PlannedLeg, PlannedLegWithChildren, PlannedLegStatus } from '../types';
 import { coordStr, formatAlt, formatDate, formatDistance } from '../utils/format';
 
@@ -217,6 +218,9 @@ export function GhostLegRow({
           <button className="btn btn-ghost" style={{ fontSize: '0.8rem' }} disabled={linkBusy} onClick={onToggleLinkPicker}>
             {linkPickerOpen ? 'Cancel' : 'Link flight'}
           </button>
+          <Link to={`/planned-leg/${leg.id}/acars`} className="btn btn-ghost" style={{ fontSize: '0.8rem' }}>
+            ACARS
+          </Link>
         </td>
         <td className="td-actions">
           <button

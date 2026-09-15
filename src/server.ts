@@ -20,6 +20,7 @@ import { createSettingsRouter } from './routes/settings';
 import { createPlannedLegsRouter } from './routes/plannedLegs';
 import { createExportsRouter } from './routes/exports';
 import { createAcarsRouter } from './routes/acars';
+import { createGroundSessionsRouter } from './routes/groundSessions';
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
@@ -87,6 +88,12 @@ export function createServer(flightManager: FlightManager): express.Express {
     const plannedLeg = flightState === 'FLYING' && lastFrame
       ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
       : null;
+    // Present iff flightState === 'GROUND' — never null, so an unchanged
+    // AppState serialises byte-identically to before this key existed. Same
+    // conditional-spread idiom as plannedLeg.
+    const groundSession = flightState === 'GROUND'
+      ? flightManager.getGroundSessionStatus()
+      : null;
     // Present iff non-empty — never null, never [], absent instead, so an
     // unchanged AppState serialises byte-identically to before this key
     // existed. Same conditional-spread idiom as plannedLeg.
@@ -111,6 +118,7 @@ export function createServer(flightManager: FlightManager): express.Express {
         onGround:         lastFrame.onGround,
       } : null,
       ...(plannedLeg ? { plannedLeg } : {}),
+      ...(groundSession ? { groundSession } : {}),
       ...(traffic.length ? { traffic } : {}),
     });
   });
@@ -156,6 +164,12 @@ export function createServer(flightManager: FlightManager): express.Express {
 
   app.use('/api', createAcarsRouter());
 
+  // ── Ground sessions ────────────────────────────────────────────────────────
+  // Mounted before the SPA catch-all, like every other /api router. Nothing
+  // already registered can capture /api/ground-sessions or its /current path.
+
+  app.use('/api', createGroundSessionsRouter(flightManager));
+
   // Catch-all: let React Router handle client-side routes
   app.get('*', (_req, res) => {
     res.sendFile(path.join(process.cwd(), 'client', 'dist', 'index.html'));
@@ -187,7 +201,9 @@ export function createServer(flightManager: FlightManager): express.Express {
     if (err instanceof SyntaxError && 'body' in err &&
         (req.path.startsWith('/api/settings/') ||
          req.path.endsWith('/acars-messages') ||
-         req.path.endsWith('/acars-messages/wx'))) {
+         req.path.endsWith('/acars-messages/wx') ||
+         req.path === '/api/ground-sessions' ||
+         req.path === '/api/ground-sessions/current')) {
       res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
       return;
     }

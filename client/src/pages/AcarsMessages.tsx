@@ -8,7 +8,9 @@ import type {
   CannedAcarsMessage,
   CannedAcarsMessageList,
   LoadsheetRequestResponse,
+  PlannedLegAcarsThread,
   PlannedLegWithChildren,
+  PlannedLegWxRequestResponse,
   WxRequestResponse,
 } from '../types';
 
@@ -58,9 +60,14 @@ function AcarsRow({ message }: { message: AcarsMessage }) {
 }
 
 export function AcarsMessages() {
-  const { id } = useParams<{ id: string }>();
+  // Two mutually exclusive scopes on one page: a flight's own ACARS log
+  // (`id`), or a planned leg's pre-flight log before any flight is linked
+  // (`legId`). Exactly one of the two params is ever set by the routes in
+  // App.tsx, so `scope` is derived once and used throughout.
+  const { id, legId } = useParams<{ id?: string; legId?: string }>();
+  const scope: 'flight' | 'planned-leg' = legId != null ? 'planned-leg' : 'flight';
   const [messages, setMessages] = useState<AcarsMessage[]>([]);
-  const [plannedLegId, setPlannedLegId] = useState<number | null>(null);
+  const [plannedLegId, setPlannedLegId] = useState<number | null>(scope === 'planned-leg' ? Number(legId) : null);
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
   const [canned, setCanned] = useState<CannedAcarsMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,13 +77,23 @@ export function AcarsMessages() {
   const [sendError, setSendError] = useState('');
   const [wxIcao, setWxIcao] = useState('');
 
+  const threadPath = scope === 'planned-leg'
+    ? `/api/planned-legs/${legId}/acars-messages`
+    : `/api/flights/${id}/acars-messages`;
+  const sendPath = scope === 'planned-leg'
+    ? `/api/planned-legs/${legId}/acars-messages`
+    : `/api/flights/${id}/acars-messages`;
+  const wxPath = scope === 'planned-leg'
+    ? `/api/planned-legs/${legId}/acars-messages/wx`
+    : `/api/flights/${id}/acars-messages/wx`;
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError('');
     setCannedError('');
     Promise.all([
-      apiFetch<AcarsThread>(`/api/flights/${id}/acars-messages`),
+      apiFetch<AcarsThread | PlannedLegAcarsThread>(threadPath),
       // The canned set is a separate resource: if only it fails, the thread is
       // still worth rendering read-only, so its failure is folded into a null
       // here instead of rejecting the pair. A 401 is re-thrown so the session
@@ -89,7 +106,9 @@ export function AcarsMessages() {
       .then(([thread, cannedList]) => {
         if (cancelled) return;
         setMessages(thread.messages);
-        setPlannedLegId(thread.planned_leg_id);
+        // A planned-leg thread's own id is always the route param; only the
+        // flight-scoped thread can name a leg (or not) as an extra fact.
+        setPlannedLegId(scope === 'planned-leg' ? Number(legId) : (thread as AcarsThread).planned_leg_id);
         if (cannedList) setCanned(cannedList.messages);
         else setCannedError('Canned messages unavailable');
       })
@@ -104,12 +123,14 @@ export function AcarsMessages() {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, legId, scope, threadPath]);
 
   // Convenience-only lookup for the REQUEST WX default: a failure here means no
   // suggested ICAO, not a page error. A 401 still bounces via apiFetch itself;
   // anything else is swallowed silently — the quick-fill buttons simply don't
-  // render, same as a non-airport waypoint would.
+  // render, same as a non-airport waypoint would. In the planned-leg scope
+  // this is also how the back link finds the leg's trip.
   useEffect(() => {
     if (plannedLegId === null) {
       setPlannedLeg(null);
@@ -137,7 +158,7 @@ export function AcarsMessages() {
     setSendingId(cannedId);
     setSendError('');
     try {
-      const created = await apiFetch<AcarsMessage>(`/api/flights/${id}/acars-messages`, {
+      const created = await apiFetch<AcarsMessage>(sendPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ canned_id: cannedId }),
@@ -189,7 +210,7 @@ export function AcarsMessages() {
     setSendingId(WX_SENDING_ID);
     setSendError('');
     try {
-      const response = await apiFetch<WxRequestResponse>(`/api/flights/${id}/acars-messages/wx`, {
+      const response = await apiFetch<WxRequestResponse | PlannedLegWxRequestResponse>(wxPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ icao }),
@@ -206,17 +227,32 @@ export function AcarsMessages() {
     }
   }
 
-  const backLink = <Link to={`/flight/${id}`} className="back-link">← Flight #{id}</Link>;
+  const title = scope === 'planned-leg'
+    ? `ACARS Messages — Planned leg #${legId}`
+    : `ACARS Messages — Flight #${id}`;
+
+  // The planned-leg scope's back link goes to the leg's trip, known only once
+  // the leg itself has loaded; until then it falls back to the trips list
+  // rather than a link that might point at the wrong place.
+  const backLink = scope === 'planned-leg'
+    ? (
+      <Link to={plannedLeg ? `/trip/${plannedLeg.trip_id}` : '/flights'} className="back-link">
+        ← Back to trip
+      </Link>
+    )
+    : <Link to={`/flight/${id}`} className="back-link">← Flight #{id}</Link>;
 
   if (loadError) {
-    // The thread endpoint answers a missing flight with exactly this text. The
-    // fetch helper surfaces the server's message but not its status, so the
-    // message is what identifies the case.
-    const notFound = loadError === `Flight ${id} not found`;
+    // Each thread endpoint answers a missing parent with exactly this text.
+    // The fetch helper surfaces the server's message but not its status, so
+    // the message is what identifies the case.
+    const notFound = scope === 'planned-leg'
+      ? loadError === `Planned leg ${legId} not found`
+      : loadError === `Flight ${id} not found`;
     return (
       <main className="container">
         {backLink}
-        <p className="edit-error">{notFound ? 'Flight not found' : loadError}</p>
+        <p className="edit-error">{notFound ? (scope === 'planned-leg' ? 'Planned leg not found' : 'Flight not found') : loadError}</p>
       </main>
     );
   }
@@ -230,9 +266,10 @@ export function AcarsMessages() {
     <main className="container" id="acars-messages">
       {backLink}
 
-      <h2 className="flight-title">ACARS Messages — Flight #{id}</h2>
+      <h2 className="flight-title">{title}</h2>
       <p className="flight-subtitle">
-        {messages.length} messages{plannedLegId != null ? ` · including planned leg ${plannedLegId}` : ''}
+        {messages.length} messages
+        {scope === 'flight' && plannedLegId != null ? ` · including planned leg ${plannedLegId}` : ''}
       </p>
 
       {loading ? (
@@ -304,7 +341,9 @@ export function AcarsMessages() {
             <div className="section-title">Thread</div>
             <div className="acars-thread">
               {ordered.length === 0 ? (
-                <p className="acars-empty">No ACARS messages for this flight yet.</p>
+                <p className="acars-empty">
+                  {scope === 'planned-leg' ? 'No ACARS messages for this planned leg yet.' : 'No ACARS messages for this flight yet.'}
+                </p>
               ) : (
                 ordered.map(m => <AcarsRow key={m.id} message={m} />)
               )}

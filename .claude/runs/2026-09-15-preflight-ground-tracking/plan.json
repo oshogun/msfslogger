@@ -1,0 +1,275 @@
+{
+  "run_id": "2026-09-15-preflight-ground-tracking",
+  "goal": "Give msfslogger a tracked pre-flight/ground session — starting the moment the aircraft is on the ground, stationary and engines off (freshly spawned at a gate or cold-and-dark) — so ACARS dispatch-release and loadsheet-request actions have real airport and parking-position context before pushback, not only after rotation. Automatic detection (new agent telemetry plus a new flightManager ground state) is the primary mechanism; manual airport/ramp entry is an explicit fallback for when detection cannot resolve a position, not an equal alternative.",
+  "frozen_decisions": [
+    "src/flightManager.ts: state machine is IDLE -> FLYING only. From IDLE, a flight starts only after 3 consecutive frames of !frame.onGround && airspeedKnots > 30 (AIRBORNE_DEBOUNCE_FRAMES), not in slew. Landing requires onGround && groundSpeedKnots < 5 for 10 frames. No ground-speed/engine/parking-brake signal is used today, and no \"parked at gate\" state exists.",
+    "ACARS is NOT actually gated on a live flight record: src/acars.ts, src/routes/acars.ts, src/routes/plannedLegs.ts, src/db/acarsMessages.ts key dispatch release and loadsheet request off planned_leg_id alone (schema comment: \"a dispatch release arrives before pushback, when no flights row has been created yet\"). Loadsheet request is gated on dispatch data existing (409 NO_DISPATCH_DATA), not on flight state. The backend contract already tolerates pre-flight access — confirmed by investigation (see risks/summary): the user-visible gap is the client, which only ever reaches client/src/pages/AcarsMessages.tsx via /flight/:id/acars, a flight-scoped route with no equivalent entry point for a planned leg that has no flights row yet. src/db/acarsMessages.ts's listAcarsMessagesForPlannedLeg() already exists and is currently unused by any route — built for exactly this, per its own comment.",
+    "agent/agent.js polls at 1 Hz: lat/lon, altitude, IAS, ground velocity, heading, vertical speed, SIM ON GROUND, IS SLEW ACTIVE, aircraft title, plus pause/crash/FlightLoaded events. It does NOT request PARKING BRAKE POSITION, GENERAL ENG COMBUSTION:n, or any parking-spot/gate SimVar — these are additions to the existing data definition, not a new mechanism.",
+    "src/airports.ts already does ICAO/geo lookups (findNearestAirport) — reuse for resolving nearest airport to a ground position rather than inventing new lookup logic.",
+    "src/legMatcher.ts's matchPlannedLeg() is a pure function already used by flightManager.ts's autoLinkPlannedLeg() at takeoff, against the active trip's candidates within DEPARTURE_RADIUS_NM — reuse it unchanged for ground-state auto-linking rather than inventing a second matching algorithm.",
+    "Design step is NOT skipped: this run introduces a new flightManager state (a contract), a new agent->server telemetry field set, and likely a new/changed API surface for manual entry.",
+    "DevOps is an expected skip (no build/packaging/deploy surface anticipated) — confirmed by this Plan: grep of README.md for state-machine, SimVar, engine and brake language found nothing this run needs to update, and no dependency, build or packaging file is touched by any task below.",
+    "Never touch the user's running server (port 3000) or live flights.db — scratch port + copied DB only. Node 20 via nvm for every node/npm/npx/server command. Verification beyond Vitest is npx tsc / npm run build, curl against a scratch server, better-sqlite3 queries, and ts-node CLI inspectors."
+  ],
+  "sequencing_rationale": [
+    "One Designer task (T-001) freezes the whole contract up front — state name and debounce rule, agent telemetry fields, the ground_sessions schema, the auto-link algorithm's reuse of matchPlannedLeg/findNearestAirport, the REST surface for manual entry and for leg-scoped ACARS, the client wire types, and the manual-vs-auto precedence rule — because all four later work-streams (agent, flightManager, routes, client) reference the same records and must agree before any of them writes code.",
+    "Phase 1 ships the escape hatch — manual airport/ramp entry, the ground_sessions table, and a leg-scoped ACARS thread the client can actually reach — before Phase 2 wires up the automatic detection that supersedes it, per the rule that a manual override ships before the automation it protects. It is also independently useful: it answers half of the user's original ask (\"allow the user to manually send information on the airport and ramp/gate they're currently at\") without touching agent.js or flightManager.ts at all.",
+    "Phase 2 adds the primary, automatic path: new agent telemetry (single-seam addition to an existing data definition, Jr, and independent of every other Phase 2 file) and the flightManager ground-state machine (Sr, cross-module but re-using existing geo/matching code rather than inventing it), then the client surfaces the auto-detected session and its precedence over the Phase 1 manual form.",
+    "Within each phase, the backend task's allowed_paths (src/**, agent/**, tests/**) and the frontend task's (client/src/**) are disjoint, and both depend only on the phase's design freeze (or the prior phase's reviewer) rather than on each other, so they may run in parallel; Phase 2's agent.js task and its flightManager task are likewise mutually independent files.",
+    "Every phase ends in a reviewer task, and the first task of the next phase depends on it — this is what stops a Phase 2 edit to src/server.ts/src/types.ts from ever running concurrently with Phase 1's still-unreviewed edits to those same files.",
+    "The frontend task in Phase 2 depends on the Phase 2 backend task (not just the design freeze) because its acceptance criteria require curling a live /api/status field that only that task adds — unlike Phase 1, where backend and frontend can genuinely run in parallel against the frozen contract alone."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Escape hatch: manual ground entry, ground-session persistence, leg-scoped ACARS reachability",
+      "ships": "A pilot who has just spawned at a gate can tell msfslogger which airport and ramp/gate they're at; that creates a ground session the app remembers, and from it (or from any unflown planned leg in a trip) the user can now reach the ACARS thread and send dispatch/loadsheet/canned/WX actions before pushback — a capability that today is only reachable after takeoff.",
+      "tasks": ["T-001", "T-002", "T-003", "T-004"]
+    },
+    {
+      "phase": 2,
+      "name": "Automatic ground-state detection",
+      "ships": "From the moment MSFS loads a flight on the ground, stationary, engines off — no user action required — msfslogger detects it, resolves the airport (and planned leg, if one matches) automatically, and the ACARS actions from Phase 1 light up on their own; the Phase 1 manual form remains as the labeled fallback for when detection doesn't fire or gets it wrong.",
+      "tasks": ["T-005", "T-006", "T-007", "T-008"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the ground-state contract: telemetry, schema, matching, REST surface, client wire types, manual/auto precedence",
+      "goal": "Write .claude/runs/2026-09-15-preflight-ground-tracking/design.md with these numbered sections, in this order, so every later task can cite one by number: (1) the new flightManager state — its name, entry condition (on-ground, ~zero groundspeed, engines off and/or parking brake set) and a debounce constant mirroring AIRBORNE_DEBOUNCE_FRAMES/LANDED_DEBOUNCE_FRAMES, plus every transition in and out of it (including from onCrash()/onSimDisconnect(), which today only handle FLYING); (2) the agent -> server telemetry contract — exact SimVar names (e.g. PARKING BRAKE POSITION, GENERAL ENG COMBUSTION:1..n) and read order to append to agent/agent.js's DEF_FLIGHT_DATA, the exact new SimFrame field names, and the isValidFrame() validation change in src/ingest.ts; (3) the ground_sessions table DDL (CREATE TABLE IF NOT EXISTS, in the style already in src/db/schema.ts) — columns for airport icao/name, lat/lon, parking/ramp position (nullable), source ('auto'|'manual'), planned_leg_id (nullable FK), started_at/ended_at, and any ALTER TABLE additions needed elsewhere, each guarded by the existing PRAGMA table_info idiom; (4) the auto-detection/auto-link algorithm — confirms reuse of findNearestAirport (src/airports.ts) and matchPlannedLeg (src/legMatcher.ts, same DEPARTURE_RADIUS_NM candidates as autoLinkPlannedLeg) rather than new geo logic, and specifies a pure module (e.g. src/groundState.ts) holding the debounce/entry decision, isolated the same way src/legMatcher.ts is, with a named CLI inspector (e.g. src/inspect-groundstate.ts) mirroring src/inspect-legmatch.ts's harness style; (5) the REST surface — method/path/body/response for a manual-entry endpoint, a current-ground-session read (and how it folds into GET /api/status, following the existing conditional-spread idiom for plannedLeg/traffic in src/server.ts), and new leg-scoped ACARS thread routes (GET and POST, canned + wx) mirroring the flight-scoped ones in src/routes/acars.ts but keyed on planned_leg_id and reusing the already-present-but-unused listAcarsMessagesForPlannedLeg (src/db/acarsMessages.ts); (6) the client contract — the wire types to mirror byte-for-byte into client/src/types.ts, and where in the client the ground session and the leg-scoped ACARS thread become reachable (a new route, and a link from the trip page's planned-leg rows); (7) the manual-vs-auto precedence rule — what happens when both exist for the same session/leg, whether an auto-detected session may overwrite a manual one, and the exact wording the client must use to present manual entry as fallback, not an equal alternative.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-15-preflight-ground-tracking/design.md",
+        ".claude/runs/2026-09-15-preflight-ground-tracking/contracts/**",
+        ".claude/runs/2026-09-15-preflight-ground-tracking/prototypes/**"
+      ],
+      "acceptance_criteria": [
+        "design.md exists with exactly the 7 numbered sections above, in order, and ctx.sh design 2026-09-15-preflight-ground-tracking <n> returns each in isolation.",
+        "Section 1 names the new FlightState value and states every transition into and out of it, including the onCrash()/onSimDisconnect() paths flightManager.ts currently only handles for FLYING.",
+        "Section 2 lists exact SimVar strings, units and SimConnect data types in the read order they must be added to DEF_FLIGHT_DATA, and the exact new SimFrame field names — no ambiguity left for the Jr agent task to resolve.",
+        "Section 3's DDL can be pasted verbatim into src/db/schema.ts's initDb() and is guarded the same way every other CREATE TABLE IF NOT EXISTS there is.",
+        "Section 4 explicitly states that no new geo-matching algorithm is invented: findNearestAirport and matchPlannedLeg are reused as-is, with only the calling code being new.",
+        "Section 5 gives a concrete path, method and JSON shape for every new endpoint, and states the exact key(s) added to GET /api/status's response, present iff the ground state is active (never a literal null).",
+        "Section 6 lists every new/changed client/src/types.ts interface by name and field, and names the exact page(s)/route(s) that become reachable.",
+        "Section 7 states, in one sentence a reviewer can check against the client code, how manual entry is labeled as fallback.",
+        "No implementation code beyond interface stubs/DDL text inside design.md or contracts/."
+      ],
+      "context": [
+        "src/flightManager.ts",
+        "src/types.ts",
+        "src/legMatcher.ts",
+        "src/airports.ts",
+        "src/ingest.ts",
+        "src/db/schema.ts",
+        "src/db/acarsMessages.ts",
+        "src/acars.ts",
+        "src/routes/acars.ts",
+        "src/routes/plannedLegs.ts",
+        "src/server.ts",
+        "agent/agent.js",
+        "client/src/pages/AcarsMessages.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/Home.tsx",
+        "client/src/types.ts",
+        ".claude/runs/2026-09-15-preflight-ground-tracking/intake.md"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "backend_sr",
+      "title": "Ground-session persistence, manual entry endpoint, and leg-scoped ACARS thread routes",
+      "goal": "Per ctx.sh design 2026-09-15-preflight-ground-tracking 3 5 7: add the ground_sessions table and its CRUD (src/db/groundSessions.ts, new), a manual-entry endpoint plus a current-ground-session read, and new leg-scoped ACARS routes (GET/POST thread, reusing listAcarsMessagesForPlannedLeg and the existing pure helpers in src/acars.ts) so a planned leg with no flights row yet can be read and acted on exactly like a flight-scoped thread today.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [
+        "src/db/schema.ts",
+        "src/db/groundSessions.ts",
+        "src/routes/groundSessions.ts",
+        "src/routes/acars.ts",
+        "src/server.ts",
+        "src/types.ts"
+      ],
+      "acceptance_criteria": [
+        "src/db/schema.ts's initDb() creates ground_sessions per design §3's DDL, guarded the same way every other table there is; running initDb() twice against a scratch copy of flights.db is a no-op the second time (no error, no duplicate columns) — verified with a node -e script under Node 20 as shown in .claude/ENVIRONMENT.md.",
+        "src/db/groundSessions.ts exports insert (manual and auto variants per design §3), close, get-current-open and update-parking-position functions and nothing unrelated; no express or http import in this file (grep-verified).",
+        "The manual-entry endpoint and the current-ground-session read from design §5 exist and, curled against a scratch server (PORT=3100, scratch DB copy) under Node 20, return the exact status codes and shapes design §5 specifies.",
+        "GET /api/planned-legs/:legId/acars-messages and POST /api/planned-legs/:legId/acars-messages (canned) and .../wx exist per design §5, reuse listAcarsMessagesForPlannedLeg (src/db/acarsMessages.ts) and the pure validators in src/acars.ts (no duplicated validation logic), and are mounted before the SPA catch-all in src/server.ts.",
+        "curl against the scratch server proves the leg-scoped thread works for a planned leg that has NO linked flight: a canned message posts and appears in the thread, and (if the leg carries a dispatch payload) a loadsheet request round-trips — all before any flights row exists for that leg.",
+        "npx tsc and npm run build are clean.",
+        "The report states the live flights.db's md5 is unchanged (only a scratch copy was written to)."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 3 5 7",
+        "src/db/schema.ts",
+        "src/db/acarsMessages.ts",
+        "src/db/plannedLegs.ts",
+        "src/acars.ts",
+        "src/routes/acars.ts",
+        "src/routes/plannedLegs.ts",
+        "src/server.ts",
+        "src/types.ts"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "frontend_sr",
+      "title": "Manual ground-entry form and planned-leg ACARS reachability",
+      "goal": "Per ctx.sh design 2026-09-15-preflight-ground-tracking 5 6 7: add the client route/page that reaches the leg-scoped ACARS thread from T-002, a link to it from each unflown planned leg in the trip page, and a manual airport/ramp entry form (labeled as fallback per design §7) that posts to T-002's manual-entry endpoint and displays the resulting ground session.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [
+        "client/src/App.tsx",
+        "client/src/pages/AcarsMessages.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/pages/Home.tsx",
+        "client/src/types.ts"
+      ],
+      "acceptance_criteria": [
+        "A new route per design §6 renders a leg-scoped ACARS thread against T-002's GET/POST /api/planned-legs/:legId/acars-messages endpoints (either by generalizing client/src/pages/AcarsMessages.tsx to accept a legId param or by adding a sibling component per design §6) — reachable via a link/button on every unflown row rendered by client/src/components/PlannedLegRows.tsx in client/src/pages/TripDetail.tsx.",
+        "client/src/pages/Home.tsx (or a component it renders) shows a manual entry form (ICAO + free-text ramp/gate) posting to T-002's manual endpoint, and displays the resulting ground session; the fallback wording from design §7 is present verbatim (grep-checkable).",
+        "client/src/types.ts mirrors the wire types from design §5/§6 byte-for-byte, with no import from src/types.ts, matching how SimFrame/StatusFrame/TrafficObject are already mirrored there.",
+        "The client's typecheck command is clean (name the exact command from package.json, e.g. cd client && npx tsc --noEmit or the project's existing client build script).",
+        "A scratch-server, scratch-DB click-through is reported: manual entry creates a session visible on Home, the leg's ACARS link opens the thread, and a canned message send round-trips."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 5 6 7",
+        "client/src/pages/AcarsMessages.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/pages/Home.tsx",
+        "client/src/App.tsx",
+        "client/src/types.ts",
+        "client/src/utils/api.ts"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "reviewer",
+      "title": "Review Phase 1: ground-session persistence, manual entry, leg-scoped ACARS reachability",
+      "goal": "Re-run T-002 and T-003's evidence against a scratch server and scratch DB copy: confirm the manual-entry endpoint and leg-scoped ACARS routes behave exactly as design.md §3/§5/§7 specify, the client reaches them from the trip page, npx tsc/npm run build are clean, and the live flights.db was never touched.",
+      "depends_on": ["T-002", "T-003"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-15-preflight-ground-tracking/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Every claim in T-002's and T-003's reports is re-run, not re-read: the reviewer's own curl/tsc/build/click-through output is in the review file, not a restatement of the implementer's.",
+        "The review states pass/fail against each of T-002 and T-003's acceptance criteria individually.",
+        "The review confirms design.md §7's precedence wording is literally present in the client, not paraphrased.",
+        "Verdict (approve / request_changes) is on the first line of the review file."
+      ],
+      "context": [
+        "ctx.sh phase 2026-09-15-preflight-ground-tracking 1",
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 3 5 7"
+      ]
+    },
+    {
+      "id": "T-005",
+      "role": "backend_jr",
+      "title": "Agent: ground-detection telemetry",
+      "goal": "Per ctx.sh design 2026-09-15-preflight-ground-tracking 2: add the frozen SimVars to agent/agent.js's DEF_FLIGHT_DATA in the frozen read order, and add the frozen fields to the frame object posted to /api/ingest/frame. A single-seam, fully-specified mechanical addition to the existing data-definition pattern (the same pattern TITLE was added under) — no new mechanism.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        "agent/agent.js"
+      ],
+      "acceptance_criteria": [
+        "Every SimVar from design §2 is added to DEF_FLIGHT_DATA via handle.addToDataDefinition, in exactly the read order design §2 specifies, immediately following the existing entries (TITLE stays last unless design §2 says otherwise).",
+        "The simObjectData handler reads the new fields in that same order and adds exactly the field names design §2 specifies to the frame object already posted to /api/ingest/frame — no unrelated field renamed or reordered.",
+        "DEF_TRAFFIC, the traffic sweep path, and every pause/crash/event handler are untouched (diff-reviewable).",
+        "node --check agent/agent.js exits 0.",
+        "The report is a diff against design §2's field table, not a claim of a live SimConnect run — this environment has no SimConnect hardware to exercise it against."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 2",
+        "agent/agent.js"
+      ]
+    },
+    {
+      "id": "T-006",
+      "role": "backend_sr",
+      "title": "flightManager ground-state machine, SimFrame contract, ingest validation, /api/status",
+      "goal": "Per ctx.sh design 2026-09-15-preflight-ground-tracking 1 2 3 4 5 7: extend SimFrame and FlightState (src/types.ts) and isValidFrame (src/ingest.ts) for the new telemetry fields and state; add a pure ground-state decision module (src/groundState.ts, new) with a CLI inspector (src/inspect-groundstate.ts, new), mirroring src/legMatcher.ts/src/inspect-legmatch.ts; wire flightManager.ts to it so entering the new state resolves the airport (findNearestAirport) and auto-links a planned leg (matchPlannedLeg) exactly as autoLinkPlannedLeg() does at takeoff, writing through src/db/groundSessions.ts (T-002); add the ground-session key to GET /api/status per design §5.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        "src/types.ts",
+        "src/ingest.ts",
+        "src/flightManager.ts",
+        "src/groundState.ts",
+        "src/inspect-groundstate.ts",
+        "src/server.ts",
+        "tests/flightManager.state.test.ts",
+        "tests/flightManager.ground.test.ts"
+      ],
+      "acceptance_criteria": [
+        "AMENDED by Orchestrator 2026-09-15 per design §2.6 (see plan.json amendments note below): SimFrame gains exactly the fields design §2 names; isValidFrame() in src/ingest.ts validates each with the same typeof-per-field style already used there, admitting absence per §2.4 — a frame omitting one is accepted (ground detection simply does not fire), but a frame carrying a wrong-typed one is still rejected with 400.",
+        "FlightState gains the value design §1 names; every transition design §1 lists is implemented, including from onCrash() and onSimDisconnect(), which today only end a FLYING flight.",
+        "src/groundState.ts has no db or express import (grep-verified) and exports the pure debounce/entry decision; npx ts-node src/inspect-groundstate.ts demonstrates, per design §4's scenarios: freshly spawned at a gate enters the new state after the debounce window and not before; a taxiing aircraft never enters it; cold-and-dark shutdown after a flight enters it; the existing IDLE->FLYING airborne debounce is unaffected.",
+        "flightManager.ts's entry into the new state calls findNearestAirport (src/airports.ts, unmodified) and matchPlannedLeg (src/legMatcher.ts, unmodified) against the active trip's candidates, and writes/attaches a ground_sessions row via src/db/groundSessions.ts (T-002, unmodified by this task); leaving the state into FLYING closes that session per design §7's precedence rule.",
+        "GET /api/status gains the key design §5 specifies, present iff the new state is active, using the same conditional-spread idiom already used for plannedLeg/traffic in src/server.ts — verified byte-identical to before this change when the state is not active.",
+        "tests/flightManager.ground.test.ts (new) covers: entering after the debounce window and not before it; never entering during taxi per design §1's threshold; the ground->FLYING transition leaving AIRBORNE_DEBOUNCE_FRAMES behavior a byte-for-byte regression of the existing tests in tests/flightManager.state.test.ts; onCrash()/onSimDisconnect() closing an open ground session. Run with npm test.",
+        "npm run test:types and npx tsc are clean."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 1 2 3 4 5 7",
+        "src/flightManager.ts",
+        "src/types.ts",
+        "src/ingest.ts",
+        "src/legMatcher.ts",
+        "src/inspect-legmatch.ts",
+        "src/airports.ts",
+        "src/db/groundSessions.ts",
+        "src/server.ts",
+        "tests/flightManager.state.test.ts"
+      ]
+    },
+    {
+      "id": "T-007",
+      "role": "frontend_sr",
+      "title": "Surface automatic ground detection and its precedence over manual entry",
+      "goal": "Per ctx.sh design 2026-09-15-preflight-ground-tracking 6 7: show the auto-detected ground session (airport, source, parking position) alongside the Phase 1 manual form, make the ACARS entry points from T-003 reachable from it when a planned leg auto-linked, and make the manual form's fallback framing hold even once an automatic session exists for the same aircraft.",
+      "depends_on": ["T-006"],
+      "allowed_paths": [
+        "client/src/pages/Home.tsx",
+        "client/src/components/LivePanel.tsx",
+        "client/src/types.ts"
+      ],
+      "acceptance_criteria": [
+        "The status panel shown when the new flightState is active (per design §6, likely a sibling of client/src/components/LivePanel.tsx's FLYING-only rendering) displays airport, source (auto/manual) and parking position if resolved, sourced from the /api/status key T-006 added.",
+        "When the ground session auto-linked a planned leg, the panel links to the leg-scoped ACARS thread route from T-003.",
+        "The manual-entry form from T-003 remains visible and its fallback wording (design §7) is not removed or contradicted once an automatic session exists; design §7's rule for the two coexisting is followed exactly (grep/read-verifiable against the design text).",
+        "client/src/types.ts mirrors the extended /api/status shape byte-for-byte.",
+        "The client typecheck command is clean.",
+        "A scratch-server click-through is reported: posting a sequence of on-ground, near-zero-speed, engines-off frames to the scratch server's /api/ingest/frame (curl, under Node 20, with the scratch server's ingest token) makes the panel appear within the debounce window on a plain poll, with no page reload.",
+        "AMENDED by Orchestrator 2026-09-15 (Phase 1 review finding, non-blocking then, must close here): client/src/pages/Home.tsx's manual-entry form must track which of parking_position/planned_leg_id the operator actually touched in this submission, and omit an untouched field's key from the POST body entirely rather than sending it as the trimmed-to-null value of a blank input. Today it always sends parking_position (null when blank), so a refinement post over an open auto session with an untouched, still-blank Ramp/gate box would silently clear an already-detected stand — invisible in Phase 1 (no auto sessions exist yet) but live the moment this task's flightManager wiring lands. Verify with a scratch-server round trip: an auto session with a resolved parking_position, followed by a manual refine POST that only sets planned_leg_id (Ramp/gate left blank, never focused), must leave parking_position unchanged in the resulting row."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 6 7",
+        "client/src/pages/Home.tsx",
+        "client/src/components/LivePanel.tsx",
+        "client/src/types.ts",
+        "client/src/hooks/useStatus.ts"
+      ]
+    },
+    {
+      "id": "T-008",
+      "role": "reviewer",
+      "title": "Review Phase 2: automatic ground detection, precedence, and regression of existing flight tracking",
+      "goal": "Re-run T-005, T-006 and T-007's evidence: confirm the agent telemetry diff matches design §2 exactly, the ground-state machine and its tests behave per design §1/§4, the existing IDLE->FLYING/FLYING->IDLE behavior is unchanged (regression), /api/status's new key follows design §5, and the client's precedence handling matches design §7.",
+      "depends_on": ["T-005", "T-006", "T-007"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-15-preflight-ground-tracking/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Every claim in T-005/T-006/T-007's reports is re-run, not re-read.",
+        "npm test, npm run test:types and npx tsc are re-run by the reviewer and their output quoted, not assumed from the implementer's report.",
+        "The review explicitly checks that tests/flightManager.state.test.ts's existing assertions still pass unmodified (a byte-for-byte regression check), since a debounce/threshold mistake in the new ground state is the run's largest risk to existing flight tracking.",
+        "The review confirms agent/agent.js's diff against design §2 field-by-field, since this environment cannot exercise it against live SimConnect.",
+        "Verdict (approve / request_changes) is on the first line of the review file."
+      ],
+      "context": [
+        "ctx.sh phase 2026-09-15-preflight-ground-tracking 2",
+        "ctx.sh design 2026-09-15-preflight-ground-tracking 1 2 4 5 7"
+      ]
+    }
+  ]
+}

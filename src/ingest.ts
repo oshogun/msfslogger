@@ -34,7 +34,10 @@ function isValidFrame(body: unknown): body is SimFrame {
     typeof f.verticalSpeedFpm === 'number' &&
     typeof f.onGround === 'boolean' &&
     typeof f.simRunning === 'number' &&
-    typeof f.aircraft === 'string'
+    typeof f.aircraft === 'string' &&
+    (f.parkingBrake === undefined || typeof f.parkingBrake === 'boolean') &&
+    (f.engineCount === undefined || (typeof f.engineCount === 'number' && Number.isFinite(f.engineCount))) &&
+    (f.enginesRunning === undefined || (typeof f.enginesRunning === 'number' && Number.isFinite(f.enginesRunning)))
   );
 }
 

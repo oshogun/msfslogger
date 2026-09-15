@@ -29,6 +29,7 @@ function AppShell() {
             <Route path="/flights" element={<AllFlights />} />
             <Route path="/flight/:id" element={<FlightDetail />} />
             <Route path="/flight/:id/acars" element={<AcarsMessages />} />
+            <Route path="/planned-leg/:legId/acars" element={<AcarsMessages />} />
             <Route path="/trip/:id" element={<TripDetail />} />
             <Route path="/device" element={<Device />} />
             <Route path="/override" element={<Override />} />

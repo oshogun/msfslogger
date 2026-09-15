@@ -43,6 +43,7 @@ describe('applySchema()', () => {
       'auth_user',
       'flight_points',
       'flights',
+      'ground_sessions',
       'planned_alternates',
       'planned_legs',
       'planned_waypoints',

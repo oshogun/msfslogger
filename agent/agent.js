@@ -199,6 +199,12 @@ async function tryConnect() {
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'SIM ON GROUND',              'bool',             SimConnectDataType.INT32);
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'IS SLEW ACTIVE',             'bool',             SimConnectDataType.INT32);
     handle.addToDataDefinition(DEF_FLIGHT_DATA, 'TITLE',                      null,               SimConnectDataType.STRING256);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'BRAKE PARKING INDICATOR',     'bool',             SimConnectDataType.INT32);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'NUMBER OF ENGINES',           'number',           SimConnectDataType.INT32);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'GENERAL ENG COMBUSTION:1',    'bool',             SimConnectDataType.INT32);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'GENERAL ENG COMBUSTION:2',    'bool',             SimConnectDataType.INT32);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'GENERAL ENG COMBUSTION:3',    'bool',             SimConnectDataType.INT32);
+    handle.addToDataDefinition(DEF_FLIGHT_DATA, 'GENERAL ENG COMBUSTION:4',    'bool',             SimConnectDataType.INT32);
 
     // AI traffic data definition — distinct id, registered only when
     // enabled. Read order below must match registration order exactly, same
@@ -244,6 +250,21 @@ async function tryConnect() {
       const isSlew           = data.readInt32() !== 0;
       const aircraft         = data.readString256() ?? 'Unknown';
 
+      // Guarded, not assumed: if the sim rejected any of the new definition entries
+      // the block is short, and reading past its end throws a RangeError that would
+      // take the whole frame with it. 6 x INT32 = 24 bytes.
+      const hasGroundVars = data.remaining() >= 24;
+
+      const parkingBrakeRaw = hasGroundVars ? data.readInt32() : 0;
+      const engineCountRaw  = hasGroundVars ? data.readInt32() : 0;
+      const combustion      = hasGroundVars
+        ? [data.readInt32(), data.readInt32(), data.readInt32(), data.readInt32()]
+        : [];
+
+      const engineCount    = Math.max(0, Math.min(4, engineCountRaw));
+      const enginesRunning = combustion.slice(0, engineCount).filter(v => v !== 0).length;
+      const parkingBrake   = parkingBrakeRaw !== 0;
+
       const frame = {
         lat,
         lon,
@@ -256,6 +277,12 @@ async function tryConnect() {
         simRunning: isSlew ? 3 : 2,
         aircraft,
       };
+
+      if (hasGroundVars) {
+        frame.parkingBrake = parkingBrake;
+        frame.engineCount = engineCount;
+        frame.enginesRunning = enginesRunning;
+      }
 
       postJson('/api/ingest/frame', frame);
 

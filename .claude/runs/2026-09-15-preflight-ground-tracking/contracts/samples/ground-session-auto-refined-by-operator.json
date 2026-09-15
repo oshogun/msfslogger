@@ -1,0 +1,20 @@
+{
+  "_comment": "The same row after POST /api/ground-sessions {\"icao\":\"KSFO\",\"parking_position\":\"Gate A12\"} — same ICAO, so the automatic session is REFINED, not replaced: 200, source stays 'auto', parking_position_source records that the stand came from the operator. design.md §7 rule 3.",
+  "id": 42,
+  "source": "auto",
+  "airport_icao": "KSFO",
+  "airport_name": "San Francisco International Airport",
+  "lat": 37.618023,
+  "lon": -122.375519,
+  "parking_position": "Gate A12",
+  "parking_position_source": "manual",
+  "planned_leg_id": 17,
+  "planned_leg_link_source": "auto",
+  "aircraft": "Cessna Skyhawk G1000",
+  "started_at": "2026-09-15T09:12:04.118Z",
+  "ended_at": null,
+  "ended_reason": null,
+  "flight_id": null,
+  "created_at": "2026-09-15T09:12:04.118Z",
+  "updated_at": "2026-09-15T09:19:40.007Z"
+}

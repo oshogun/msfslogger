@@ -1,0 +1,6 @@
+{
+  "_comment": "POST /api/ground-sessions request body. design.md §5.2.",
+  "icao": "EGLL",
+  "parking_position": "Stand 231",
+  "planned_leg_id": 17
+}

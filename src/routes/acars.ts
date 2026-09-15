@@ -1,7 +1,8 @@
 import express, { Router } from 'express';
 import { getFlightById } from '../db/flights';
 import {
-  insertAcarsMessage, insertAcarsMessageOnce, listAcarsMessagesForFlight, findAcarsMessageByDedupKey,
+  insertAcarsMessage, insertAcarsMessageOnce, listAcarsMessagesForFlight,
+  listAcarsMessagesForPlannedLeg, findAcarsMessageByDedupKey,
 } from '../db/acarsMessages';
 import { getPlannedLegById } from '../db/plannedLegs';
 import {
@@ -16,6 +17,7 @@ import {
 import { getCachedWeather, WeatherFetchError } from '../weatherClient';
 import type {
   AcarsThread, CannedAcarsMessageList, LoadsheetRequestResponse, WxRequestResponse, WxWeatherPayload,
+  PlannedLegAcarsThread, PlannedLegWxRequestResponse,
 } from '../types';
 
 /**
@@ -224,6 +226,193 @@ export function createAcarsRouter(): Router {
 
       const responseBody: WxRequestResponse = {
         flight_id: id, icao, available, request: requestMessage, reply: replyMessage, weather,
+      };
+      res.status(201).json(responseBody);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Leg-scoped reads and writes: the pre-flight twin of the flight-scoped
+  // routes above, for a planned leg no flights row has been created for yet.
+  // Existence is checked with getPlannedLegById, same as the loadsheet route
+  // below; every validation rule is the same helper the flight-scoped route
+  // calls, so a rule change cannot drift between the two.
+  router.get('/planned-legs/:legId/acars-messages', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      if (!getPlannedLegById(legId)) {
+        res.status(404).json({ error: `Planned leg ${legId} not found`, code: 'PLANNED_LEG_NOT_FOUND' });
+        return;
+      }
+
+      const thread: PlannedLegAcarsThread = {
+        planned_leg_id: legId,
+        messages: listAcarsMessagesForPlannedLeg(legId),
+      };
+      res.json(thread);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  router.post('/planned-legs/:legId/acars-messages', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      if (!getPlannedLegById(legId)) {
+        res.status(404).json({ error: `Planned leg ${legId} not found`, code: 'PLANNED_LEG_NOT_FOUND' });
+        return;
+      }
+
+      const body = req.body as unknown;
+      if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+        res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
+        return;
+      }
+      const payload = body as Record<string, unknown>;
+
+      let canned = null;
+      if (payload.canned_id !== undefined && payload.canned_id !== null) {
+        canned = findCannedMessage(payload.canned_id);
+        if (!canned) {
+          res.status(400).json({
+            error: `canned_id must be one of: ${cannedMessageIdList()}`,
+            code: 'UNKNOWN_CANNED_MESSAGE',
+          });
+          return;
+        }
+      } else if (payload.body !== undefined && payload.body !== null) {
+        canned = findCannedMessageByBody(payload.body);
+        if (!canned) {
+          res.status(400).json({
+            error: 'Only canned messages can be sent from a client. Free text is not accepted.',
+            code: 'NOT_A_CANNED_MESSAGE',
+          });
+          return;
+        }
+      } else {
+        res.status(400).json({
+          error: `canned_id must be one of: ${cannedMessageIdList()}`,
+          code: 'UNKNOWN_CANNED_MESSAGE',
+        });
+        return;
+      }
+
+      if (payload.direction !== undefined && payload.direction !== CLIENT_DIRECTION) {
+        res.status(403).json({
+          error: 'A client may only send downlink messages',
+          code: 'DIRECTION_NOT_PERMITTED',
+        });
+        return;
+      }
+      if (payload.category !== undefined && payload.category !== canned.category) {
+        res.status(403).json({
+          error: `category must be ${canned.category} for canned message ${canned.id}`,
+          code: 'CATEGORY_NOT_PERMITTED',
+        });
+        return;
+      }
+
+      // No dedup here either — pressing the button twice files two messages,
+      // same as the flight-scoped route.
+      const message = insertAcarsMessage({
+        planned_leg_id: legId,
+        direction: canned.direction,
+        category: canned.category,
+        label: canned.label,
+        body: canned.body,
+      });
+      res.status(201).json(message);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Leg-scoped WX request: field-for-field the flight-scoped route above, with
+  // planned_leg_id where flight_id was. Same "no data" and WeatherFetchError
+  // handling — both are successful, request-was-processed outcomes.
+  router.post('/planned-legs/:legId/acars-messages/wx', async (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      if (!getPlannedLegById(legId)) {
+        res.status(404).json({ error: `Planned leg ${legId} not found`, code: 'PLANNED_LEG_NOT_FOUND' });
+        return;
+      }
+
+      const body = req.body as unknown;
+      if (typeof body !== 'object' || body === null || Array.isArray(body) ||
+          typeof (body as Record<string, unknown>).icao !== 'string' ||
+          (body as Record<string, unknown>).icao === '' ||
+          ((body as Record<string, unknown>).icao as string).trim() === '') {
+        res.status(400).json({ error: 'icao is required', code: 'INVALID_BODY' });
+        return;
+      }
+
+      const icao = normaliseIcao((body as Record<string, unknown>).icao as string);
+      if (!isValidIcaoShape(icao)) {
+        res.status(400).json({
+          error: 'icao must be 4 letters or digits (e.g. EGLL)',
+          code: 'INVALID_ICAO',
+        });
+        return;
+      }
+
+      const issuedAt = new Date().toISOString();
+      const requestMessage = insertAcarsMessage({
+        planned_leg_id: legId,
+        direction: 'downlink',
+        category: 'wx',
+        label: wxRequestLabelAndBody(icao),
+        body: wxRequestLabelAndBody(icao),
+        payload_json: JSON.stringify({ icao }),
+        sent_at: issuedAt,
+      });
+
+      let available: boolean;
+      let replyMessage;
+      let weather: WxWeatherPayload | null;
+
+      try {
+        const raw = await getCachedWeather(icao);
+        if (raw.metar === null) {
+          available = false;
+          weather = null;
+          replyMessage = insertAcarsMessage({
+            planned_leg_id: legId, direction: 'uplink', category: 'wx',
+            label: WX_UNAVAILABLE_LABEL, body: buildWxUnavailableBody(icao),
+            payload_json: JSON.stringify({ icao, reason: 'NO_DATA' }),
+            correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+          });
+        } else {
+          available = true;
+          weather = { icao, metar: raw.metar, taf: raw.taf, fetched_at: raw.fetched_at };
+          replyMessage = insertAcarsMessage({
+            planned_leg_id: legId, direction: 'uplink', category: 'wx',
+            label: wxReplyLabel(icao), body: buildWxReplyBody(raw.metar, raw.taf),
+            payload_json: JSON.stringify(weather),
+            correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        if (!(err instanceof WeatherFetchError)) throw err;
+        available = false;
+        weather = null;
+        replyMessage = insertAcarsMessage({
+          planned_leg_id: legId, direction: 'uplink', category: 'wx',
+          label: WX_UNAVAILABLE_LABEL, body: buildWxUnavailableBody(icao),
+          payload_json: JSON.stringify({ icao, reason: err.code }),
+          correlation_id: requestMessage.id, sent_at: new Date().toISOString(),
+        });
+      }
+
+      const responseBody: PlannedLegWxRequestResponse = {
+        planned_leg_id: legId, icao, available, request: requestMessage, reply: replyMessage, weather,
       };
       res.status(201).json(responseBody);
     } catch (err) {

@@ -62,7 +62,54 @@ and copies the WAL and SHM files with it, or recent commits are missed:
 `npm run backup` is the supported way to take a consistent snapshot and is safe
 while the server is live. Prefer it for anything beyond a quick read. A task
 that touched a database copy states the live file's md5 before and after in its
-report.
+report — but treat that md5 as a smoke check, not proof: the live server's own
+WAL checkpointing changes the file's bytes on its own, with no writes from any
+task (observed 2026-09-15: the same live file's md5 changed three times across
+a run that only ever wrote to scratch copies). When you need to actually rule
+out contamination, check structure or content instead — e.g. the live file has
+no `ground_sessions` table at all if a run added one only to a scratch schema,
+or its newest `flights.id` is still the value it was before the run started.
+
+## Verifying a client-side change without touching the live server's `client/dist`
+
+`src/server.ts` serves the client via `express.static(path.join(process.cwd(),
+'client', 'dist'))`, read from disk on every request — so `npm run build` (or
+any `vite build`) overwrites the exact files the user's running server is
+serving *right now*, not just what a future restart would pick up. A Vite dev
+server as an alternative doesn't work either: it's cross-origin from the
+scratch API server, and `requireSameOrigin` correctly rejects it with `403`.
+
+To actually click through a UI change in a browser: copy the `client/`
+source tree to a scratch directory, `npm run build` **there**, and run the
+scratch server (`PORT=...`, scratch `FLIGHTS_DB_PATH`) with its working
+directory set to that scratch root so its `express.static` call resolves to
+the scratch `dist/`, not the real one. Confirm `client/dist/index.html`'s
+mtime in the real tree is unchanged afterward.
+
+## Env-var prefixes do not scope across a pipe
+
+`VAR=value cmd1 | cmd2` only sets `VAR` for `cmd1`, not `cmd2` — a shell
+pipeline, not a subshell. This bit on 2026-09-15: an agent ran
+`FLIGHTS_DB_PATH=/scratch/... printf '%s\n' "$pw" | node dist/setPassword.js`
+intending to redirect `setPassword.js` to a scratch database; the prefix only
+applied to `printf`, so `node` fell back to its default
+(`process.cwd()/flights.db`, the live file) and overwrote the live operator
+password.
+
+Any script that reads `FLIGHTS_DB_PATH` (or another env-scoped path override)
+and sits on the right side of a pipe needs the var exported or the whole
+pipeline wrapped, not prefixed on the last command alone:
+
+    export FLIGHTS_DB_PATH=/scratch/flights.db
+    printf '%s\n' "$pw" | node dist/setPassword.js
+
+or
+
+    FLIGHTS_DB_PATH=/scratch/flights.db bash -c 'printf "%s\n" "$0" | node dist/setPassword.js' "$pw"
+
+Before running anything that writes credentials or schema via a piped
+command, echo the resolved path first (e.g. `node -e "console.log(process.env.FLIGHTS_DB_PATH)"`)
+rather than assuming the prefix reached the right process.
 
 ## Scratch space
 
