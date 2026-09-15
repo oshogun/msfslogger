@@ -1,0 +1,378 @@
+{
+  "run_id": "2026-09-15-vitest-coverage-expansion",
+  "goal": "Extend the Vitest suite frozen in 2026-09-09-vitest-unit-tests to cover the documented backlog (src/trafficStore.ts, the 7 modules under src/db/, src/ingest.ts) plus src/weatherClient.ts and the remaining plain-logic files (src/geo.ts, src/backup.ts, src/pdfExport.ts, src/setPassword.ts, src/backfill-durations.ts, src/backfill-icao.ts). Two structural blockers must be resolved before most of this can be implemented: (1) four files — src/backfill-durations.ts, src/backfill-icao.ts, src/setPassword.ts, and src/backup.ts (a fourth the intake's table missed; it also ends in an unconditional `main().catch(...)` at module scope, same as the other three) — run main() unconditionally at import time against the live flights.db, and each needs a require.main === module guard before it is test-importable; (2) src/db/connection.ts hardcodes the live db path with no override seam, and src/backup.ts hardcodes three more (DB_FILE, PLANS_DIR, BACKUP_ROOT) — no test of src/db/*.ts, the two backfill scripts, setPassword.ts, or backup.ts can run against anything but the live database until a seam exists and a real (temp-file) sqlite test harness is built on top of it. Routes, server.ts, index.ts, the inspect-*.ts CLI tools, and types.ts stay out of scope.",
+  "frozen_decisions": [
+    "Chosen scope: \"the documented backlog + weatherClient.ts + the remaining plain-logic files\" — not routes, not server.ts/index.ts, not the inspect-*.ts CLI tools, not types.ts.",
+    "\"Importing any of these three files from a test file today would open and write to the user's real flights.db\" — the require.main guard is required before any of them can be imported by a test: `if (require.main === module) { main().catch(...); }`. This changes nothing about how `node dist/backfill-icao.js` (etc.) behaves when run directly — require.main === module is true in exactly that case — it only stops the call from firing on import/require.",
+    "\"No test of any src/db/*.ts module, src/backfill-*.ts script, or src/setPassword.ts can run against anything but the live database until this has a seam.\" src/backup.ts has the same problem three times over (DB_FILE, PLANS_DIR, BACKUP_ROOT, all process.cwd()-derived module consts).",
+    "\"The Designer decides and freezes one convention, reused everywhere this applies (do not bespoke it five ways)\" for the DB path override and the real (temp-file, not :memory:) per-test database creation/schema/fixture/teardown pattern.",
+    "Full-render coverage of src/pdfExport.ts (spinning up headless Chromium) is out of scope — \"no network/browser dependency exists anywhere else in this suite and the frozen vitest.config.ts doesn't provision one\"; the Designer may still find a hermetically-testable subset or explicitly decide there is none.",
+    "\"No test run ever opens the live flights.db — every db-touching test runs against a temp-file database the test creates and deletes.\"",
+    "Ship (DevOps) step: \"only if the Designer's db-seam decision touches npm test/CI wiring beyond adding test files (e.g. a new env var default needed in vitest.config.ts or tests/setup.ts); otherwise skipped, and that call is made explicit in plan.json rather than assumed.\"",
+    "Non-negotiable (project-wide): never touch the user's running server or live flights.db."
+  ],
+  "sequencing_rationale": [
+    "Phase 1 pairs the Design task with the pure-module work that does not depend on its output: src/trafficStore.ts, src/geo.ts, src/weatherClient.ts and the src/ingest.ts extension all reuse conventions already frozen by 2026-09-09-vitest-unit-tests (test-helpers, fake clock, vi.mock shape) and touch no production file, so they can be implemented while Design is in flight rather than waiting behind it.",
+    "Phase 2 is the db-harness foundation alone (src/db/connection.ts's env seam plus the new scratch-sqlite test harness) as its own single-task phase with its own reviewer gate, because six Phase-3 tasks are about to build directly on top of it — a wrong harness caught after six parallel Sr tasks have used it is six times the rework of catching it after one.",
+    "Phase 3 fans out across the remaining db-dependent surface with disjoint allowed_paths per module/file, sized by actual line count and cross-cutting complexity (src/db/plannedLegs.ts at 669 lines with trip-activation and hand-close invariants gets its own Sr task; the three smaller CRUD modules pair up or stand alone as Jr work; src/backup.ts and the three CLI scripts each get their own Sr task because both require the same contract-adjacent structural edit — a path-override seam and/or a require.main guard — that the Jr/Sr split reserves for Sr).",
+    "src/pdfExport.ts is deliberately last and smallest: its scope is entirely dependent on what Design finds hermetically testable, so sizing it before Design would be a guess.",
+    "No Ship/DevOps task: the frozen DB_PATH-style seam is read-per-call by production code (the same shape as SIMBRIEF_API_BASE_URL and WEATHER_API_BASE_URL), so tests set/unset the env var per test the same way tests/simbriefClient.test.ts already does — no change to vitest.config.ts, tests/setup.ts, or package.json scripts is expected. If Design's freeze finds otherwise, that edit is folded into T-006 (the harness task) rather than spun out as a separate DevOps task, since it would still be one file (tests/setup.ts or vitest.config.ts) with one owner."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Design frozen; pure-module suite lands",
+      "ships": "src/trafficStore.ts, src/geo.ts, src/weatherClient.ts and the previously CORS-only src/ingest.ts all have real Vitest coverage behind `npm test`; design.md freezes the require.main guard locations (four files, not three), the DB_PATH seam convention, the scratch-sqlite harness shape, and the src/pdfExport.ts scope decision, unblocking every db-dependent task.",
+      "tasks": ["T-001", "T-002", "T-003", "T-004", "T-005"]
+    },
+    {
+      "phase": 2,
+      "name": "DB harness foundation",
+      "ships": "src/db/connection.ts reads DB_PATH per call instead of hardcoding flights.db; a real (temp-file) scratch-sqlite test harness exists in tests/helpers and is proven against src/db/schema.ts's applySchema(); every later db-dependent task builds on this instead of five hand-rolled harnesses.",
+      "tasks": ["T-006", "T-007"]
+    },
+    {
+      "phase": 3,
+      "name": "DB-dependent coverage",
+      "ships": "Every remaining file in the backlog — the other six src/db/*.ts modules, src/backup.ts, src/setPassword.ts, the two src/backfill-*.ts scripts, and whatever subset of src/pdfExport.ts Design scoped in — has real Vitest coverage, all four main()-at-import files are now safely importable, and the live flights.db's md5 is unchanged by the full `npm test` run.",
+      "tasks": ["T-008", "T-009", "T-010", "T-011", "T-012", "T-013", "T-014", "T-015"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the require.main guard set, the DB_PATH seam, the scratch-sqlite harness, and the pdfExport.ts scope",
+      "goal": "Produce design.md for this run, freezing four decisions the intake and this Planner's research flagged as blocking: (a) the exact require.main === module guard locations — FOUR files, not the three the intake's table names: src/backfill-durations.ts (bare `main();` at EOF), src/backfill-icao.ts (`main().catch(...)`), src/setPassword.ts (`main().catch(...)`), AND src/backup.ts (`main().catch(...)` at src/backup.ts:79-82 — same unconditional pattern, missed by the intake's table). Confirm the idiom matches this codebase's CommonJS module style (tsconfig.json: module=commonjs, esModuleInterop=true) and state it does not change `node dist/*.js` behavior. (b) One DB_PATH-style env-var override, read per call (mirroring src/simbriefClient.ts's SIMBRIEF_API_BASE_URL and src/weatherClient.ts's WEATHER_API_BASE_URL — src/config.ts has no existing seam for this, confirmed by reading it), applied to src/db/connection.ts's DB_PATH const and reused (not bespoked) by src/backup.ts's DB_FILE/PLANS_DIR/BACKUP_ROOT (state whether backup.ts gets one combined override or three, and the exact env var names). (c) The real (temp-file, not :memory:) per-test sqlite harness: where it lives (extend tests/helpers/index.ts per its existing 'one file, one owner' convention, or a new tests/helpers/db.ts — pick one and say why), its exact function signatures for creating a scratch db file, running applySchema() against it, seeding fixtures, and tearing down (delete the temp file and any -wal/-shm siblings). (d) src/pdfExport.ts's testable subset, if any — read the file; baseUrl()'s env-derivation logic (EXPORT_BASE_URL, PORT, getConfig().tls.enabled) is a plausible pure-ish candidate reachable without puppeteer/network, but confirm or reject it and state exactly what a test may and may not touch (no real puppeteer.launch(), no real network). (e) For src/setPassword.ts specifically: decide whether parseUsername (already a standalone function, but unexported) gets exported for direct testing, and whether main()'s inline password-length/blank checks are worth extracting into testable functions or are left covered only by the guard + parseUsername tests — state the exact export seam, if any, added to src/setPassword.ts.",
+      "depends_on": [],
+      "allowed_paths": [".claude/runs/2026-09-15-vitest-coverage-expansion/design.md"],
+      "acceptance_criteria": [
+        "design.md names all four require.main-guard files by exact path, including src/backup.ts, with the exact idiom to insert and its location (line number or anchor).",
+        "design.md freezes one DB_PATH-style env var name and its default, states it is read per call (not cached at module load), and states explicitly how src/backup.ts's three path consts are overridden by the same convention (one var or three, named).",
+        "design.md gives the scratch-sqlite harness's exact exported function signatures (creation, schema application, teardown) and the exact file path they live in.",
+        "design.md states explicitly, with reasoning, which subset (if any) of src/pdfExport.ts is in scope for this run, and confirms no test may call puppeteer.launch() or make a real network request.",
+        "design.md states the exact seam (if any) added to src/setPassword.ts for parseUsername/validation testability.",
+        "design.md cites .claude/tools/ctx.sh design 2026-09-09-vitest-unit-tests sections 1 (runner), 4 (test-helpers), 6 (vi.mock shape) rather than re-deciding those conventions."
+      ],
+      "context": [
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/intake.md",
+        "ctx.sh map 2026-09-09-vitest-unit-tests",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 1 4 6 7",
+        "src/db/connection.ts",
+        "src/db/schema.ts",
+        "src/backup.ts",
+        "src/setPassword.ts",
+        "src/backfill-durations.ts",
+        "src/backfill-icao.ts",
+        "src/pdfExport.ts",
+        "src/config.ts",
+        "src/weatherClient.ts",
+        "tests/helpers/index.ts",
+        "tests/simbriefClient.test.ts",
+        "tsconfig.json"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "backend_jr",
+      "title": "Tests for src/trafficStore.ts and src/geo.ts",
+      "goal": "Add tests/trafficStore.test.ts and tests/geo.test.ts. No dependency on the db-harness work — pure functions and one in-memory class, no mocks of ./db or ./airports needed.",
+      "depends_on": [],
+      "allowed_paths": ["tests/trafficStore.test.ts", "tests/geo.test.ts"],
+      "acceptance_criteria": [
+        "tests/trafficStore.test.ts covers roundCoord/roundAlt/normHeading (including the 360.0-wrap and the round-first-then-wrap ordering the source comment calls out) and distanceM, each with at least one non-trivial case.",
+        "tests/trafficStore.test.ts covers applyRetentionCap: under-cap objects returned as-is with lastFrame never read (assert via a lastFrame that would throw or a spy showing distanceM not needed — e.g. pass objects.length <= MAX_RETAINED_OBJECTS and a null lastFrame and confirm the array is returned by reference or shallow-equal), over-cap with a lastFrame (nearest N kept, ties broken by ascending id), and over-cap with lastFrame null (first N kept in original order).",
+        "tests/trafficStore.test.ts covers TrafficStore.replace/read: a fresh read after replace() returns the exact objects; read(now) at exactly now - receivedAt === TRAFFIC_STALE_MS returns the objects (inclusive); read(now) one ms past that returns [] and a second read() no longer returns the stale objects (confirming the internal array was actually cleared, not just filtered on read).",
+        "tests/geo.test.ts adds real assertions for bearingDeg (at least: due north ~0deg, due east ~90deg, a case exercising the 0..360 normalization) and extends haversineNm beyond smoke.test.ts's two assertions with a known-distance pair and an antimeridian-spanning pair (179E to 179W measures close to 2 degrees of longitude, not 358).",
+        "`npx vitest run tests/trafficStore.test.ts tests/geo.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/trafficStore.ts",
+        "src/geo.ts",
+        "tests/smoke.test.ts",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 4.6 (geometry helpers, NM_PER_DEG note)"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "backend_jr",
+      "title": "Tests for src/weatherClient.ts",
+      "goal": "Add tests/weatherClient.test.ts, modeled directly on tests/simbriefClient.test.ts's injectable-fetchImpl shape (same pattern: src/weatherClient.ts's FetchWeatherOptions.fetchImpl mirrors src/simbriefClient.ts's). No dependency on the db-harness work.",
+      "depends_on": [],
+      "allowed_paths": ["tests/weatherClient.test.ts"],
+      "acceptance_criteria": [
+        "Covers fetchOneProduct's every branch via fetchWeather/getCachedWeather: HTTP 204 -> null; HTTP 429 -> RATE_LIMITED; other non-200 -> BAD_STATUS; empty body ('') -> null; non-JSON body -> BAD_BODY; JSON but not an array -> BAD_BODY; empty array -> null; array whose first element is missing rawOb/rawTAF or has it as '' -> BAD_BODY.",
+        "Covers the network/timeout taxonomy: a rejected fetchImpl (TypeError) -> NETWORK; an AbortError/TimeoutError, both direct and wrapped in a `cause` (isAbort's recursive check) -> TIMEOUT, with the userMessage's second-count matching the timeoutMs used.",
+        "Covers fetchWeather's asymmetric Promise.allSettled handling: a METAR rejection is fatal (fetchWeather rejects with that error) even when TAF succeeds; a TAF rejection degrades to `taf: null` even when METAR succeeds.",
+        "Covers getCachedWeather's cache behavior: a second call within WEATHER_CACHE_TTL_MS does not invoke fetchImpl again (assert via mock call count); a cached failure is replayed as a rejection without a second fetchImpl call; after clearWeatherCache() (or by simulating TTL expiry via the injected clock pattern already used for FlightManager, per ctx.sh design 2026-09-09-vitest-unit-tests 5) a fresh call invokes fetchImpl again.",
+        "Covers baseUrl()'s WEATHER_API_BASE_URL env override, read per call (not cached at import), the same way tests/simbriefClient.test.ts proves it for SIMBRIEF_API_BASE_URL — set/restore the env var in beforeEach/afterEach so no state leaks to other test files.",
+        "No test in this file performs a real network call — every fetchImpl is a local stub, verified the same way tests/simbriefClient.test.ts documents it (a stub that is never called is itself an assertion where relevant).",
+        "`npx vitest run tests/weatherClient.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/weatherClient.ts",
+        "tests/simbriefClient.test.ts",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 5 (faking time, for the cache-TTL-expiry test)"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "backend_sr",
+      "title": "Extend src/ingest.ts coverage beyond CORS",
+      "goal": "Add tests/ingest.test.ts (new file, separate from tests/ingestCors.test.ts which stays CORS-only) covering frame validation, the traffic batch pipeline end to end, and the stale-disconnect timer. Reuse createTestServer()'s real-listening-server pattern from tests/ingestCors.test.ts (copy/adapt locally in the new file — do not edit ingestCors.test.ts). No dependency on the db-harness work: FlightManager is stubbed the same lightweight way tests/ingestCors.test.ts already stubs it, not the full dbMock/airportsMock harness.",
+      "depends_on": [],
+      "allowed_paths": ["tests/ingest.test.ts"],
+      "acceptance_criteria": [
+        "isValidFrame rejection is covered via POST /frame: a body missing any one of the ten required SimFrame fields, or with a field of the wrong type, gets HTTP 400 with a JSON {error} body and flightManager.onFrame is not called.",
+        "buildTrafficObjects is covered via POST /traffic: a non-object body, a body without an objects array, a batch exceeding MAX_BATCH_OBJECTS (200), and an invalid element (bad id, out-of-range lat/lon, non-finite altitude/heading, wrong-typed onGround) each get HTTP 400 and leave trafficStore.replace uncalled; a valid batch with a duplicate id keeps only the last occurrence's values at the first occurrence's position (Map de-dup semantics) and calls trafficStore.replace with the deduped, capped array.",
+        "TRAFFIC_ENABLED is covered: with it unset (default enabled) a valid batch reaches trafficStore.replace; with it set to one of '0'/'false'/'off'/'no' (case/whitespace-insensitive) POST /traffic returns 204 but trafficStore.replace is never called, and this is asserted for at least two of the four disabled values plus one enabled-by-anything-else value (e.g. 'nope').",
+        "The auth-then-kill-switch-then-validation order from the source comment is covered by one test: an invalid token on a traffic-disabled server still returns 401, not 204 — proving auth is checked before the kill switch.",
+        "The stale-disconnect timer is covered with vi.useFakeTimers(): after a connecting frame, advancing the fake clock past STALE_TIMEOUT_MS (10_000ms) without another frame arriving triggers markDisconnected() — assert flightManager.appState.connected becomes false and flightManager.onSimDisconnect() was called — while advancing by less than STALE_TIMEOUT_MS after a fresh frame does not.",
+        "`npx vitest run tests/ingest.test.ts tests/ingestCors.test.ts` exits 0 and ingestCors.test.ts's existing 5 tests still pass unmodified.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/ingest.ts",
+        "src/trafficStore.ts",
+        "tests/ingestCors.test.ts",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 5.2 5.3 (fake clock setup and the advance-then-feed pattern)"
+      ]
+    },
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Review phase 1 — trafficStore, geo, weatherClient, ingest extension",
+      "goal": "Re-run the evidence for T-002, T-003, T-004: run `npm test`, `npm run test:types`, `npx tsc`, `npm run build`, confirm no new test opens a real network socket or the live flights.db, and confirm ingestCors.test.ts's existing tests are untouched and still pass.",
+      "depends_on": ["T-002", "T-003", "T-004"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npm test` passes in full, including the pre-existing suite.",
+        "`npm run test:types`, `npx tsc`, and `npm run build` all exit 0.",
+        "grep of tests/trafficStore.test.ts, tests/geo.test.ts, tests/weatherClient.test.ts, tests/ingest.test.ts confirms no bare `fetch(` call outside a stubbed fetchImpl and no import of ./db or ./airports.",
+        "Every acceptance criterion listed on T-002, T-003 and T-004 is independently verified against the actual diff, not taken on the implementer's report."
+      ],
+      "context": [
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/plan.json (T-002, T-003, T-004 acceptance criteria, pasted by the Orchestrator)"
+      ]
+    },
+    {
+      "id": "T-006",
+      "role": "backend_sr",
+      "title": "DB_PATH seam on src/db/connection.ts and the scratch-sqlite test harness",
+      "goal": "Implement exactly what design.md froze for decisions (a)-(c) per ctx.sh design 2026-09-15-vitest-coverage-expansion (DB_PATH seam and harness sections — pull with ctx.sh map first to find the section numbers): add the env-var override to src/db/connection.ts's DB_PATH, read per call inside initDb() rather than cached at module load (mirroring src/weatherClient.ts's baseUrl() pattern); add the scratch-sqlite harness helper(s) at the file path(s) design.md names; write tests/db/connection.test.ts and tests/db/schema.test.ts proving both the seam and applySchema()'s idempotency and column-migration branches.",
+      "depends_on": ["T-001", "T-005"],
+      "allowed_paths": ["src/db/connection.ts", "tests/helpers/index.ts", "tests/helpers/db.ts", "tests/db/connection.test.ts", "tests/db/schema.test.ts"],
+      "acceptance_criteria": [
+        "src/db/connection.ts's DB_PATH is read from the env var design.md named, per call inside initDb(), with the current process.cwd()-joined 'flights.db' as the default when unset — the default behavior for a caller that sets nothing is byte-for-byte unchanged.",
+        "tests/db/connection.test.ts proves initDb() against the override never touches the real flights.db: run with the env var pointed at a scratch temp-file path, then md5sum the live flights.db before and after the full test file and show they are identical (report the two hashes).",
+        "The scratch harness creates a real temp-file sqlite database (not :memory:), runs applySchema() against it, and its teardown removes the db file plus any -wal/-shm siblings it created — proven by asserting via fs.existsSync that no leftover file remains after a test that used the harness.",
+        "tests/db/schema.test.ts proves applySchema() is idempotent (calling it twice on the same handle produces no error and no duplicate objects) and exercises at least two of the ALTER-TABLE migration branches (e.g. run schema creation on a hand-built pre-migration table missing a column, then applySchema(), then confirm the column exists) — matching how the source comment describes the migration block being exercised by \"databases that predate a column\".",
+        "`npx vitest run tests/db/connection.test.ts tests/db/schema.test.ts` exits 0.",
+        "`npm run test:types`, `npx tsc`, and `npm run build` all exit 0.",
+        "The live flights.db's md5 is identical before and after the full `npm test` run, stated in the task's report."
+      ],
+      "context": [
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (DB_PATH seam and scratch-harness sections — use ctx.sh map 2026-09-15-vitest-coverage-expansion to find the exact section numbers)",
+        "src/db/connection.ts",
+        "src/db/schema.ts",
+        "src/weatherClient.ts (baseUrl() as the per-call-env-read precedent)",
+        "tests/helpers/index.ts",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 4.1 (the 'one file, one owner' convention for tests/helpers)"
+      ]
+    },
+    {
+      "id": "T-007",
+      "role": "reviewer",
+      "title": "Review phase 2 — the DB_PATH seam and the scratch-sqlite harness",
+      "goal": "Re-run the evidence for T-006 before six downstream tasks build on it. This is the single most important gate in the run: if the harness leaks into the live flights.db or the teardown is incomplete, every Phase 3 task inherits the bug.",
+      "depends_on": ["T-006"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Independently md5sums the live flights.db, runs `npm test` in full, and md5sums it again — the two hashes match.",
+        "Independently confirms, by reading the diff, that src/db/connection.ts's default (unset env var) behavior is unchanged from before this task.",
+        "Runs a throwaway script that calls the harness's create/apply/teardown sequence and confirms via `ls`/fs.existsSync that no scratch db file survives the process.",
+        "`npm test`, `npm run test:types`, `npx tsc`, and `npm run build` all exit 0.",
+        "Every acceptance criterion listed on T-006 is independently verified against the actual diff, not taken on the implementer's report."
+      ],
+      "context": [
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/plan.json (T-006 acceptance criteria, pasted by the Orchestrator)",
+        ".claude/ENVIRONMENT.md (never verify against the live database; state the live file's md5 before and after)"
+      ]
+    },
+    {
+      "id": "T-008",
+      "role": "backend_jr",
+      "title": "Tests for src/db/flights.ts",
+      "goal": "Add tests/db/flights.test.ts using the scratch-sqlite harness from T-006 (ctx.sh design 2026-09-15-vitest-coverage-expansion — harness section). Single module, no new contract.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["tests/db/flights.test.ts"],
+      "acceptance_criteria": [
+        "Covers insertFlight/closeFlight/insertPoint against a scratch db, including the departureIcao/departureName default-null parameters.",
+        "Covers updateFlight, setFlightPlanName/clearFlightPlanName, getFlights, getFlightById (including its joined points), getFlightPointCount, and deleteFlight (including that deleting a flight cascades to its flight_points rows, per the schema's ON DELETE CASCADE).",
+        "Covers combineFlights: at least one case that successfully merges two flights and one case that returns null for an invalid combination (per the function's own contract).",
+        "`npx vitest run tests/db/flights.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/db/flights.ts",
+        "src/db/schema.ts",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (harness usage section)"
+      ]
+    },
+    {
+      "id": "T-009",
+      "role": "backend_jr",
+      "title": "Tests for src/db/trips.ts and src/db/settings.ts",
+      "goal": "Add tests/db/trips.test.ts and tests/db/settings.test.ts using the scratch-sqlite harness. Two smaller CRUD modules (176 and 110 lines), paired into one task per the fewer-larger-tasks rule.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["tests/db/trips.test.ts", "tests/db/settings.test.ts"],
+      "acceptance_criteria": [
+        "tests/db/trips.test.ts covers createTrip, getTrips/getTripById (including their flight aggregation), getTripName, updateTrip, deleteTrip, assignFlightToTrip/removeFlightFromTrip.",
+        "tests/db/settings.test.ts covers getAuthUser/setAuthUser, getAppSecret/getOrCreateAppSecret (including that the generator is only invoked on a miss), getSetting/setSetting (including setSetting(name, null) as a delete, if that's the contract — confirm by reading the source), and sessionGet/sessionSet/sessionDestroy/sessionSweep (including that sessionSweep(now) only removes rows with expires_at <= now and returns the count removed).",
+        "`npx vitest run tests/db/trips.test.ts tests/db/settings.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/db/trips.ts",
+        "src/db/settings.ts",
+        "src/db/schema.ts",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (harness usage section)"
+      ]
+    },
+    {
+      "id": "T-010",
+      "role": "backend_jr",
+      "title": "Tests for src/db/acarsMessages.ts",
+      "goal": "Add tests/db/acarsMessages.test.ts using the scratch-sqlite harness.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["tests/db/acarsMessages.test.ts"],
+      "acceptance_criteria": [
+        "Covers insertAcarsMessage and insertAcarsMessageOnce, including that a second insertAcarsMessageOnce call with the same dedup_key does not insert a second row (the partial UNIQUE index idx_acars_messages_dedup) and returns/reflects the existing row per the function's actual contract.",
+        "Covers getAcarsMessageById, findAcarsMessageByDedupKey (including the miss case returning null), and listAcarsMessagesForFlight/listAcarsMessagesForPlannedLeg including the ORDER BY (sent_at, id) the schema's index comment documents.",
+        "Covers the correlation_id SET NULL behavior: deleting the message a reply correlates to leaves the reply's row intact with correlation_id now null (per the schema's ON DELETE SET NULL).",
+        "`npx vitest run tests/db/acarsMessages.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/db/acarsMessages.ts",
+        "src/db/schema.ts",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (harness usage section)"
+      ]
+    },
+    {
+      "id": "T-011",
+      "role": "backend_sr",
+      "title": "Tests for src/db/plannedLegs.ts",
+      "goal": "Add tests/db/plannedLegs.test.ts using the scratch-sqlite harness. This is the largest and most cross-cutting module in the backlog (669 lines): active-trip singleton state, leg status transitions, candidate queries the leg matcher depends on, flight-link uniqueness, and hand-close outcome recording.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["tests/db/plannedLegs.test.ts"],
+      "acceptance_criteria": [
+        "Covers createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource (the source_sha256 dedup path an import re-run relies on), deletePlannedLeg, and reorderPlannedLegs (including that seq stays dense/ordered per the function's contract).",
+        "Covers setActiveTrip/getActiveTripId, including the schema's idx_trips_active partial UNIQUE index: setting a second trip active deactivates the first (or the call fails, per the function's actual contract — confirm by reading the source) rather than leaving two trips marked active.",
+        "Covers setPlannedLegStatus and getPlannedLegCandidatesForActiveTrip: candidates are scoped to the active trip only, and a leg not in status 'planned' is excluded from candidates (matching src/legMatcher.ts's expectations, per ctx.sh design 2026-09-09-vitest-unit-tests 4.3).",
+        "Covers getFlightPlannedLegId, linkFlightToPlannedLeg (including the schema's idx_flights_planned_leg partial UNIQUE index — a second flight cannot link to a leg already linked), unlinkFlightFromPlannedLeg, and clearPlannedLegLink.",
+        "Covers recordPlannedLegArrival and setPlannedLegHandOutcome for at least the 'flown' and 'diverted' status paths, including that arrival_deviation_nm is written.",
+        "`npx vitest run tests/db/plannedLegs.test.ts` exits 0.",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/db/plannedLegs.ts",
+        "src/db/schema.ts",
+        "src/legMatcher.ts",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (harness usage section)",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 4.3 (LegMatchCandidate shape this module produces)"
+      ]
+    },
+    {
+      "id": "T-012",
+      "role": "backend_sr",
+      "title": "src/backup.ts: require.main guard, path-override seam, and tests",
+      "goal": "Per design.md's decisions (a) and (b): add the require.main guard to src/backup.ts (the fourth file the intake's table missed) and override its DB_FILE/PLANS_DIR/BACKUP_ROOT consts per the same convention frozen for src/db/connection.ts. Add tests/backup.test.ts using the scratch-sqlite harness plus a scratch flight_plans directory and a scratch backup destination.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["src/backup.ts", "tests/backup.test.ts"],
+      "acceptance_criteria": [
+        "src/backup.ts gains the require.main === module guard around its main() call; importing the module from a test no longer runs main() (proven by a test that imports the module and asserts no scratch or live db is touched merely by the import).",
+        "DB_FILE, PLANS_DIR and BACKUP_ROOT are overridable per design.md's exact convention, with the current process.cwd()-derived paths as the unchanged default.",
+        "A test drives backup.ts's real db.backup() (not a mock) against a scratch source db with known rows and a scratch flight_plans dir with at least one file, and asserts: the backup db file opens, its flights/flight_points/trips counts match the source, its integrity_check passes, and the flight_plans files were copied byte-identical (compare via fs.readFileSync equality or a hash).",
+        "Confirms md5sum of the live flights.db is unchanged before and after this test file runs (stated in the task's report).",
+        "`npx vitest run tests/backup.test.ts` exits 0.",
+        "`npm run test:types`, `npx tsc`, and `npm run build` all exit 0 (backup.ts is compiled into dist/, per its own comment about the CLI scripts)."
+      ],
+      "context": [
+        "src/backup.ts",
+        "src/db/connection.ts (the DB_PATH seam as precedent)",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (require.main guard and path-override sections)"
+      ]
+    },
+    {
+      "id": "T-013",
+      "role": "backend_sr",
+      "title": "require.main guards and tests for the three CLI scripts (backfill-durations, backfill-icao, setPassword)",
+      "goal": "Per design.md's decisions (a) and (e): add the require.main guard to all three files (identical mechanical edit, batched here since all three are small and share the same structural change), plus whatever export seam design.md specified for src/setPassword.ts's parseUsername/validation logic. Add tests exercising each script's real logic against the scratch-sqlite harness (backfill-durations.ts and backfill-icao.ts) and against the testable seam (setPassword.ts).",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["src/backfill-durations.ts", "src/backfill-icao.ts", "src/setPassword.ts", "tests/backfillDurations.test.ts", "tests/backfillIcao.test.ts", "tests/setPassword.test.ts"],
+      "acceptance_criteria": [
+        "All three files gain the require.main === module guard; importing each from a test no longer calls main() (proven per-file, the same way as T-012's import-only test).",
+        "tests/backfillDurations.test.ts seeds a scratch db with flights and flight_points whose recomputed active-ms duration (summing gaps, dropping any gap > MAX_COUNTED_GAP_MS) differs from the stored duration_sec by more than MIN_DIFF_SEC (120s), and by less: the dry-run path (no --apply) prints its report and writes nothing (assert the stored duration_sec is unchanged after main() runs against process.argv without --apply — inject argv the way the function reads it, per the source); the --apply path writes the recomputed value; a flight whose difference is within MIN_DIFF_SEC is left untouched either way.",
+        "tests/backfillIcao.test.ts seeds a scratch db with flights missing departure/arrival icao or name and a stubbed/mocked ./airports findNearestAirport (per ctx.sh design 2026-09-09-vitest-unit-tests 6.3's mock shape), and asserts the four UPDATE branches (both-null-filled, name-only-filled, for both departure and arrival) each fire correctly and a flight with no match found is left untouched.",
+        "tests/setPassword.test.ts covers parseUsername (or whatever seam design.md exported) for: the default 'operator' username, --username <value>, --username=<value>, a rejected --password/--password=<value> argument (asserts it fails without ever reading the value into a variable the test can observe, matching the 'never taken as an argument' contract), and an unrecognised argument.",
+        "No test in this task's files opens the live flights.db — confirmed via the live file's md5 before/after, stated in the report.",
+        "`npx vitest run tests/backfillDurations.test.ts tests/backfillIcao.test.ts tests/setPassword.test.ts` exits 0.",
+        "`npm run test:types`, `npx tsc`, and `npm run build` all exit 0."
+      ],
+      "context": [
+        "src/backfill-durations.ts",
+        "src/backfill-icao.ts",
+        "src/setPassword.ts",
+        "src/flightManager.ts (MAX_COUNTED_GAP_MS, imported by backfill-durations.ts)",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (require.main guard and setPassword.ts seam sections)",
+        "ctx.sh design 2026-09-09-vitest-unit-tests 6.3 (the ./airports mock shape, for backfill-icao.ts)"
+      ]
+    },
+    {
+      "id": "T-014",
+      "role": "backend_jr",
+      "title": "src/pdfExport.ts: whatever subset design.md scoped in",
+      "goal": "Implement exactly the testable subset design.md decision (d) named — most likely baseUrl()'s env-derivation logic (EXPORT_BASE_URL override, PORT, getConfig().tls.enabled), exported if it is not already. If design.md decided no subset is hermetically testable, this task is a no-op: state that explicitly in the report and do not add a test file that merely imports the module for its own sake.",
+      "depends_on": ["T-007"],
+      "allowed_paths": ["src/pdfExport.ts", "tests/pdfExport.test.ts"],
+      "acceptance_criteria": [
+        "If design.md scoped in baseUrl() (or an equivalent pure function): the function is exported, and tests/pdfExport.test.ts covers the EXPORT_BASE_URL override, the default derivation from getConfig().tls.enabled and PORT (both true and false), read per call not cached — using loadConfig() against a fake env the same way tests/config.test.ts already does (read that file first).",
+        "No test in this task calls puppeteer.launch(), page.goto(), or makes any real network request — grep of tests/pdfExport.test.ts confirms no import of puppeteer beyond what's needed to type a mock, if any.",
+        "If design.md's decision (d) found no testable subset, this task's report says so explicitly and no tests/pdfExport.test.ts is added.",
+        "`npx vitest run tests/pdfExport.test.ts` exits 0 (or the task report states no test file was warranted, per design.md).",
+        "`npm run test:types` and `npx tsc` both still exit 0."
+      ],
+      "context": [
+        "src/pdfExport.ts",
+        "src/config.ts",
+        "tests/config.test.ts",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/design.md (pdfExport.ts scope decision, section d)"
+      ]
+    },
+    {
+      "id": "T-015",
+      "role": "reviewer",
+      "title": "Review phase 3 — every remaining db-dependent module, backup, the three CLI scripts, and pdfExport",
+      "goal": "Re-run the evidence for T-008 through T-014 before this run closes. Confirm the run's own success criteria in full: every file in the intake's table (except pdfExport.ts's out-of-scope portion) has real coverage, and no test run ever touched the live flights.db.",
+      "depends_on": ["T-008", "T-009", "T-010", "T-011", "T-012", "T-013", "T-014"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "`npm test` passes in full — the entire suite, old and new.",
+        "`npm run test:types`, `npx tsc`, and `npm run build` all exit 0.",
+        "md5sum of the live flights.db is identical before and after the full `npm test` run, independently verified by the reviewer, not taken from any implementer's report.",
+        "Independently confirms, by reading the diffs, that all four require.main guards (src/backfill-durations.ts, src/backfill-icao.ts, src/setPassword.ts, src/backup.ts) are present and that each file's behavior when run directly (`node dist/<file>.js`) is unchanged — require.main === module is true in that case.",
+        "Independently confirms every db-touching test file under tests/db/, tests/backup.test.ts, tests/backfillDurations.test.ts, tests/backfillIcao.test.ts and tests/setPassword.test.ts uses the DB_PATH-style override rather than the default — grep for the override's usage in each file.",
+        "Every acceptance criterion listed on T-008 through T-014 is independently verified against the actual diff, not taken on the implementer's report.",
+        "States, in the review report, whether the run's overall success criteria from intake.md are met: every backlog file except pdfExport.ts's out-of-scope portion has real (non-smoke) coverage."
+      ],
+      "context": [
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/plan.json (T-008 through T-014 acceptance criteria, pasted by the Orchestrator)",
+        ".claude/runs/2026-09-15-vitest-coverage-expansion/intake.md (success criteria)",
+        ".claude/ENVIRONMENT.md (never verify against the live database; state the live file's md5 before and after)"
+      ]
+    }
+  ]
+}

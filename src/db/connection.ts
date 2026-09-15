@@ -8,12 +8,22 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { applySchema } from './schema';
 
-const DB_PATH = path.join(process.cwd(), 'flights.db');
+const DEFAULT_DB_FILENAME = 'flights.db';
+
+/**
+ * The operational database file. FLIGHTS_DB_PATH overrides it; unset and empty
+ * both mean the default. Read on every call rather than captured at module
+ * load, so a caller that changes the environment or the working directory
+ * before opening the database gets the path it expects.
+ */
+export function resolveDbPath(): string {
+  return process.env.FLIGHTS_DB_PATH || path.join(process.cwd(), DEFAULT_DB_FILENAME);
+}
 
 let db: Database.Database;
 
-export function initDb(): Database.Database {
-  db = new Database(DB_PATH);
+export function initDb(dbPath: string = resolveDbPath()): Database.Database {
+  db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 

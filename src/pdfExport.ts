@@ -19,7 +19,7 @@ export interface RenderOptions {
   sessionCookie?: { name: string; value: string };
 }
 
-function baseUrl(): string {
+export function baseUrl(): string {
   // Overridable so dev can point at the Vite server (:5173) instead of the
   // Express server, which only ever serves the last built client/dist. The
   // override keeps its precedence; only the derived default changed, and only

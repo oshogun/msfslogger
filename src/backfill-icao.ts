@@ -11,7 +11,7 @@ type FlightRow = {
   arrival_icao: string | null;
 };
 
-async function main() {
+export async function main(): Promise<void> {
   await initAirports();
   const db = initDb();
 
@@ -68,4 +68,6 @@ async function main() {
   console.log(`Done. Departure identified: ${depFound}/${flights.length}, Arrival: ${arrFound}/${flights.length}`);
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => { console.error(err); process.exit(1); });
+}

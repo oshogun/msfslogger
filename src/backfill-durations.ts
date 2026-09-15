@@ -15,9 +15,9 @@ import { MAX_COUNTED_GAP_MS } from './flightManager';
  * already correct — a flight whose paused time was properly excluded at
  * record time can legitimately sit a few seconds below its recomputed value.
  */
-const MIN_DIFF_SEC = 120;
+export const MIN_DIFF_SEC = 120;
 
-function fmt(sec: number): string {
+export function fmt(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
@@ -25,7 +25,7 @@ function fmt(sec: number): string {
                : `${m}m ${String(s).padStart(2, '0')}s`;
 }
 
-function main(): void {
+export function main(): void {
   const apply = process.argv.includes('--apply');
   const db = initDb();
 
@@ -81,4 +81,6 @@ function main(): void {
   console.log(`\nUpdated ${changes.length} flight(s).`);
 }
 
-main();
+if (require.main === module) {
+  main();
+}

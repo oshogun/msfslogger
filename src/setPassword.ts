@@ -28,7 +28,7 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function parseUsername(argv: string[]): string {
+export function parseUsername(argv: string[]): string {
   let username = 'operator';
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -117,7 +117,9 @@ async function main(): Promise<void> {
   console.log(`Password set for user "${username}".`);
 }
 
-main().catch(err => {
-  console.error('Setting the password failed:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Setting the password failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}
