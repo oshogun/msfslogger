@@ -1,15 +1,18 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { GhostLegRow } from '../components/PlannedLegRows';
+import { GhostLegRow, plannedLegBadge } from '../components/PlannedLegRows';
 import { apiFetch } from '../utils/api';
 import type {
   Flight,
   PlannedLegImportResponse,
   PlannedLegListItem,
+  PlannedLegStatus,
   SimbriefImportResponse,
   SimbriefImportResult,
   SimbriefSettings,
 } from '../types';
+
+const STATUS_FILTER_OPTIONS: PlannedLegStatus[] = ['planned', 'skipped', 'flown', 'diverted'];
 
 /**
  * The non-trip entry point: every planned leg (loose and trip-linked) in one
@@ -48,6 +51,12 @@ export function Prefiles() {
   const [linkFlightsError, setLinkFlightsError] = useState('');
   const [linkBusyLegId, setLinkBusyLegId] = useState<number | null>(null);
   const [linkErrorByLeg, setLinkErrorByLeg] = useState<Record<number, string>>({});
+
+  // List filters: derived-only, never mutate `legs` and never touched by any
+  // of the handlers above, which all keep operating on a leg by its real id.
+  const [statusFilter, setStatusFilter] = useState<'all' | PlannedLegStatus>('all');
+  const [tripFilter, setTripFilter] = useState<'all' | 'none' | number>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadLegs = useCallback(async () => {
     try {
@@ -226,6 +235,36 @@ export function Prefiles() {
   const simbriefImportDisabled =
     simbriefSettingsLoading || simbriefSaving || simbriefImporting || simbriefIdDirty || simbriefSaved == null;
 
+  // Every distinct trip actually present among the currently loaded legs, not
+  // a separate fetch of all trips — a trip with no legs left in this list
+  // (e.g. every leg in it has flown and dropped off) has no reason to show up
+  // as a filter option.
+  const tripOptions = useMemo(() => {
+    if (!legs) return [];
+    const byId = new Map<number, string>();
+    for (const leg of legs) {
+      if (leg.trip_id !== null) byId.set(leg.trip_id, leg.trip_name ?? `Trip #${leg.trip_id}`);
+    }
+    return Array.from(byId.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [legs]);
+
+  const filteredLegs = useMemo(() => {
+    if (!legs) return null;
+    const query = searchQuery.trim().toLowerCase();
+    return legs.filter(leg => {
+      if (statusFilter !== 'all' && leg.status !== statusFilter) return false;
+      if (tripFilter === 'none' && leg.trip_id !== null) return false;
+      if (typeof tripFilter === 'number' && leg.trip_id !== tripFilter) return false;
+      if (query) {
+        const haystack = [leg.departure_ident, leg.destination_ident, leg.aircraft_type ?? '']
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      return true;
+    });
+  }, [legs, statusFilter, tripFilter, searchQuery]);
+
   return (
     <main className="container" id="prefiles">
       <h2 className="flight-title">Prefiles</h2>
@@ -314,12 +353,59 @@ export function Prefiles() {
       <div className="legs-section">
         <div className="section-title">Planned legs</div>
         {loadError && <p className="edit-error">Failed to load planned legs: {loadError}</p>}
+        {legs !== null && legs.length > 0 && (
+          <div className="flight-plan-upload" style={{ flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+            <label htmlFor="prefiles-status-filter" className="simbrief-id-label">Status</label>
+            <select
+              id="prefiles-status-filter"
+              className="simbrief-id-input"
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value as 'all' | PlannedLegStatus)}
+            >
+              <option value="all">All</option>
+              {STATUS_FILTER_OPTIONS.map(status => (
+                <option key={status} value={status}>{plannedLegBadge(status).label}</option>
+              ))}
+            </select>
+
+            <label htmlFor="prefiles-trip-filter" className="simbrief-id-label">Trip</label>
+            <select
+              id="prefiles-trip-filter"
+              className="simbrief-id-input"
+              value={tripFilter === 'all' || tripFilter === 'none' ? tripFilter : String(tripFilter)}
+              onChange={e => {
+                const v = e.target.value;
+                setTripFilter(v === 'all' || v === 'none' ? v : Number(v));
+              }}
+            >
+              <option value="all">All trips</option>
+              <option value="none">No trip</option>
+              {tripOptions.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </select>
+
+            <label htmlFor="prefiles-search-filter" className="simbrief-id-label">Search</label>
+            <input
+              id="prefiles-search-filter"
+              type="text"
+              className="simbrief-id-input"
+              placeholder="Departure, destination, aircraft…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+          </div>
+        )}
         {legs === null ? (
           !loadError && <p style={{ color: '#4b5563' }}>Loading...</p>
         ) : legs.length === 0 ? (
           <div className="empty-state">
             <p>No planned legs yet.</p>
             <p>Import a .lnmpln file or a SimBrief plan above to prefile one.</p>
+          </div>
+        ) : filteredLegs !== null && filteredLegs.length === 0 ? (
+          <div className="empty-state">
+            <p>No planned legs match these filters.</p>
           </div>
         ) : (
           <div className="legs-table-wrap">
@@ -337,7 +423,7 @@ export function Prefiles() {
                 </tr>
               </thead>
               <tbody>
-                {legs.map(leg => {
+                {(filteredLegs ?? []).map(leg => {
                   const pickerOpen = linkingLegId === leg.id;
                   return (
                     <Fragment key={leg.id}>
