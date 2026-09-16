@@ -17,6 +17,20 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.min(Math.max(v, lo), hi);
 }
 
+// Page numbers to render around the current page: first, last, current ± 1
+// neighbour, with '…' filling any gap — keeps the strip a fixed width
+// regardless of how many pages the trip's leg list has.
+function pageNumbers(page: number, pageCount: number): (number | '…')[] {
+  const pages = new Set<number>([1, pageCount, page, page - 1, page + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= pageCount).sort((a, b) => a - b);
+  const result: (number | '…')[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push('…');
+    result.push(sorted[i]);
+  }
+  return result;
+}
+
 export function TripDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -710,7 +724,7 @@ export function TripDetail() {
           >{simbriefSaving ? 'Saving…' : 'Save'}</button>
         </div>
         {simbriefSettingsError && <span className="edit-error">{simbriefSettingsError}</span>}
-        <div className="flight-plan-upload">
+        <div className="flight-plan-upload simbrief-import-actions">
           <button
             type="button"
             className="btn btn-primary"
@@ -910,11 +924,26 @@ export function TripDetail() {
         </div>
         {mergedRows.length > LEGS_PER_PAGE && (
           <div className="legs-pagination">
-            <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>
+            <div className="legs-pagination-controls">
+              <button className="btn btn-ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>
+              {pageNumbers(page, pageCount).map((p, i) =>
+                p === '…' ? (
+                  <span key={`ellipsis-${i}`} className="legs-pagination-ellipsis">…</span>
+                ) : (
+                  <button
+                    key={p}
+                    className={`btn btn-ghost legs-pagination-page${p === page ? ' active' : ''}`}
+                    aria-current={p === page ? 'page' : undefined}
+                    disabled={p === page}
+                    onClick={() => setPage(p)}
+                  >{p}</button>
+                )
+              )}
+              <button className="btn btn-ghost" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</button>
+            </div>
             <span>
               Page {page} of {pageCount} · legs {(page - 1) * LEGS_PER_PAGE + 1}–{Math.min(page * LEGS_PER_PAGE, mergedRows.length)} of {mergedRows.length}
             </span>
-            <button className="btn btn-ghost" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</button>
           </div>
         )}
       </div>
