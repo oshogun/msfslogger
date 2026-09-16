@@ -17,25 +17,40 @@ import {
   ACARS_DIRECTIONS,
   CANNED_MESSAGES,
   CLIENT_DIRECTION,
+  DEFAULT_POSITION_REPORT_INTERVAL_MIN,
   DISPATCH_RELEASE_LABEL,
   KNOWN_ACARS_CATEGORIES,
   LOADSHEET_LABEL,
   LOADSHEET_REQUEST_LABEL,
   MAX_ACARS_BODY_LENGTH,
   MAX_ROUTE_BODY_CHARS,
+  MIN_ETA_GROUND_SPEED_KTS,
+  MIN_POSITION_REPORT_INTERVAL_MIN,
   NO_DISPATCH_DATA_MESSAGE,
+  POSITION_REPORT_LABEL,
   buildDispatchPayload,
   buildDispatchReleaseBody,
   buildLoadsheetFigures,
   buildLoadsheetReplyBody,
   buildLoadsheetRequestBody,
+  buildOooiBody,
+  buildOooiMessage,
+  buildOooiPayload,
+  buildPositionReportBody,
+  buildPositionReportMessage,
+  buildPositionReportPayload,
+  type OooiEventInput,
+  type PositionReportInput,
   cannedMessageIdList,
   clampRoute,
   dispatchDedupKey,
+  estimateEnrouteSec,
   field,
   findCannedMessage,
   findCannedMessageByBody,
+  formatLatLon,
   hhmm,
+  hhmmz,
   isAcarsDirection,
   isKnownAcarsCategory,
   isValidAcarsCategory,
@@ -43,7 +58,11 @@ import {
   loadsheetReplyDedupKey,
   loadsheetRequestDedupKey,
   normaliseCannedBody,
+  oooiDedupKey,
+  oooiEstimatedReason,
   parseDispatchPayload,
+  parsePositionReportIntervalMs,
+  positionReportDedupKey,
   qty,
   unitText,
   validateAcarsBody,
@@ -715,5 +734,338 @@ describe('LoadsheetFigures shape sanity', () => {
     // and the request/reply endpoint's response both carry.
     const sheet: LoadsheetFigures = buildLoadsheetFigures(realDispatchPayload());
     expect(JSON.parse(JSON.stringify(sheet))).toEqual(sheet);
+  });
+});
+
+// ── OOOI events + position reports ──────────────────────────────────────────
+//
+// Server-generated: FlightManager builds these from in-memory state and files
+// them through src/acarsEvents.ts. Every function under test here is pure —
+// no clock, no database — and `at` is always the caller's literal ISO string.
+
+function baseOooiInput(over: Partial<OooiEventInput> = {}): OooiEventInput {
+  return {
+    flightId: 12,
+    event: 'OUT',
+    at: '2026-09-16T14:32:07.000Z',
+    airportIcao: 'KSBA',
+    stand: 'A4',
+    aircraft: 'Airbus A320neo',
+    destinationIdent: 'KLAX',
+    plannedLegId: 34,
+    estimated: false,
+    ...over,
+  };
+}
+
+function basePositionReportInput(over: Partial<PositionReportInput> = {}): PositionReportInput {
+  return {
+    flightId: 12,
+    windowIndex: 1,
+    at: '2026-09-16T14:32:07.000Z',
+    lat: 34.426201,
+    lon: -119.841507,
+    altitudeFt: 33000,
+    groundSpeedKnots: 200,
+    headingDeg: 98,
+    nextWaypointIdent: 'RZS',
+    destinationIdent: 'KLAX',
+    remainingDistanceNm: 100,
+    plannedLegId: 34,
+    ...over,
+  };
+}
+
+describe('oooiDedupKey', () => {
+  it('builds the frozen formula for all four events', () => {
+    expect(oooiDedupKey(12, 'OUT')).toBe('oooi:flight:12:OUT');
+    expect(oooiDedupKey(12, 'OFF')).toBe('oooi:flight:12:OFF');
+    expect(oooiDedupKey(12, 'ON')).toBe('oooi:flight:12:ON');
+    expect(oooiDedupKey(12, 'IN')).toBe('oooi:flight:12:IN');
+  });
+
+  it('never collides across flights or events', () => {
+    expect(oooiDedupKey(1, 'OUT')).not.toBe(oooiDedupKey(2, 'OUT'));
+    expect(oooiDedupKey(12, 'OUT')).not.toBe(oooiDedupKey(12, 'OFF'));
+    expect(oooiDedupKey(12, 'ON')).not.toBe(oooiDedupKey(12, 'IN'));
+  });
+});
+
+describe('positionReportDedupKey', () => {
+  it('builds the frozen formula, keyed on flight and window', () => {
+    expect(positionReportDedupKey(12, 1)).toBe('position-report:flight:12:1');
+    expect(positionReportDedupKey(12, 7)).toBe('position-report:flight:12:7');
+  });
+
+  it('never collides across flights or windows', () => {
+    expect(positionReportDedupKey(1, 1)).not.toBe(positionReportDedupKey(2, 1));
+    expect(positionReportDedupKey(12, 1)).not.toBe(positionReportDedupKey(12, 2));
+  });
+});
+
+describe('oooiEstimatedReason', () => {
+  it('is total, with the frozen wording for all four events', () => {
+    expect(oooiEstimatedReason('OUT')).toBe('NO GROUND SESSION, TIME TAKEN AT TAKEOFF');
+    expect(oooiEstimatedReason('ON')).toBe('NO TOUCHDOWN DETECTED, TIME TAKEN AT FLIGHT END');
+    expect(oooiEstimatedReason('OFF')).toBe('TIME APPROXIMATE');
+    expect(oooiEstimatedReason('IN')).toBe('TIME APPROXIMATE');
+  });
+});
+
+describe('hhmmz', () => {
+  it('renders midnight', () => {
+    expect(hhmmz('2026-09-16T00:00:00.000Z')).toBe('0000Z');
+  });
+
+  it('zero-pads a value under ten', () => {
+    expect(hhmmz('2026-09-16T05:03:00.000Z')).toBe('0503Z');
+  });
+
+  it('falls back to dashes for an unparseable string', () => {
+    expect(hhmmz('not a date')).toBe('----Z');
+  });
+});
+
+describe('buildOooiBody', () => {
+  it('renders OUT with a known stand and destination', () => {
+    expect(buildOooiBody(baseOooiInput())).toBe(
+      'OUT KSBA 1432Z\nACFT Airbus A320neo STAND A4 DEST KLAX',
+    );
+  });
+
+  it('omits STAND and DEST when neither is known', () => {
+    expect(buildOooiBody(baseOooiInput({ stand: null, destinationIdent: null }))).toBe(
+      'OUT KSBA 1432Z\nACFT Airbus A320neo',
+    );
+  });
+
+  it('renders ---- for an unresolved airport and appends the OUT estimated reason', () => {
+    const body = buildOooiBody(baseOooiInput({
+      airportIcao: null, stand: null, destinationIdent: null, estimated: true,
+    }));
+    expect(body).toBe(
+      'OUT ---- 1432Z\nACFT Airbus A320neo\nOUT TIME ESTIMATED - NO GROUND SESSION, TIME TAKEN AT TAKEOFF',
+    );
+  });
+
+  it('appends the ON estimated reason for a fallback ON', () => {
+    const body = buildOooiBody(baseOooiInput({ event: 'ON', stand: null, estimated: true }));
+    expect(body.split('\n')).toHaveLength(3);
+    expect(body.split('\n')[2]).toBe('ON TIME ESTIMATED - NO TOUCHDOWN DETECTED, TIME TAKEN AT FLIGHT END');
+  });
+
+  it('renders IN with a destination and no stand', () => {
+    const body = buildOooiBody(baseOooiInput({
+      event: 'IN', at: '2026-09-16T15:19:00.000Z', airportIcao: 'KLAX', stand: null,
+    }));
+    expect(body).toBe('IN KLAX 1519Z\nACFT Airbus A320neo DEST KLAX');
+  });
+
+  it('never appends a third line when not estimated', () => {
+    expect(buildOooiBody(baseOooiInput({ estimated: false })).split('\n')).toHaveLength(2);
+  });
+
+  it('falls back to UNKNOWN for a missing aircraft', () => {
+    const body = buildOooiBody(baseOooiInput({ aircraft: null, stand: null, destinationIdent: null }));
+    expect(body.split('\n')[1]).toBe('ACFT UNKNOWN');
+  });
+});
+
+describe('buildOooiPayload', () => {
+  it('is the straight field mapping, v=1', () => {
+    expect(buildOooiPayload(baseOooiInput())).toEqual({
+      v: 1,
+      event: 'OUT',
+      at: '2026-09-16T14:32:07.000Z',
+      airport_icao: 'KSBA',
+      stand: 'A4',
+      estimated: false,
+      planned_leg_id: 34,
+    });
+  });
+
+  it('carries nulls through for an unresolved, unlinked, estimated event', () => {
+    const payload = buildOooiPayload(baseOooiInput({
+      airportIcao: null, stand: null, destinationIdent: null, plannedLegId: null, estimated: true,
+    }));
+    expect(payload.airport_icao).toBeNull();
+    expect(payload.stand).toBeNull();
+    expect(payload.planned_leg_id).toBeNull();
+    expect(payload.estimated).toBe(true);
+  });
+});
+
+describe('buildOooiMessage', () => {
+  it('builds the whole row, flight-scoped with no planned_leg_id column set', () => {
+    const msg = buildOooiMessage(baseOooiInput());
+    expect(msg.flight_id).toBe(12);
+    expect(msg.planned_leg_id).toBeUndefined();
+    expect(msg.direction).toBe('downlink');
+    expect(msg.category).toBe('oooi');
+    expect(msg.label).toBe('OUT');
+    expect(msg.dedup_key).toBe('oooi:flight:12:OUT');
+    expect(msg.sent_at).toBe('2026-09-16T14:32:07.000Z');
+    expect(msg.body).toBe(buildOooiBody(baseOooiInput()));
+    expect(JSON.parse(msg.payload_json as string)).toEqual(buildOooiPayload(baseOooiInput()));
+  });
+
+  it('labels and keys each event with its own word', () => {
+    for (const event of ['OUT', 'OFF', 'ON', 'IN'] as const) {
+      const msg = buildOooiMessage(baseOooiInput({ event }));
+      expect(msg.label).toBe(event);
+      expect(msg.dedup_key).toBe(`oooi:flight:12:${event}`);
+    }
+  });
+});
+
+describe('formatLatLon', () => {
+  it('renders the sample position', () => {
+    expect(formatLatLon(34.426201, -119.841507)).toBe('N3425.6 W11950.5');
+  });
+
+  it('renders a negative latitude near zero as S, not N', () => {
+    expect(formatLatLon(-0.0004, 0)).toBe('S0000.0 E00000.0');
+  });
+
+  it('carries longitude minutes past the antimeridian rather than special-casing it', () => {
+    expect(formatLatLon(0, 179.9999)).toBe('N0000.0 E18000.0');
+  });
+
+  it('carries when minutes round to 60', () => {
+    expect(formatLatLon(10.9995, 0)).toBe('N1100.0 E00000.0');
+  });
+
+  it('renders exactly 0 and -0 the same, as N/E', () => {
+    expect(formatLatLon(0, 0)).toBe('N0000.0 E00000.0');
+    expect(formatLatLon(-0, -0)).toBe('N0000.0 E00000.0');
+  });
+});
+
+describe('estimateEnrouteSec', () => {
+  it('MIN_ETA_GROUND_SPEED_KTS is 30', () => {
+    expect(MIN_ETA_GROUND_SPEED_KTS).toBe(30);
+  });
+
+  it('computes seconds to destination at a normal cruise speed', () => {
+    expect(estimateEnrouteSec(100, 200)).toBe(1800); // 0.5 h
+  });
+
+  it('is null strictly below the ground-speed floor', () => {
+    expect(estimateEnrouteSec(100, 29.999)).toBeNull();
+    expect(estimateEnrouteSec(100, 0)).toBeNull();
+  });
+
+  it('is null for a non-finite ground speed', () => {
+    expect(estimateEnrouteSec(100, NaN)).toBeNull();
+    expect(estimateEnrouteSec(100, Infinity)).toBeNull();
+  });
+
+  it('is null for a negative or non-finite remaining distance', () => {
+    expect(estimateEnrouteSec(-1, 200)).toBeNull();
+    expect(estimateEnrouteSec(NaN, 200)).toBeNull();
+  });
+});
+
+describe('buildPositionReportBody', () => {
+  it('renders the normal five-line body', () => {
+    const body = buildPositionReportBody(basePositionReportInput());
+    expect(body).toBe([
+      'POSITION REPORT',
+      'N3425.6 W11950.5 1432Z',
+      'FL330 GS 200 HDG 098',
+      'NEXT RZS DEST KLAX 100.0 NM',
+      'ETE 0030 ETA 1502Z',
+    ].join('\n'));
+  });
+
+  it('renders ETE ---- ETA ----Z at zero ground speed, matching a below-transition altitude', () => {
+    const body = buildPositionReportBody(basePositionReportInput({
+      lat: 35.0, lon: -120.0, altitudeFt: 900, groundSpeedKnots: 0, headingDeg: 0,
+      nextWaypointIdent: 'WPT', destinationIdent: 'KSBA', remainingDistanceNm: 0,
+    }));
+    expect(body).toBe([
+      'POSITION REPORT',
+      'N3500.0 W12000.0 1432Z',
+      '900FT GS 0 HDG 000',
+      'NEXT WPT DEST KSBA 0.0 NM',
+      'ETE ---- ETA ----Z',
+    ].join('\n'));
+  });
+});
+
+describe('buildPositionReportPayload', () => {
+  it('is the straight field mapping, with the derived ETE/ETA pair', () => {
+    const payload = buildPositionReportPayload(basePositionReportInput());
+    expect(payload).toEqual({
+      v: 1,
+      at: '2026-09-16T14:32:07.000Z',
+      window: 1,
+      lat: 34.426201,
+      lon: -119.841507,
+      altitude_ft: 33000,
+      groundspeed_kts: 200,
+      heading_deg: 98,
+      next_waypoint: 'RZS',
+      destination: 'KLAX',
+      remaining_nm: 100,
+      ete_sec: 1800,
+      eta: '2026-09-16T15:02:07.000Z',
+      planned_leg_id: 34,
+    });
+  });
+
+  it('leaves ete_sec and eta null together when no ETA can be estimated', () => {
+    const payload = buildPositionReportPayload(basePositionReportInput({ groundSpeedKnots: 0 }));
+    expect(payload.ete_sec).toBeNull();
+    expect(payload.eta).toBeNull();
+  });
+});
+
+describe('buildPositionReportMessage', () => {
+  it('builds the whole row, flight-scoped with no planned_leg_id column set', () => {
+    const msg = buildPositionReportMessage(basePositionReportInput());
+    expect(msg.flight_id).toBe(12);
+    expect(msg.planned_leg_id).toBeUndefined();
+    expect(msg.direction).toBe('downlink');
+    expect(msg.category).toBe('position-report');
+    expect(msg.label).toBe(POSITION_REPORT_LABEL);
+    expect(msg.dedup_key).toBe('position-report:flight:12:1');
+    expect(msg.sent_at).toBe('2026-09-16T14:32:07.000Z');
+    expect(msg.body).toBe(buildPositionReportBody(basePositionReportInput()));
+    expect(JSON.parse(msg.payload_json as string)).toEqual(buildPositionReportPayload(basePositionReportInput()));
+  });
+});
+
+describe('parsePositionReportIntervalMs', () => {
+  it('DEFAULT_POSITION_REPORT_INTERVAL_MIN is 10, MIN_POSITION_REPORT_INTERVAL_MIN is 0.5', () => {
+    expect(DEFAULT_POSITION_REPORT_INTERVAL_MIN).toBe(10);
+    expect(MIN_POSITION_REPORT_INTERVAL_MIN).toBe(0.5);
+  });
+
+  it('defaults to 600000 ms when unset, empty, or blank', () => {
+    expect(parsePositionReportIntervalMs(undefined)).toBe(600_000);
+    expect(parsePositionReportIntervalMs('')).toBe(600_000);
+    expect(parsePositionReportIntervalMs('  ')).toBe(600_000);
+  });
+
+  it('parses a plain number of minutes to milliseconds', () => {
+    expect(parsePositionReportIntervalMs('10')).toBe(600_000);
+    expect(parsePositionReportIntervalMs('2.5')).toBe(150_000);
+  });
+
+  it('0 disables reporting', () => {
+    expect(parsePositionReportIntervalMs('0')).toBe(0);
+  });
+
+  it('defaults on a negative value rather than treating it as an opt-out', () => {
+    expect(parsePositionReportIntervalMs('-5')).toBe(600_000);
+  });
+
+  it('floors a small positive value at 30 seconds', () => {
+    expect(parsePositionReportIntervalMs('0.1')).toBe(30_000);
+  });
+
+  it('defaults on an unparseable value', () => {
+    expect(parsePositionReportIntervalMs('abc')).toBe(600_000);
   });
 });

@@ -23,6 +23,7 @@ import { dbMock, airportsMock, resetMocks, makeFrame, T0, useFakeClock, useRealC
 // src/flightManager.ts's './db' does.
 vi.mock('../src/db', async () => (await import('./helpers')).dbMock);
 vi.mock('../src/airports', async () => (await import('./helpers')).airportsMock);
+vi.mock('../src/acarsEvents', async () => (await import('./helpers')).acarsEventsMock);
 
 import { FlightManager } from '../src/flightManager';
 
@@ -235,17 +236,18 @@ describe('FlightManager — state machine', () => {
     expect(dbMock.insertFlight).toHaveBeenCalledTimes(2);
   });
 
-  // ── findNearestAirport is called exactly twice per flight: once in
-  // startFlight, once in endFlight, never on the frame path. A regression
-  // that moved it into recordPoint would show here.
+  // ── findNearestAirport is called exactly three times per flight: once in
+  // startFlight, once for the OOOI touchdown event, once in endFlight, never
+  // on the frame path more than that. A regression that moved it into
+  // recordPoint would show here.
 
-  it('resolves the nearest airport exactly twice per flight', () => {
+  it('resolves the nearest airport exactly three times per flight', () => {
     airportsMock.findNearestAirport.mockReturnValue({ icao: 'KSBA', name: 'Santa Barbara Muni' });
     const fm = new FlightManager();
     takeoff(fm);
     feed(fm, LANDED_DEBOUNCE_FRAMES, LANDED);
 
-    expect(airportsMock.findNearestAirport).toHaveBeenCalledTimes(2);
+    expect(airportsMock.findNearestAirport).toHaveBeenCalledTimes(3);
     expect(dbMock.insertFlight).toHaveBeenCalledWith('Cessna 172', 34.426201, -119.841507, T0, 'KSBA', 'Santa Barbara Muni');
     const close = dbMock.closeFlight.mock.calls[0];
     expect(close[9]).toBe('KSBA');

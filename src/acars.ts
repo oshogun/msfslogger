@@ -6,7 +6,10 @@
  * src/routes/acars.ts; neither vocabulary is duplicated there.
  */
 
-import type { AcarsDirection, CannedAcarsMessage, DispatchPayload, LoadsheetFigures } from './types';
+import type {
+  AcarsDirection, CannedAcarsMessage, CreateAcarsMessage, DispatchPayload, LoadsheetFigures,
+  OooiEvent, OooiPayload, PositionReportPayload,
+} from './types';
 import type { ParsedSimbriefPlan } from './simbrief';
 
 /** The two directions the codebase knows. The column itself has no CHECK. */
@@ -441,4 +444,221 @@ export function buildWxReplyBody(metar: string, taf: string | null): string {
 /** 'WX DATA UNAVAILABLE FOR ZZZZ' — the one definition of this literal string. */
 export function buildWxUnavailableBody(icao: string): string {
   return `WX DATA UNAVAILABLE FOR ${icao}`;
+}
+
+// ── OOOI events ───────────────────────────────────────────────────────────────
+//
+// OUT/OFF/ON/IN: server-generated, one per flight, keyed to a flight rather
+// than a planned leg — a flight row always exists by the time any of these
+// is filed, even though OUT is timestamped to an earlier instant (the
+// off-blocks memo). Every function here is pure; the emitter (FlightManager,
+// via src/acarsEvents.ts) owns the clock and the database.
+
+export const POSITION_REPORT_LABEL = 'POS REPORT';
+export const MIN_ETA_GROUND_SPEED_KTS = 30;
+export const DEFAULT_POSITION_REPORT_INTERVAL_MIN = 10;
+export const MIN_POSITION_REPORT_INTERVAL_MIN = 0.5;
+
+export interface OooiEventInput {
+  flightId: number;
+  event: OooiEvent;
+  /** ISO 8601 UTC; becomes sent_at and the HHMMZ in the body. */
+  at: string;
+  /** Station ICAO, or null when no airport resolved within range. */
+  airportIcao: string | null;
+  /** Stand/gate from the ground session; null everywhere else. */
+  stand: string | null;
+  /** frame.aircraft, or null. */
+  aircraft: string | null;
+  /** plannedLegCache.destinationIdent, or null when the flight is unlinked. */
+  destinationIdent: string | null;
+  /** Recorded in payload_json only; the row stays flight-scoped. */
+  plannedLegId: number | null;
+  /** True when `at` is not the instant the event name describes. */
+  estimated: boolean;
+}
+
+/** 'oooi:flight:12:OUT'. */
+export function oooiDedupKey(flightId: number, event: OooiEvent): string {
+  return `oooi:flight:${flightId}:${event}`;
+}
+
+/** The frozen wording of the third body line. Total: defined for all four. */
+export function oooiEstimatedReason(event: OooiEvent): string {
+  switch (event) {
+    case 'OUT': return 'NO GROUND SESSION, TIME TAKEN AT TAKEOFF';
+    case 'ON': return 'NO TOUCHDOWN DETECTED, TIME TAKEN AT FLIGHT END';
+    case 'OFF':
+    case 'IN':
+      return 'TIME APPROXIMATE';
+  }
+}
+
+/** '<HHMM>Z' UTC from an ISO instant; '----Z' for an unparseable string. */
+export function hhmmz(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return '----Z';
+  const d = new Date(ms);
+  return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}Z`;
+}
+
+/** The two- or three-line OOOI body. */
+export function buildOooiBody(input: OooiEventInput): string {
+  const lines = [
+    `${input.event} ${input.airportIcao ?? '----'} ${hhmmz(input.at)}`,
+    `ACFT ${input.aircraft ?? 'UNKNOWN'}` +
+      (input.stand !== null ? ` STAND ${input.stand}` : '') +
+      (input.destinationIdent !== null ? ` DEST ${input.destinationIdent}` : ''),
+  ];
+  if (input.estimated) {
+    lines.push(`${input.event} TIME ESTIMATED - ${oooiEstimatedReason(input.event)}`);
+  }
+  return lines.join('\n');
+}
+
+/** The payload_json twin. */
+export function buildOooiPayload(input: OooiEventInput): OooiPayload {
+  return {
+    v: 1,
+    event: input.event,
+    at: input.at,
+    airport_icao: input.airportIcao,
+    stand: input.stand,
+    estimated: input.estimated,
+    planned_leg_id: input.plannedLegId,
+  };
+}
+
+/** The whole row, ready for insertAcarsMessageOnce(). */
+export function buildOooiMessage(input: OooiEventInput): CreateAcarsMessage & { dedup_key: string } {
+  return {
+    flight_id: input.flightId,
+    direction: 'downlink',
+    category: 'oooi',
+    label: input.event,
+    body: buildOooiBody(input),
+    payload_json: JSON.stringify(buildOooiPayload(input)),
+    dedup_key: oooiDedupKey(input.flightId, input.event),
+    sent_at: input.at,
+  };
+}
+
+// ── Position reports ─────────────────────────────────────────────────────────
+//
+// Periodic enroute reports, filed only for a flight linked to a planned leg,
+// at most once per configured interval window (FlightManager owns the window
+// arithmetic and the clock; everything here is pure).
+
+export interface PositionReportInput {
+  flightId: number;
+  /** The interval window this report belongs to; >= 1. */
+  windowIndex: number;
+  /** ISO 8601 UTC — the recorded point's own ts. Becomes sent_at. */
+  at: string;
+  lat: number;
+  lon: number;
+  altitudeFt: number;
+  groundSpeedKnots: number;
+  headingDeg: number;
+  /** From getPlannedLegStatus(). */
+  nextWaypointIdent: string;
+  destinationIdent: string;
+  remainingDistanceNm: number;
+  plannedLegId: number;
+}
+
+/** 'position-report:flight:12:3'. */
+export function positionReportDedupKey(flightId: number, windowIndex: number): string {
+  return `position-report:flight:${flightId}:${windowIndex}`;
+}
+
+/** 'N3425.6 W11950.5'. */
+export function formatLatLon(lat: number, lon: number): string {
+  const part = (v: number, digits: number, pos: string, neg: string): string => {
+    const hemi = v >= 0 ? pos : neg;
+    const abs = Math.abs(v);
+    let deg = Math.floor(abs);
+    let min = Math.round((abs - deg) * 600) / 10;
+    if (min >= 60) { deg += 1; min = 0; }
+    return `${hemi}${String(deg).padStart(digits, '0')}${min.toFixed(1).padStart(4, '0')}`;
+  };
+  return `${part(lat, 2, 'N', 'S')} ${part(lon, 3, 'E', 'W')}`;
+}
+
+/** Seconds to destination, or null at/below MIN_ETA_GROUND_SPEED_KTS. */
+export function estimateEnrouteSec(remainingNm: number, gsKts: number): number | null {
+  if (!Number.isFinite(remainingNm) || remainingNm < 0) return null;
+  if (!Number.isFinite(gsKts) || gsKts < MIN_ETA_GROUND_SPEED_KTS) return null;
+  return Math.round((remainingNm / gsKts) * 3600);
+}
+
+/** The five-line body. */
+export function buildPositionReportBody(input: PositionReportInput): string {
+  const eteSec = estimateEnrouteSec(input.remainingDistanceNm, input.groundSpeedKnots);
+  const etaIso = eteSec !== null ? new Date(Date.parse(input.at) + eteSec * 1000).toISOString() : null;
+  const gs = Math.round(input.groundSpeedKnots);
+  const hdg = String(Math.round(input.headingDeg)).padStart(3, '0');
+  const lines = [
+    'POSITION REPORT',
+    `${formatLatLon(input.lat, input.lon)} ${hhmmz(input.at)}`,
+    `${levelText(input.altitudeFt)} GS ${gs} HDG ${hdg}`,
+    `NEXT ${input.nextWaypointIdent} DEST ${input.destinationIdent} ${input.remainingDistanceNm.toFixed(1)} NM`,
+    `ETE ${hhmm(eteSec)} ETA ${etaIso !== null ? hhmmz(etaIso) : '----Z'}`,
+  ];
+  return lines.join('\n');
+}
+
+/** The payload_json twin. */
+export function buildPositionReportPayload(input: PositionReportInput): PositionReportPayload {
+  const eteSec = estimateEnrouteSec(input.remainingDistanceNm, input.groundSpeedKnots);
+  const eta = eteSec !== null ? new Date(Date.parse(input.at) + eteSec * 1000).toISOString() : null;
+  return {
+    v: 1,
+    at: input.at,
+    window: input.windowIndex,
+    lat: input.lat,
+    lon: input.lon,
+    altitude_ft: input.altitudeFt,
+    groundspeed_kts: input.groundSpeedKnots,
+    heading_deg: input.headingDeg,
+    next_waypoint: input.nextWaypointIdent,
+    destination: input.destinationIdent,
+    remaining_nm: input.remainingDistanceNm,
+    ete_sec: eteSec,
+    eta,
+    planned_leg_id: input.plannedLegId,
+  };
+}
+
+/** The whole row, ready for insertAcarsMessageOnce(). */
+export function buildPositionReportMessage(input: PositionReportInput): CreateAcarsMessage & { dedup_key: string } {
+  return {
+    flight_id: input.flightId,
+    direction: 'downlink',
+    category: 'position-report',
+    label: POSITION_REPORT_LABEL,
+    body: buildPositionReportBody(input),
+    payload_json: JSON.stringify(buildPositionReportPayload(input)),
+    dedup_key: positionReportDedupKey(input.flightId, input.windowIndex),
+    sent_at: input.at,
+  };
+}
+
+/**
+ * Minutes -> ms. Order matters: `Number('')` is `0`, which would otherwise
+ * read as "disabled" rather than "unset" — so the empty/blank case is
+ * resolved before the numeric ones. `0` itself means disabled; a negative
+ * value is treated as a typo and falls back to the default rather than
+ * being read as an opt-out.
+ */
+export function parsePositionReportIntervalMs(raw: string | undefined): number {
+  const DEFAULT_MS = DEFAULT_POSITION_REPORT_INTERVAL_MIN * 60_000;
+  const s = String(raw ?? '').trim();
+  if (s === '') return DEFAULT_MS;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return DEFAULT_MS;
+  if (n === 0) return 0;
+  if (n < 0) return DEFAULT_MS;
+  if (n < MIN_POSITION_REPORT_INTERVAL_MIN) return 30_000;
+  return Math.round(n * 60_000);
 }

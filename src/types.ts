@@ -396,6 +396,48 @@ export interface AcarsThread {
   messages: AcarsMessage[];
 }
 
+/** The four OOOI events, in the order a normal flight fires them. */
+export type OooiEvent = 'OUT' | 'OFF' | 'ON' | 'IN';
+
+/**
+ * The machine-readable twin of an OOOI message's body, stored as that
+ * message's payload_json. `planned_leg_id` is recorded for reference only —
+ * the row itself is always flight-scoped (never leg-scoped), so nothing
+ * reads this back to decide where the message belongs.
+ */
+export interface OooiPayload {
+  v: 1;
+  event: OooiEvent;
+  /** ISO 8601 UTC instant; the same value as the message's sent_at. */
+  at: string;
+  airport_icao: string | null;
+  stand: string | null;
+  estimated: boolean;
+  planned_leg_id: number | null;
+}
+
+/**
+ * The machine-readable twin of a position report's body, stored as that
+ * message's payload_json. `ete_sec` and `eta` are null together when no ETA
+ * could be estimated.
+ */
+export interface PositionReportPayload {
+  v: 1;
+  at: string;
+  window: number;
+  lat: number;
+  lon: number;
+  altitude_ft: number;
+  groundspeed_kts: number;
+  heading_deg: number;
+  next_waypoint: string;
+  destination: string;
+  remaining_nm: number;
+  ete_sec: number | null;
+  eta: string | null;
+  planned_leg_id: number;
+}
+
 /** One entry of the fixed outgoing set. */
 export interface CannedAcarsMessage {
   /** Stable, lower-kebab. The only thing a client has to send. */

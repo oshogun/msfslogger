@@ -14,6 +14,8 @@ import { findNearestAirport } from './airports';
 import { matchPlannedLeg, DEPARTURE_RADIUS_NM, ARRIVAL_RADIUS_NM } from './legMatcher';
 import type { LegMatchResult } from './legMatcher';
 import { nextParkedStreak, hasParkedDebounce, hasLeftAnchor } from './groundState';
+import { buildOooiMessage, buildPositionReportMessage, parsePositionReportIntervalMs } from './acars';
+import { fileAcarsMessageOnce } from './acarsEvents';
 
 const RECORD_INTERVAL_MS = 5000;
 // A gap between points larger than this means recording had stopped, so the
@@ -22,6 +24,11 @@ const RECORD_INTERVAL_MS = 5000;
 export const MAX_COUNTED_GAP_MS = 60_000;
 const AIRBORNE_DEBOUNCE_FRAMES = 3;
 const LANDED_DEBOUNCE_FRAMES = 10;
+// Above GROUND_SPEED_MAX_KTS (a stand roll or a wind-pushed reading should not
+// read as a pushback) and below any real pushback or taxi speed. The first
+// frame at or above this while GROUND is the off-blocks memo used to
+// timestamp OUT — see the GROUND branch of onFrame().
+export const TAXI_OUT_SPEED_KTS = 3;
 
 function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 3440.065; // nautical miles
@@ -190,6 +197,18 @@ export class FlightManager {
   // memory — used to detect a teleport away from it (hasLeftAnchor).
   private groundAnchor: { lat: number; lon: number } | null = null;
   private groundSessionCache: GroundSessionLiveStatus | null = null;
+  // The instant the aircraft first moved under power while GROUND — the
+  // off-blocks memo used to timestamp OUT. Null until a taxi-speed frame is
+  // seen; reset whenever GROUND is (re-)entered or left.
+  private outBlocksAt: string | null = null;
+  // Set once ON has been filed for the current flight, from either the
+  // touchdown frame or the end-of-flight fallback — keeps whichever fires
+  // second from filing ON twice.
+  private onEventFiled = false;
+  // Resolved once per flight from POSITION_REPORT_INTERVAL_MIN; 0 disables
+  // position reports for this flight.
+  private positionReportIntervalMs = 0;
+  private lastPositionReportWindow = 0;
   private isPaused = false;
   private lastPointTime = 0;
   // Set whenever recording is skipped, so the following gap is known to be an
@@ -265,6 +284,9 @@ export class FlightManager {
           this.closeGroundSessionAndReturnToIdle('superseded');
           break;
         }
+        if (this.outBlocksAt === null && frame.onGround && frame.groundSpeedKnots >= TAXI_OUT_SPEED_KTS) {
+          this.outBlocksAt = new Date().toISOString();
+        }
         // Taxiing does not leave this state — only rotation (below) or one of
         // the two checks above does. The same airborne test as from IDLE.
         this.checkAirborneDebounce(frame, inSlew);
@@ -277,6 +299,8 @@ export class FlightManager {
         }
 
         this.recordPoint(frame);
+
+        if (frame.onGround && !this.onEventFiled) this.fileTouchdownOn(frame);
 
         if (frame.onGround && frame.groundSpeedKnots < 5) {
           this.landedStreak++;
@@ -428,6 +452,7 @@ export class FlightManager {
       this.groundAnchor = { lat: frame.lat, lon: frame.lon };
       this.groundSessionCache = buildGroundSessionCache(session);
       this.groundStreak = 0;
+      this.outBlocksAt = null;
       this.state = 'GROUND';
       this.appState.flightState = 'GROUND';
     } catch (err) {
@@ -520,8 +545,51 @@ export class FlightManager {
     this.groundAnchor = null;
     this.groundSessionCache = null;
     this.groundStreak = 0;
+    this.outBlocksAt = null;
     this.state = 'IDLE';
     this.appState.flightState = 'IDLE';
+  }
+
+  /**
+   * A plain `this.plannedLegCache?.x` read is fine almost everywhere, but not
+   * right after `this.plannedLegCache = null;` followed by a call to
+   * autoLinkPlannedLeg() (startFlight()'s own reset-then-relink sequence):
+   * TypeScript's control-flow narrowing there types a direct read as
+   * always-null, since it cannot see into the called method. Going through a
+   * separate method call breaks that stale narrowing instead of masking it
+   * with a cast.
+   */
+  private plannedLegRefs(): { destinationIdent: string | null; plannedLegId: number | null } {
+    return {
+      destinationIdent: this.plannedLegCache?.destinationIdent ?? null,
+      plannedLegId: this.plannedLegCache?.plannedLegId ?? null,
+    };
+  }
+
+  /**
+   * Fired at most once per flight, on the first frame back on the ground.
+   * The flag is set before anything else so a rollout that stays onGround
+   * for many frames still resolves the airport and files ON exactly once —
+   * the dedup key (src/acars.ts) is the backstop, not the mechanism.
+   */
+  private fileTouchdownOn(frame: SimFrame): void {
+    this.onEventFiled = true;
+    if (this.currentFlightId === null) return;
+
+    const at = new Date().toISOString();
+    const ap = findNearestAirport(frame.lat, frame.lon);
+    const msg = buildOooiMessage({
+      flightId: this.currentFlightId,
+      event: 'ON',
+      at,
+      airportIcao: ap?.icao ?? null,
+      stand: null,
+      aircraft: frame.aircraft,
+      destinationIdent: this.plannedLegCache?.destinationIdent ?? null,
+      plannedLegId: this.plannedLegCache?.plannedLegId ?? null,
+      estimated: false,
+    });
+    fileAcarsMessageOnce(msg, `Flight #${this.currentFlightId} ON`);
   }
 
   private startFlight(frame: SimFrame): void {
@@ -529,6 +597,14 @@ export class FlightManager {
     const dep = findNearestAirport(frame.lat, frame.lon);
     const id = insertFlight(frame.aircraft, frame.lat, frame.lon, startTime, dep?.icao ?? null, dep?.name ?? null);
     if (dep) console.log(`[FlightManager] Departure airport: ${dep.icao} (${dep.name})`);
+
+    // Captured before the ground session is closed and its cache nulled
+    // below, so OUT can still report the stand and airport the aircraft was
+    // parked at — the off-blocks memo itself (outAt) was set earlier still,
+    // on the GROUND branch of onFrame().
+    const outAirportIcao = this.groundSessionCache?.airportIcao ?? null;
+    const outStand = this.groundSessionCache?.parkingPosition ?? null;
+    const outAt = this.outBlocksAt;
 
     // Unconditional, whatever this.state was: a manual ground session may
     // exist with no agent ever having connected, so it is never known only
@@ -564,6 +640,41 @@ export class FlightManager {
 
     this.appState.flightState = 'FLYING';
     this.appState.currentFlightId = id;
+
+    this.onEventFiled = false;
+    this.positionReportIntervalMs = parsePositionReportIntervalMs(process.env.POSITION_REPORT_INTERVAL_MIN);
+    this.lastPositionReportWindow = 0;
+    if (this.positionReportIntervalMs > 0) {
+      console.log(`[FlightManager] Flight #${id} position reports every ${(this.positionReportIntervalMs / 60_000).toFixed(1)} min`);
+    } else {
+      console.log(`[FlightManager] Flight #${id} position reports disabled (POSITION_REPORT_INTERVAL_MIN=0)`);
+    }
+
+    const outEstimated = outAt === null;
+    const link = this.plannedLegRefs();
+    fileAcarsMessageOnce(buildOooiMessage({
+      flightId: id,
+      event: 'OUT',
+      at: outAt ?? startTime,
+      airportIcao: outAirportIcao,
+      stand: outStand,
+      aircraft: frame.aircraft,
+      destinationIdent: link.destinationIdent,
+      plannedLegId: link.plannedLegId,
+      estimated: outEstimated,
+    }), `Flight #${id} OUT`);
+    fileAcarsMessageOnce(buildOooiMessage({
+      flightId: id,
+      event: 'OFF',
+      at: startTime,
+      airportIcao: dep?.icao ?? null,
+      stand: null,
+      aircraft: frame.aircraft,
+      destinationIdent: link.destinationIdent,
+      plannedLegId: link.plannedLegId,
+      estimated: false,
+    }), `Flight #${id} OFF`);
+    this.outBlocksAt = null;
 
     console.log(`[FlightManager] Flight #${id} started — ${frame.aircraft}`);
 
@@ -606,6 +717,35 @@ export class FlightManager {
     );
 
     this.recordArrivalOnPlannedLeg(this.currentFlightId, frame);
+
+    // ON's fallback: only when no touchdown frame was ever seen (crash, sim
+    // exit or agent loss while airborne) — the touchdown path (fileTouchdownOn)
+    // already filed it. Either way IN follows immediately, sharing endTime.
+    if (!this.onEventFiled) {
+      fileAcarsMessageOnce(buildOooiMessage({
+        flightId: this.currentFlightId,
+        event: 'ON',
+        at: endTime,
+        airportIcao: arr?.icao ?? null,
+        stand: null,
+        aircraft: frame.aircraft,
+        destinationIdent: this.plannedLegCache?.destinationIdent ?? null,
+        plannedLegId: this.plannedLegCache?.plannedLegId ?? null,
+        estimated: true,
+      }), `Flight #${this.currentFlightId} ON`);
+      this.onEventFiled = true;
+    }
+    fileAcarsMessageOnce(buildOooiMessage({
+      flightId: this.currentFlightId,
+      event: 'IN',
+      at: endTime,
+      airportIcao: arr?.icao ?? null,
+      stand: null,
+      aircraft: frame.aircraft,
+      destinationIdent: this.plannedLegCache?.destinationIdent ?? null,
+      plannedLegId: this.plannedLegCache?.plannedLegId ?? null,
+      estimated: false,
+    }), `Flight #${this.currentFlightId} IN`);
 
     this.currentFlightId = null;
     this.plannedLegCache = null;
@@ -675,7 +815,9 @@ export class FlightManager {
    * Auto-match at takeoff — exactly once per flight, never from
    * onFrame/recordPoint/writePoint. The candidates are loaded here and the
    * matcher works on the legs' own stored coordinates, so
-   * findNearestAirport() stays at its two calls per flight and the frame path
+   * findNearestAirport() stays at its three calls per flight (departure in
+   * startFlight(), the ON station in fileTouchdownOn(), and arrival in
+   * endFlight() — OFF reuses startFlight()'s own `dep`) and the frame path
    * gains nothing at all.
    *
    * Everything is caught, deliberately and without rethrowing. insertFlight()
@@ -819,5 +961,46 @@ export class FlightManager {
     this.lastPointTime = now;
     this.pointCount++;
     this.interrupted = false;
+
+    this.maybeFilePositionReport(frame, now, ts);
+  }
+
+  /**
+   * Files a position report at most once per configured interval window, and
+   * only for a flight linked to a planned leg — an unlinked flight gets
+   * clean OOOI-only reporting, never a thrown error and never a log line.
+   * Wrapped in its own try/catch so nothing here, including a degenerate
+   * route from getPlannedLegStatus(), can interrupt point recording.
+   */
+  private maybeFilePositionReport(frame: SimFrame, nowMs: number, ts: string): void {
+    try {
+      if (this.currentFlightId === null) return;
+      if (this.positionReportIntervalMs <= 0) return;
+      if (this.plannedLegCache === null) return;
+
+      const windowIndex = Math.floor((nowMs - this.flightStartMs) / this.positionReportIntervalMs);
+      if (windowIndex < 1 || windowIndex <= this.lastPositionReportWindow) return;
+      this.lastPositionReportWindow = windowIndex;
+
+      const status = this.getPlannedLegStatus(frame.lat, frame.lon);
+      if (status === null) return;
+
+      fileAcarsMessageOnce(buildPositionReportMessage({
+        flightId: this.currentFlightId,
+        windowIndex,
+        at: ts,
+        lat: frame.lat,
+        lon: frame.lon,
+        altitudeFt: frame.altitudeFt,
+        groundSpeedKnots: frame.groundSpeedKnots,
+        headingDeg: frame.headingDeg,
+        nextWaypointIdent: status.nextWaypointIdent,
+        destinationIdent: status.destinationIdent,
+        remainingDistanceNm: status.remainingDistanceNm,
+        plannedLegId: status.plannedLegId,
+      }), `Flight #${this.currentFlightId} position report`);
+    } catch (err) {
+      console.warn('[FlightManager] Position report not filed:', err);
+    }
   }
 }

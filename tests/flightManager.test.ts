@@ -21,6 +21,7 @@ import { haversineNm } from '../src/geo';
 
 vi.mock('../src/db', async () => (await import('./helpers')).dbMock);
 vi.mock('../src/airports', async () => (await import('./helpers')).airportsMock);
+vi.mock('../src/acarsEvents', async () => (await import('./helpers')).acarsEventsMock);
 
 import { FlightManager } from '../src/flightManager';
 

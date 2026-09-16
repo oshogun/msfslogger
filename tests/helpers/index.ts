@@ -227,6 +227,14 @@ export const airportsMock = {
   initAirports: vi.fn(),
 };
 
+// The one function src/flightManager.ts imports from './acarsEvents'. Mocked
+// wholesale so a consuming test never reaches the real emitter, which would
+// otherwise hit './db/acarsMessages' -> './db/connection' -> better-sqlite3
+// before initDb() has ever run.
+export const acarsEventsMock = {
+  fileAcarsMessageOnce: vi.fn(),
+};
+
 // insertFlight issues ids from a module-level counter starting at 1, reset
 // by resetMocks(). nextFlightId() lets a test read the next id without
 // calling insertFlight itself.
@@ -259,8 +267,15 @@ function installAirportsMockDefaults(): void {
   airportsMock.initAirports.mockReset().mockImplementation(() => Promise.resolve());
 }
 
+// Default: every call "succeeds" (a row would have been created), so a test
+// that doesn't care about ACARS filing sees no warnings and no special-casing.
+function installAcarsEventsMockDefaults(): void {
+  acarsEventsMock.fileAcarsMessageOnce.mockReset().mockImplementation(() => true);
+}
+
 installDbMockDefaults();
 installAirportsMockDefaults();
+installAcarsEventsMockDefaults();
 
 /**
  * vitest.config.ts sets `restoreMocks: true`, i.e. `vi.restoreAllMocks()`
@@ -269,7 +284,7 @@ installAirportsMockDefaults();
  * it does NOT touch plain vi.fn() objects like dbMock/airportsMock, so it
  * clears neither their installed implementation nor their call history
  * between tests. resetMocks() is therefore the only thing that gives a
- * consuming test a clean dbMock/airportsMock: it RE-INSTALLS every default
+ * consuming test a clean dbMock/airportsMock/acarsEventsMock: it RE-INSTALLS every default
  * implementation above via mockReset()+mockImplementation() (which also
  * clears call history, unlike mockImplementation() alone), and resets the
  * flight-id counter to 1. Call this in a consuming test file's
@@ -279,4 +294,5 @@ export function resetMocks(): void {
   flightIdCounter = 1;
   installDbMockDefaults();
   installAirportsMockDefaults();
+  installAcarsEventsMockDefaults();
 }

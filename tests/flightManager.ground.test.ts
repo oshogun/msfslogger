@@ -21,6 +21,7 @@ import {
 
 vi.mock('../src/db', async () => (await import('./helpers')).dbMock);
 vi.mock('../src/airports', async () => (await import('./helpers')).airportsMock);
+vi.mock('../src/acarsEvents', async () => (await import('./helpers')).acarsEventsMock);
 vi.mock('../src/db/groundSessions', () => ({
   insertGroundSession: vi.fn(),
   getOpenGroundSession: vi.fn(),
