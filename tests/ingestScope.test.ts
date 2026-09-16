@@ -14,6 +14,8 @@ import {
 import { requireAuth, requireSameOrigin } from '../src/auth/middleware';
 import { createAcarsRouter } from '../src/routes/acars';
 import { createGroundSessionsRouter } from '../src/routes/groundSessions';
+import { createSettingsRouter } from '../src/routes/settings';
+import { createPlannedLegsRouter } from '../src/routes/plannedLegs';
 import type { FlightManager } from '../src/flightManager';
 
 const TOKEN = 'ingest-scope-test-token';
@@ -95,8 +97,8 @@ const NUMERIC_ID_PATHS: Array<[string, string]> = [
 ];
 
 describe('isIngestScopedRoute', () => {
-  it('has exactly ten entries, one per scoped route', () => {
-    expect(INGEST_SCOPED_ROUTES).toHaveLength(10);
+  it('has exactly twelve entries, one per scoped route', () => {
+    expect(INGEST_SCOPED_ROUTES).toHaveLength(12);
   });
 
   it.each(NUMERIC_ID_PATHS)('matches %s %s with a numeric id', (method, path) => {
@@ -119,6 +121,22 @@ describe('isIngestScopedRoute', () => {
 
   it.each(OFF_LIST)('does not match %s', (_label, method, path) => {
     expect(isIngestScopedRoute(method, path)).toBe(false);
+  });
+
+  it('matches GET /api/settings/simbrief', () => {
+    expect(isIngestScopedRoute('GET', '/api/settings/simbrief')).toBe(true);
+  });
+
+  it('matches POST /api/planned-legs/simbrief', () => {
+    expect(isIngestScopedRoute('POST', '/api/planned-legs/simbrief')).toBe(true);
+  });
+
+  it('does not match the write sibling PUT /api/settings/simbrief', () => {
+    expect(isIngestScopedRoute('PUT', '/api/settings/simbrief')).toBe(false);
+  });
+
+  it('does not match the trip-scoped sibling POST /api/trips/:id/planned-legs/simbrief', () => {
+    expect(isIngestScopedRoute('POST', '/api/trips/123/planned-legs/simbrief')).toBe(false);
   });
 });
 
@@ -331,10 +349,16 @@ describe('the allowlist against the real route tables', () => {
   const groundSessionRoutes = routesOf(
     createGroundSessionsRouter({} as unknown as FlightManager),
   );
+  const settingsRoutes = routesOf(createSettingsRouter());
+  const plannedLegsRoutes = routesOf(
+    createPlannedLegsRouter({} as unknown as FlightManager),
+  );
   const allRoutes = [
     { method: 'GET', path: '/api/status' }, // not from a router; asserted by name
     ...acarsRoutes,
     ...groundSessionRoutes,
+    ...settingsRoutes,
+    ...plannedLegsRoutes,
   ];
 
   // Every route this run's design put on the list.
@@ -349,6 +373,8 @@ describe('the allowlist against the real route tables', () => {
     'POST /api/planned-legs/:legId/acars-messages/wx',
     'POST /api/planned-legs/:legId/acars-messages/loadsheet',
     'GET /api/ground-sessions/current',
+    'GET /api/settings/simbrief',
+    'POST /api/planned-legs/simbrief',
   ]);
 
   it.each(allRoutes.map(r => [`${r.method} ${r.path}`, r] as const))(
