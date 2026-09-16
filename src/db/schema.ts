@@ -7,6 +7,181 @@
 
 import Database from 'better-sqlite3';
 
+/**
+ * One-time rebuild for a database created before trip_id could be NULL.
+ * SQLite has no ALTER TABLE ... ALTER COLUMN, so the only way to drop a NOT
+ * NULL constraint is to rebuild the table. Gated on the column's own notnull
+ * flag rather than a version marker, so a fresh database (already nullable)
+ * and an already-migrated one both return immediately, and running this
+ * function again is always a no-op.
+ *
+ * Column lists here are frozen at the 50 columns planned_legs had before this
+ * change: this block only ever runs against a database that predates it, and
+ * such a database has exactly these columns. Any future
+ * ALTER TABLE planned_legs ADD COLUMN migration must go after this block —
+ * placed before it, a new column would exist on the old table and be silently
+ * dropped by the explicit column lists below.
+ */
+function migratePlannedLegsTripIdNullable(db: Database.Database): void {
+  const tripIdCol = (db.prepare('PRAGMA table_info(planned_legs)').all() as { name: string; notnull: number }[])
+    .find(c => c.name === 'trip_id');
+  if (!tripIdCol || tripIdCol.notnull === 0) return;
+
+  // better-sqlite3 reports foreign_keys = 1 even on a handle that never set
+  // it, and enforcement must be off for the DROP TABLE below: with it on, the
+  // drop fires every ON DELETE action referencing planned_legs and silently
+  // empties planned_waypoints, planned_alternates and the leg-scoped
+  // acars_messages, and NULLs flights.planned_leg_id / ground_sessions.planned_leg_id.
+  // The pragma is also a silent no-op once a transaction has begun (including
+  // inside db.transaction()), so it is set here, outside any transaction, and
+  // re-read before proceeding; the whole rebuild below uses raw BEGIN/COMMIT
+  // rather than db.transaction() for the same reason. The prior value is
+  // restored in the finally so an exception anywhere in this function cannot
+  // leave the process running with foreign keys off.
+  const priorForeignKeys = db.pragma('foreign_keys', { simple: true }) as number;
+  try {
+    db.pragma('foreign_keys = OFF');
+    if (db.pragma('foreign_keys', { simple: true }) !== 0) {
+      throw new Error('planned_legs migration: could not disable foreign_keys before rebuilding the table');
+    }
+
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE planned_legs_new (
+          id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+          trip_id                INTEGER REFERENCES trips(id) ON DELETE CASCADE,
+          seq                    INTEGER NOT NULL,
+          status                 TEXT    NOT NULL DEFAULT 'planned'
+                                   CHECK (status IN ('planned', 'flown', 'diverted', 'skipped')),
+          departure_ident        TEXT    NOT NULL,
+          departure_name         TEXT,
+          departure_lat          REAL    NOT NULL,
+          departure_lon          REAL    NOT NULL,
+          departure_is_airport   INTEGER NOT NULL DEFAULT 0,
+          departure_start        TEXT,
+          departure_start_type   TEXT,
+          departure_pos_lat      REAL,
+          departure_pos_lon      REAL,
+          destination_ident      TEXT    NOT NULL,
+          destination_name       TEXT,
+          destination_lat        REAL    NOT NULL,
+          destination_lon        REAL    NOT NULL,
+          destination_is_airport INTEGER NOT NULL DEFAULT 0,
+          is_snippet             INTEGER NOT NULL DEFAULT 0,
+          cruise_alt_ft          REAL,
+          flightplan_type        TEXT,
+          aircraft_type          TEXT,
+          sid_name               TEXT,
+          sid_runway             TEXT,
+          sid_transition         TEXT,
+          sid_type               TEXT,
+          sid_custom_distance_nm REAL,
+          star_name              TEXT,
+          star_runway            TEXT,
+          star_transition        TEXT,
+          approach_name          TEXT,
+          approach_runway        TEXT,
+          approach_transition    TEXT,
+          approach_type          TEXT,
+          approach_arinc         TEXT,
+          approach_suffix        TEXT,
+          approach_transition_type TEXT,
+          approach_custom_distance_nm REAL,
+          approach_custom_altitude_ft REAL,
+          approach_custom_offset_deg  REAL,
+          waypoint_count         INTEGER NOT NULL DEFAULT 0,
+          alternate_count        INTEGER NOT NULL DEFAULT 0,
+          approx_distance_nm     REAL    NOT NULL DEFAULT 0,
+          arrival_deviation_nm   REAL,
+          remarks                TEXT,
+          plan_created_at        TEXT,
+          source_filename        TEXT    NOT NULL,
+          source_sha256          TEXT    NOT NULL,
+          source_program         TEXT,
+          imported_at            TEXT    NOT NULL
+        );
+
+        INSERT INTO planned_legs_new (
+          id, trip_id, seq, status,
+          departure_ident, departure_name, departure_lat, departure_lon,
+          departure_is_airport, departure_start, departure_start_type, departure_pos_lat,
+          departure_pos_lon, destination_ident, destination_name, destination_lat,
+          destination_lon, destination_is_airport, is_snippet, cruise_alt_ft,
+          flightplan_type, aircraft_type, sid_name, sid_runway,
+          sid_transition, sid_type, sid_custom_distance_nm, star_name,
+          star_runway, star_transition, approach_name, approach_runway,
+          approach_transition, approach_type, approach_arinc, approach_suffix,
+          approach_transition_type, approach_custom_distance_nm, approach_custom_altitude_ft, approach_custom_offset_deg,
+          waypoint_count, alternate_count, approx_distance_nm, arrival_deviation_nm,
+          remarks, plan_created_at, source_filename, source_sha256,
+          source_program, imported_at
+        )
+        SELECT
+          id, trip_id, seq, status,
+          departure_ident, departure_name, departure_lat, departure_lon,
+          departure_is_airport, departure_start, departure_start_type, departure_pos_lat,
+          departure_pos_lon, destination_ident, destination_name, destination_lat,
+          destination_lon, destination_is_airport, is_snippet, cruise_alt_ft,
+          flightplan_type, aircraft_type, sid_name, sid_runway,
+          sid_transition, sid_type, sid_custom_distance_nm, star_name,
+          star_runway, star_transition, approach_name, approach_runway,
+          approach_transition, approach_type, approach_arinc, approach_suffix,
+          approach_transition_type, approach_custom_distance_nm, approach_custom_altitude_ft, approach_custom_offset_deg,
+          waypoint_count, alternate_count, approx_distance_nm, arrival_deviation_nm,
+          remarks, plan_created_at, source_filename, source_sha256,
+          source_program, imported_at
+        FROM planned_legs;
+      `);
+
+      // Read before the drop, applied after the rename: DROP TABLE deletes
+      // the table's sqlite_sequence row, and the INSERT above only carries
+      // the counter up to MAX(id) — which can be behind the real counter if
+      // the highest-numbered leg was ever deleted. Without this, the next
+      // leg imported could be handed an id AUTOINCREMENT already issued once.
+      const seqRow = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'planned_legs'").get() as { seq: number } | undefined;
+
+      // Drop-then-rename, never rename-the-old-one-out-of-the-way: on this
+      // SQLite version, ALTER TABLE ... RENAME TO rewrites every other
+      // table's REFERENCES clause to name the renamed table, regardless of
+      // the foreign_keys pragma. Renaming planned_legs out of the way would
+      // leave every child table pointing at a table that no longer exists
+      // under that name; dropping it first means nothing ever names
+      // planned_legs_new, so its rename rewrites nothing and the children's
+      // clauses — still naming planned_legs — bind to the new table.
+      db.exec('DROP TABLE planned_legs');
+      db.exec('ALTER TABLE planned_legs_new RENAME TO planned_legs');
+
+      // The drop took both indexes with it, and applySchema's own
+      // CREATE INDEX statements have already run by the time this executes.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_planned_legs_trip   ON planned_legs(trip_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_planned_legs_source ON planned_legs(trip_id, source_sha256);
+      `);
+
+      // Guarded so a counter that already reads higher than the copied rows
+      // (the normal case, per the comment above) is never walked backwards.
+      if (seqRow) {
+        db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'planned_legs' AND seq < ?").run(seqRow.seq, seqRow.seq);
+      }
+
+      // A non-empty result means the rebuild produced a dangling reference;
+      // abort rather than commit a table that violates its own foreign keys.
+      const violations = db.pragma('foreign_key_check') as unknown[];
+      if (violations.length > 0) {
+        throw new Error(`planned_legs migration: foreign_key_check found ${violations.length} violation(s) after rebuild`);
+      }
+
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  } finally {
+    db.pragma(`foreign_keys = ${priorForeignKeys}`);
+  }
+}
+
 export function applySchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flights (
@@ -58,7 +233,10 @@ export function applySchema(db: Database.Database): void {
     -- ALTER TABLE below, which adds flights.planned_leg_id REFERENCES here.
     CREATE TABLE IF NOT EXISTS planned_legs (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-      trip_id                INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+      -- NULL means "loose": a prefile that belongs to no trip. Still CASCADE,
+      -- so deleting a trip still deletes its legs; a NULL row references
+      -- nothing and no cascade can ever reach it.
+      trip_id                INTEGER REFERENCES trips(id) ON DELETE CASCADE,
       -- 1-based within a trip, dense on import, gappy after a delete. Every read
       -- orders by (seq, id) so the order stays total even if two rows shared a
       -- seq. Assigned in CHAIN order (destination ident -> next departure ident)
@@ -423,6 +601,11 @@ export function applySchema(db: Database.Database): void {
   if (!tripCols.includes('is_active')) {
     db.exec('ALTER TABLE trips ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0');
   }
+
+  // Last planned_legs statement in this function, deliberately: any future
+  // ALTER TABLE planned_legs ADD COLUMN migration must be placed after this
+  // call, never before it (see the function's own comment for why).
+  migratePlannedLegsTripIdNullable(db);
 
   // Unconditional and idempotent: an index can be missing even when its column
   // exists. Both are partial UNIQUE indexes and are load-bearing — they turn a

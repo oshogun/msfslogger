@@ -129,7 +129,8 @@ export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
 
 export interface PlannedLeg {
   id: number;
-  trip_id: number;
+  /** NULL means "loose": a prefile that belongs to no trip. */
+  trip_id: number | null;
   /** 1-based within the trip; gappy after a delete. Read with ORDER BY seq, id. */
   seq: number;
   status: PlannedLegStatus;
@@ -247,6 +248,17 @@ export interface PlannedLegWithChildren extends PlannedLeg {
 }
 
 /**
+ * GET /api/planned-legs element: a planned leg with its owning trip's name
+ * resolved server-side, so a unified list of loose and trip-linked legs needs
+ * no second request to name the trips. trip_name is null exactly when
+ * trip_id is null — the foreign key guarantees a non-null trip_id always
+ * names an existing trip.
+ */
+export interface PlannedLegListItem extends PlannedLegWithChildren {
+  trip_name: string | null;
+}
+
+/**
  * GET /api/status's `plannedLeg` key. Computed, camelCase.
  * Present only while flightState === 'FLYING' and the current flight is
  * linked to a planned leg; the endpoint omits the key entirely otherwise, so
@@ -254,8 +266,8 @@ export interface PlannedLegWithChildren extends PlannedLeg {
  */
 export interface PlannedLegLiveStatus {
   plannedLegId: number;
-  tripId: number;
-  tripName: string;
+  tripId: number | null;
+  tripName: string | null;
   destinationIdent: string;
   nextWaypointIdent: string;
   /** Great-circle, via nextWaypointIdent, to the leg's destination. */

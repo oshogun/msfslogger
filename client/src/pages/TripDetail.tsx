@@ -6,7 +6,7 @@ import { StatsGrid } from '../components/StatsGrid';
 import { interleaveTripRows, GhostLegRow, plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
 import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
 import { formatDate, formatDuration, formatDistance, formatAlt } from '../utils/format';
-import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, Flight, ActiveTrip, SimbriefSettings, SimbriefImportResponse, SimbriefImportResult } from '../types';
+import type { Trip, Journey, PlannedLegImportResponse, PlannedLegWithChildren, PlannedLegListItem, Flight, ActiveTrip, SimbriefSettings, SimbriefImportResponse, SimbriefImportResult } from '../types';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 // Client-side windowing of the legs table: 20 rows per
@@ -92,7 +92,7 @@ export function TripDetail() {
   // how a mislinked flight is re-targeted to a different leg).
   const [linkingFlightId, setLinkingFlightId] = useState<number | null>(null);
   const [linkLegChoice, setLinkLegChoice] = useState<number | ''>('');
-  const [linkableLegs, setLinkableLegs] = useState<{ tripName: string; leg: PlannedLegWithChildren }[] | null>(null);
+  const [linkableLegs, setLinkableLegs] = useState<PlannedLegListItem[] | null>(null);
   const [linkLegsError, setLinkLegsError] = useState('');
   const [linkBusyFlightId, setLinkBusyFlightId] = useState<number | null>(null);
   const [linkErrorByFlight, setLinkErrorByFlight] = useState<Record<number, string>>({});
@@ -405,19 +405,15 @@ export function TripDetail() {
 
   /**
    * The leg picker is deliberately not scoped to this trip: manual linking
-   * is the escape hatch and must reach any unflown leg of any
-   * trip, so this fans out to every trip's own planned-legs endpoint rather
-   * than reading trip.planned_legs, which only ever holds this page's trip.
+   * is the escape hatch and must reach any unflown leg of any trip — or one
+   * with no trip at all — so this reads the unified listing rather than
+   * trip.planned_legs, which only ever holds this page's trip.
    */
   async function loadLinkableLegs() {
     setLinkLegsError('');
     try {
-      const allTrips = await apiFetch<Trip[]>('/api/trips');
-      const perTrip = await Promise.all(allTrips.map(t =>
-        apiFetch<PlannedLegWithChildren[]>(`/api/trips/${t.id}/planned-legs`)
-          .then(legs => legs.filter(l => l.linked_flight_id === null).map(leg => ({ tripName: t.name, leg })))
-      ));
-      setLinkableLegs(perTrip.flat());
+      const allLegs = await apiFetch<PlannedLegListItem[]>('/api/planned-legs');
+      setLinkableLegs(allLegs.filter(l => l.linked_flight_id === null));
     } catch (err) {
       setLinkLegsError((err as Error).message);
     }
@@ -894,9 +890,9 @@ export function TripDetail() {
                               <>
                                 <select value={linkLegChoice} onChange={e => setLinkLegChoice(Number(e.target.value))}>
                                   <option value="">Choose a leg…</option>
-                                  {linkableLegs.map(({ tripName, leg }) => (
+                                  {linkableLegs.map(leg => (
                                     <option key={leg.id} value={leg.id}>
-                                      {tripName} · Leg {leg.seq}: {leg.departure_ident} → {leg.destination_ident}
+                                      {leg.trip_name ?? 'No trip'} · Leg {leg.seq}: {leg.departure_ident} → {leg.destination_ident}
                                       {leg.status === 'skipped' ? ' (Skipped)' : ''}
                                     </option>
                                   ))}

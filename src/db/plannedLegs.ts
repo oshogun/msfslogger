@@ -1,5 +1,6 @@
 import type {
-  PlannedLeg, PlannedWaypoint, PlannedAlternate, PlannedLegWithChildren, PlannedLegStatus, LegMatchCandidate,
+  PlannedLeg, PlannedWaypoint, PlannedAlternate, PlannedLegWithChildren, PlannedLegListItem, PlannedLegStatus,
+  LegMatchCandidate,
 } from '../types';
 import { getDb } from './connection';
 
@@ -95,7 +96,8 @@ export interface CreatePlannedLegPlan {
 
 /** Everything needed to insert one leg with its children, in one transaction. */
 export interface CreatePlannedLegInput {
-  tripId: number;
+  /** null creates a loose leg: a prefile that belongs to no trip. */
+  tripId: number | null;
   plan: CreatePlannedLegPlan;
   sourceFilename: string;
   sourceSha256: string;
@@ -117,14 +119,20 @@ function attachPlannedLegChildren(row: PlannedLeg & { linked_flight_id: number |
  * planned_waypoints/planned_alternates rows survive. seq = MAX(seq)+1 for the
  * trip, computed inside the transaction, so the caller controls route order
  * purely by the order it calls this (chainOrderForBatch's order, not upload
- * order).
+ * order). A null tripId computes seq over the loose pool — every leg with no
+ * trip — instead of one trip's legs; the two pools are numbered independently
+ * and share no meaning by having the same seq.
  */
 export function createPlannedLeg(input: CreatePlannedLegInput): number {
   return getDb().transaction((): number => {
     const { tripId, plan, sourceFilename, sourceSha256 } = input;
 
+    // IS, not =: trip_id = NULL is NULL and never true, so with = every loose
+    // leg would compute seq 1 regardless of how many loose legs already
+    // exist. IS returns the same rows and the same query plan as = for a
+    // non-null tripId, so trip-linked numbering is unaffected.
     const { next_seq: seq } = getDb().prepare(
-      'SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM planned_legs WHERE trip_id = ?'
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM planned_legs WHERE trip_id IS ?'
     ).get(tripId) as { next_seq: number };
 
     const legId = getDb().prepare(`
@@ -217,12 +225,41 @@ export function getPlannedLegById(legId: number): PlannedLegWithChildren | null 
   return attachPlannedLegChildren(row);
 }
 
-/** Returns the existing leg when this trip already holds a leg with these bytes. */
-export function findPlannedLegBySource(tripId: number, sha256: string): PlannedLeg | null {
+/**
+ * The existing leg holding these bytes within the same pool: one trip, or the
+ * loose pool (tripId null). A duplicate is scoped by trip as well as by hash
+ * — the same file may exist once as a loose leg and once in each trip — so
+ * IS, not =, the same reasoning as createPlannedLeg's seq query. Null when
+ * this pool has never seen these bytes.
+ */
+export function findPlannedLegBySource(tripId: number | null, sha256: string): PlannedLeg | null {
   const row = getDb().prepare(
-    'SELECT * FROM planned_legs WHERE trip_id = ? AND source_sha256 = ? LIMIT 1'
+    'SELECT * FROM planned_legs WHERE trip_id IS ? AND source_sha256 = ? LIMIT 1'
   ).get(tripId, sha256) as PlannedLeg | undefined;
   return row ?? null;
+}
+
+/**
+ * Every planned leg, loose and trip-linked, with children attached and the
+ * owning trip's name resolved by a LEFT JOIN — an inner join would silently
+ * drop every loose leg, which is the one bug this function exists to avoid.
+ * trip_name is null exactly when trip_id is null.
+ *
+ * Ordering: loose legs first as one block, then trip-linked legs grouped by
+ * trip id ascending, and within every block by (seq ASC, id ASC) — the same
+ * order GET /api/trips/:id/planned-legs returns for one trip's rows, so a
+ * trip's legs read identically here and on its own page.
+ */
+export function getAllPlannedLegs(): PlannedLegListItem[] {
+  const rows = getDb().prepare(`
+    SELECT l.*,
+           t.name AS trip_name,
+           (SELECT f.id FROM flights f WHERE f.planned_leg_id = l.id) AS linked_flight_id
+      FROM planned_legs l
+      LEFT JOIN trips t ON t.id = l.trip_id
+     ORDER BY (l.trip_id IS NULL) DESC, l.trip_id ASC, l.seq ASC, l.id ASC
+  `).all() as (PlannedLeg & { trip_name: string | null; linked_flight_id: number | null })[];
+  return rows.map((row) => ({ ...attachPlannedLegChildren(row), trip_name: row.trip_name }));
 }
 
 /**
@@ -505,7 +542,7 @@ export function linkFlightToPlannedLeg(flightId: number, legId: number, source: 
       throw new PlannedLegAlreadyLinkedError(legId, holder.id);
     }
 
-    const leg = getDb().prepare('SELECT trip_id FROM planned_legs WHERE id = ?').get(legId) as { trip_id: number } | undefined;
+    const leg = getDb().prepare('SELECT trip_id FROM planned_legs WHERE id = ?').get(legId) as { trip_id: number | null } | undefined;
     if (!leg) {
       throw new Error(`Planned leg ${legId} not found`);
     }

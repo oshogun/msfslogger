@@ -233,13 +233,15 @@ export function AcarsMessages() {
 
   // The planned-leg scope's back link goes to the leg's trip, known only once
   // the leg itself has loaded; until then it falls back to the trips list
-  // rather than a link that might point at the wrong place.
+  // rather than a link that might point at the wrong place. A loose leg (no
+  // trip) has no trip page to go back to, so it goes back to the Prefiles
+  // list instead.
   const backLink = scope === 'planned-leg'
-    ? (
-      <Link to={plannedLeg ? `/trip/${plannedLeg.trip_id}` : '/flights'} className="back-link">
-        ← Back to trip
-      </Link>
-    )
+    ? (plannedLeg
+      ? (plannedLeg.trip_id !== null
+        ? <Link to={`/trip/${plannedLeg.trip_id}`} className="back-link">← Back to trip</Link>
+        : <Link to="/prefiles" className="back-link">← Back to prefiles</Link>)
+      : <Link to="/flights" className="back-link">← Back to trip</Link>)
     : <Link to={`/flight/${id}`} className="back-link">← Flight #{id}</Link>;
 
   if (loadError) {

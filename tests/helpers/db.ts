@@ -256,7 +256,7 @@ export function seedTrip(db: Database.Database, over: Partial<SeedTrip> = {}): n
 }
 
 export interface SeedPlannedLeg {
-  trip_id: number;
+  trip_id: number | null;
   seq: number;
   status: 'planned' | 'flown' | 'diverted' | 'skipped';
   departure_ident: string;
@@ -288,10 +288,12 @@ const SEED_PLANNED_LEG_DEFAULTS: Omit<SeedPlannedLeg, 'trip_id'> = {
   imported_at: T0,
 };
 
-/** trip_id is required: a planned leg with no trip is not a reachable state. */
+/** trip_id: null seeds a loose leg — a prefile that belongs to no trip is a
+ *  supported, reachable state. Still required in `over` (no default) so every
+ *  call site says explicitly which pool the seeded leg belongs to. */
 export function seedPlannedLeg(
   db: Database.Database,
-  over: Partial<SeedPlannedLeg> & { trip_id: number },
+  over: Partial<SeedPlannedLeg> & { trip_id: number | null },
 ): number {
   const row = { ...SEED_PLANNED_LEG_DEFAULTS, ...over };
   const cols = Object.keys(row);

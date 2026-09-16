@@ -99,7 +99,8 @@ export type PlannedLegStatus = 'planned' | 'flown' | 'diverted' | 'skipped';
 
 export interface PlannedLeg {
   id: number;
-  trip_id: number;
+  /** null = a loose prefile, imported with no trip. */
+  trip_id: number | null;
   /** 1-based within the trip; gappy after a delete. Read with ORDER BY seq, id. */
   seq: number;
   status: PlannedLegStatus;
@@ -214,6 +215,13 @@ export interface PlannedLegWithChildren extends PlannedLeg {
   linked_flight_id: number | null;
   waypoints: PlannedWaypoint[];
   alternates: PlannedAlternate[];
+}
+
+/** GET /api/planned-legs element: a planned leg with its owning trip's name
+ *  resolved, so a unified list needs no second request. trip_name is null
+ *  exactly when trip_id is null. */
+export interface PlannedLegListItem extends PlannedLegWithChildren {
+  trip_name: string | null;
 }
 
 /** src/lnmpln.ts LnmplnWarning, mirrored (camelCase: computed, not persisted). */
@@ -332,8 +340,10 @@ export interface StatusFrame {
  */
 export interface PlannedLegLiveStatus {
   plannedLegId: number;
-  tripId: number;
-  tripName: string;
+  /** null when the linked leg is a loose prefile (no trip). */
+  tripId: number | null;
+  /** null exactly when tripId is null. */
+  tripName: string | null;
   destinationIdent: string;
   nextWaypointIdent: string;
   remainingDistanceNm: number;

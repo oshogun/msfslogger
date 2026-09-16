@@ -8,7 +8,7 @@ import {
 } from '../helpers/db';
 import { KSBA, KMRY, T0 } from '../helpers/index';
 import {
-  createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource,
+  createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, getAllPlannedLegs,
   deletePlannedLeg, reorderPlannedLegs,
   setActiveTrip, getActiveTripId,
   setPlannedLegStatus, PlannedLegHasLinkedFlightError,
@@ -48,7 +48,7 @@ function makePlan(over: Partial<CreatePlannedLegPlan> = {}): CreatePlannedLegPla
   };
 }
 
-function makeInput(tripId: number, over: Partial<CreatePlannedLegInput> = {}): CreatePlannedLegInput {
+function makeInput(tripId: number | null, over: Partial<CreatePlannedLegInput> = {}): CreatePlannedLegInput {
   return {
     tripId,
     plan: makePlan(),
@@ -107,6 +107,24 @@ describe('createPlannedLeg()', () => {
     const leg = getPlannedLegById(legId)!;
     expect(leg.alternate_count).toBe(1);
     expect(leg.alternates[0].ident).toBe('KSMX');
+  });
+
+  it('assigns seq 1, 2 to two loose legs (tripId null), independently of a trip\'s own numbering', () => {
+    const tripId = seedTrip(scratch.db);
+    const tripLegId = createPlannedLeg(makeInput(tripId, { sourceSha256: 'e'.repeat(64) }));
+
+    const looseId1 = createPlannedLeg(makeInput(null, { sourceSha256: 'f'.repeat(64) }));
+    const looseId2 = createPlannedLeg(makeInput(null, { sourceSha256: 'g'.repeat(64) }));
+
+    const loose1 = getPlannedLegById(looseId1)!;
+    const loose2 = getPlannedLegById(looseId2)!;
+    expect(loose1.trip_id).toBeNull();
+    expect(loose2.trip_id).toBeNull();
+    expect(loose1.seq).toBe(1);
+    expect(loose2.seq).toBe(2);
+
+    // The trip's own leg, seeded before either loose leg, is unaffected.
+    expect(getPlannedLegById(tripLegId)!.seq).toBe(1);
   });
 
   it('rolls back the whole leg when a child insert fails, leaving no orphan rows', () => {
@@ -185,6 +203,64 @@ describe('findPlannedLegBySource()', () => {
     seedPlannedLeg(scratch.db, { trip_id: tripA, source_sha256: sha });
 
     expect(findPlannedLegBySource(tripB, sha)).toBeNull();
+  });
+
+  it('treats "no trip" as its own pool: two loose legs sharing a sha are duplicates of each other', () => {
+    const sha = 'dd'.repeat(32);
+    const looseLegId = seedPlannedLeg(scratch.db, { trip_id: null, source_sha256: sha });
+
+    const found = findPlannedLegBySource(null, sha);
+    expect(found).not.toBeNull();
+    expect(found!.id).toBe(looseLegId);
+  });
+
+  it('a loose leg is NOT a duplicate of a trip-linked leg sharing the same sha256, and vice versa', () => {
+    const tripId = seedTrip(scratch.db);
+    const sha = 'ee'.repeat(32);
+    const tripLegId = seedPlannedLeg(scratch.db, { trip_id: tripId, source_sha256: sha });
+    const looseLegId = seedPlannedLeg(scratch.db, { trip_id: null, source_sha256: sha });
+
+    expect(findPlannedLegBySource(tripId, sha)!.id).toBe(tripLegId);
+    expect(findPlannedLegBySource(null, sha)!.id).toBe(looseLegId);
+    expect(findPlannedLegBySource(tripId, sha)!.id).not.toBe(looseLegId);
+    expect(findPlannedLegBySource(null, sha)!.id).not.toBe(tripLegId);
+  });
+});
+
+describe('getAllPlannedLegs()', () => {
+  it('returns [] when there are no planned legs at all', () => {
+    expect(getAllPlannedLegs()).toEqual([]);
+  });
+
+  it('returns both a loose leg and a trip-linked leg, with trip_name resolved and null for the loose one', () => {
+    const tripId = seedTrip(scratch.db, { name: 'Pacific hop' });
+    const tripLegId = seedPlannedLeg(scratch.db, { trip_id: tripId, seq: 1, source_sha256: 'a'.repeat(64) });
+    const looseLegId = seedPlannedLeg(scratch.db, { trip_id: null, seq: 1, source_sha256: 'b'.repeat(64) });
+
+    const all = getAllPlannedLegs();
+    expect(all.map(l => l.id).sort((a, b) => a - b)).toEqual([tripLegId, looseLegId].sort((a, b) => a - b));
+
+    const loose = all.find(l => l.id === looseLegId)!;
+    expect(loose.trip_id).toBeNull();
+    expect(loose.trip_name).toBeNull();
+    expect(loose.waypoints).toEqual([]);
+    expect(loose.alternates).toEqual([]);
+
+    const linked = all.find(l => l.id === tripLegId)!;
+    expect(linked.trip_id).toBe(tripId);
+    expect(linked.trip_name).toBe('Pacific hop');
+  });
+
+  it('orders loose legs first, then trip-linked legs by (trip_id, seq, id)', () => {
+    const tripA = seedTrip(scratch.db);
+    const tripB = seedTrip(scratch.db);
+    const looseId = seedPlannedLeg(scratch.db, { trip_id: null, seq: 1, source_sha256: 'a'.repeat(64) });
+    const tripALeg2 = seedPlannedLeg(scratch.db, { trip_id: tripA, seq: 2, source_sha256: 'b'.repeat(64) });
+    const tripALeg1 = seedPlannedLeg(scratch.db, { trip_id: tripA, seq: 1, source_sha256: 'c'.repeat(64) });
+    const tripBLeg1 = seedPlannedLeg(scratch.db, { trip_id: tripB, seq: 1, source_sha256: 'd'.repeat(64) });
+
+    const all = getAllPlannedLegs();
+    expect(all.map(l => l.id)).toEqual([looseId, tripALeg1, tripALeg2, tripBLeg1]);
   });
 });
 

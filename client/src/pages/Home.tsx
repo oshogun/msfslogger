@@ -9,6 +9,7 @@ import type {
   CurrentGroundSessionResponse,
   Flight,
   GroundSession,
+  PlannedLegListItem,
   PlannedLegWithChildren,
   Status,
   Trip,
@@ -48,10 +49,9 @@ export function Home({ status }: Props) {
   // path already carries departureIdent/destinationIdent and skips this.
   const [groundLegDetail, setGroundLegDetail] = useState<PlannedLegWithChildren | null>(null);
 
-  // Every unflown planned leg across every trip, for the manual form's
-  // optional leg picker. Same fan-out idiom TripDetail's link-a-flight picker
-  // already uses (GET /api/trips, then each trip's planned-legs).
-  const [plannedLegOptions, setPlannedLegOptions] = useState<{ tripName: string; leg: PlannedLegWithChildren }[] | null>(null);
+  // Every unflown planned leg — loose or trip-linked — for the manual form's
+  // optional leg picker.
+  const [plannedLegOptions, setPlannedLegOptions] = useState<PlannedLegListItem[] | null>(null);
   const [plannedLegOptionsError, setPlannedLegOptionsError] = useState('');
 
   const [manualIcao, setManualIcao] = useState('');
@@ -107,12 +107,8 @@ export function Home({ status }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const allTrips = await apiFetch<Trip[]>('/api/trips');
-        const perTrip = await Promise.all(allTrips.map(t =>
-          apiFetch<PlannedLegWithChildren[]>(`/api/trips/${t.id}/planned-legs`)
-            .then(legs => legs.filter(l => l.linked_flight_id === null).map(leg => ({ tripName: t.name, leg })))
-        ));
-        if (!cancelled) setPlannedLegOptions(perTrip.flat());
+        const allLegs = await apiFetch<PlannedLegListItem[]>('/api/planned-legs');
+        if (!cancelled) setPlannedLegOptions(allLegs.filter(l => l.linked_flight_id === null));
       } catch (err) {
         if (!cancelled) setPlannedLegOptionsError((err as Error).message);
       }
@@ -269,9 +265,9 @@ export function Home({ status }: Props) {
                 onChange={e => { setManualLegId(e.target.value === '' ? '' : Number(e.target.value)); setManualLegTouched(true); }}
               >
                 <option value="">None</option>
-                {plannedLegOptions?.map(({ tripName, leg }) => (
+                {plannedLegOptions?.map(leg => (
                   <option key={leg.id} value={leg.id}>
-                    {tripName} · {leg.departure_ident} → {leg.destination_ident}
+                    {leg.trip_name ?? 'No trip'} · {leg.departure_ident} → {leg.destination_ident}
                   </option>
                 ))}
               </select>

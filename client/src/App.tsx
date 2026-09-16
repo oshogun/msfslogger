@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { RequireAuth } from './components/RequireAuth';
 import { Home } from './pages/Home';
 import { AllFlights } from './pages/AllFlights';
+import { Prefiles } from './pages/Prefiles';
 import { FlightDetail } from './pages/FlightDetail';
 import { AcarsMessages } from './pages/AcarsMessages';
 import { TripDetail } from './pages/TripDetail';
@@ -27,6 +28,7 @@ function AppShell() {
           <Routes>
             <Route path="/" element={<Home status={status} />} />
             <Route path="/flights" element={<AllFlights />} />
+            <Route path="/prefiles" element={<Prefiles />} />
             <Route path="/flight/:id" element={<FlightDetail />} />
             <Route path="/flight/:id/acars" element={<AcarsMessages />} />
             <Route path="/planned-leg/:legId/acars" element={<AcarsMessages />} />

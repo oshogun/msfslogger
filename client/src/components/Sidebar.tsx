@@ -148,6 +148,7 @@ export function Sidebar() {
         <div className="sidebar-content">
           <NavLink to="/" end className={navItemClass('sidebar-home')}>Home</NavLink>
           <NavLink to="/flights" className={navItemClass()}>All flights</NavLink>
+          <NavLink to="/prefiles" className={navItemClass()}>Prefiles</NavLink>
 
           {error && <p className="sidebar-error">{error}</p>}
 

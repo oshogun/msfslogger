@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { PlannedWaypoint, SimFrame } from '../src/types';
 import {
-  dbMock, resetMocks, makeFrame, makeCandidate, makePlannedLegWithChildren,
+  dbMock, resetMocks, makeFrame, makeCandidate, makePlannedLegWithChildren, makeLoosePlannedLegWithChildren,
   northOfNm, KSBA, KMRY, useFakeClock, useRealClock,
 } from './helpers';
 import { haversineNm } from '../src/geo';
@@ -421,6 +421,24 @@ describe('FlightManager — refreshPlannedLegForFlight', () => {
     expect(st!.tripId).toBe(TRIP);
     expect(st!.nextWaypointIdent).toBe('KMRY');
     expect(st!.remainingDistanceNm).toBe(162.5);
+  });
+
+  it('reports tripId/tripName null for a loose leg (trip_id: null), everything else populated as usual', () => {
+    const fm = new FlightManager();
+    takeoff(fm); // no active trip -> unlinked
+    expect(fm.getPlannedLegStatus(KSBA.lat, KSBA.lon)).toBeNull();
+
+    dbMock.getFlightPlannedLegId.mockReturnValue(11); // the user linked it by hand, no trip involved
+    dbMock.getPlannedLegById.mockReturnValue(makeLoosePlannedLegWithChildren());
+    fm.refreshPlannedLegForFlight(1);
+
+    const st = fm.getPlannedLegStatus(KSBA.lat, KSBA.lon);
+    expect(st!.tripId).toBeNull();
+    expect(st!.tripName).toBeNull();
+    expect(st!.destinationIdent).toBe('KMRY');
+    expect(st!.nextWaypointIdent).toBe('KMRY');
+    expect(st!.remainingDistanceNm).toBe(162.5);
+    expect(dbMock.getTripName).not.toHaveBeenCalled();
   });
 
   it('leaves the cache empty when the linked leg row has gone', () => {

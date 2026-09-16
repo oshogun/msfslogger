@@ -300,10 +300,10 @@ export function FlightDetail() {
                 {plannedLeg.is_snippet === 1 && <span className="badge badge-snippet" style={{ marginLeft: '0.4rem' }}>Snippet</span>}
                 {' '}
                 Leg {plannedLeg.seq} of{' '}
-                {plannedTripName ? (
+                {plannedLeg.trip_id !== null && plannedTripName ? (
                   <Link to={`/trip/${plannedLeg.trip_id}`} className="flight-plan-link">{plannedTripName}</Link>
                 ) : (
-                  'its trip'
+                  'No trip'
                 )}
                 : {plannedLeg.departure_ident} → {plannedLeg.destination_ident}
               </p>

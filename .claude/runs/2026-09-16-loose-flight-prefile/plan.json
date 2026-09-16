@@ -1,0 +1,260 @@
+{
+  "run_id": "2026-09-16-loose-flight-prefile",
+  "goal": "Make planned_legs.trip_id optional so a user can prefile a flight plan (.lnmpln upload or SimBrief import) with no trip at all — a \"loose\" prefile — and have every downstream consumer (listing, edit/cancel, flight linking, ACARS dispatch/weather/OOOI, ground-session dispatch/loadsheet access) treat it identically to a trip-linked prefile, while trip-linked prefile behavior stays byte-identical to today.",
+  "frozen_decisions": [
+    "trip_id is optional for a prefiled flight plan; a prefiled flight is \"loose\" when trip_id is null/absent.",
+    "Prefiled flights retain a unique identifier regardless of trip association (the existing `planned_legs.id` primary key already does this — no new id scheme needed).",
+    "Out of scope: automatic creation of trips from loose prefiles; any ACARS business-logic change beyond making it eligible for non-trip legs.",
+    "Validation rules for flight-plan fields must stay identical between loose and trip-linked prefiles — only trip_id's requiredness changes."
+  ],
+  "sequencing_rationale": [
+    "Phase 1 owns the one genuine schema/contract change (trip_id NOT NULL -> nullable) plus the CRUD and routes built directly on it. Nothing downstream can be implemented, let alone verified, before this lands, and the migration itself is the highest-risk single step in the run: SQLite has no ALTER COLUMN, and applySchema()'s existing CREATE TABLE IF NOT EXISTS idiom never touches a table that already exists — the live flights.db's planned_legs table was created with trip_id NOT NULL and needs a real one-time rebuild, not a fresh-DB-only DDL edit. This satisfies AC1 and AC2 at the API layer and lays the getPlannedLegsForTrip/new-unified-listing groundwork AC5 needs.",
+    "Phase 2 is isolated from Phase 1's file set (flightManager.ts/types.ts vs schema.ts/db/plannedLegs.ts/routes) but strictly needs Phase 1's nullable trip_id and CRUD to exist first, since it exercises them end-to-end. Investigation before planning found ACARS itself (src/routes/acars.ts, src/acars.ts, src/db/acarsMessages.ts, src/routes/groundSessions.ts) already keys everything off planned_leg_id/flight_id with zero references to trip_id — grep confirms it — so this phase is mostly verification (AC3) plus the one real gap: FlightManager's PlannedLegCache and the PlannedLegLiveStatus/GroundSessionLiveStatus construction sites call getTripName(leg.trip_id) unconditionally and must not, once trip_id can be null.",
+    "Phase 3 is last because the client can't be built against a contract that doesn't exist yet, and because investigation surfaced two real latent bugs that only a loose leg would trigger: TripDetail.tsx's and Home.tsx's manual-link-flight pickers build their candidate list by fanning out over every trip's own /api/trips/:id/planned-legs, which structurally can never see a leg with no trip — without fixing this, AC4 (manage lifecycle / link) would silently fail for loose legs in the UI even though the API supports it. Similarly FlightDetail.tsx and AcarsMessages.tsx build a `/trip/${trip_id}` link unconditionally, which becomes a broken `/trip/null` link for a loose leg's flight.",
+    "Escape hatch ordering: within Phase 1, the two new loose-creation routes (the manual, explicit way to prefile without a trip) ship before Phase 3's UI wraps them — matching the project's rule that a manual/API path exists before any UI automates it. No auto-matching or auto-trip-creation is introduced anywhere in this run (frozen decision), so there is no automation to gate behind an escape hatch beyond that.",
+    "Investigation confirmed active-trip auto-matching (getPlannedLegCandidatesForActiveTrip's JOIN to trips ON is_active = 1) and ground-session auto-matching are both structurally trip-scoped already and need no change: a loose leg simply can never be an automatic-match candidate, which is correct and unrelated to this run's scope (auto-linking is inherently an active-trip concept; manual link is unaffected because it looks the leg up by id alone, with no trip involved). Both Phase 2's task and this plan call this out explicitly as verify-only so no implementer invents matching-logic changes that aren't needed."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Backend: schema, core CRUD and routes for loose planned legs",
+      "ships": "A prefile flight plan (.lnmpln upload or SimBrief import) can be created with no trip via two new routes, coexists in storage with trip-linked prefiles, and a unified listing endpoint returns both kinds together — verified by curl and Vitest against a scratch server and scratch db. Not yet reachable from the UI (Phase 3).",
+      "tasks": ["T-001", "T-002", "T-003"]
+    },
+    {
+      "phase": 2,
+      "name": "Backend: FlightManager and ACARS null-trip tolerance",
+      "ships": "A flight linked to a loose prefile is tracked, reported in GET /api/status, and served by ACARS (dispatch release, weather requests, OOOI events) and ground-session dispatch/loadsheet access exactly as a flight linked to a trip-linked prefile is today — verified end-to-end against a scratch server with a manually created loose leg and a real flight.",
+      "tasks": ["T-004", "T-005"]
+    },
+    {
+      "phase": 3,
+      "name": "Frontend: loose-prefile creation, unified listing, and No-trip surfacing",
+      "ships": "A user who is not inside a trip can prefile a flight plan from a new page, see every prefile (loose and trip-linked, loose marked \"No trip\") in one unified list, edit/cancel a loose prefile the same way as a trip-linked one, and link a loose prefile to a flight from the existing pickers — with every page that used to assume a planned leg always has a trip now degrading to \"No trip\" instead of a broken link or a blank value.",
+      "tasks": ["T-006", "T-007"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the loose-prefile contract: schema migration, CRUD scoping, REST surface, and client type mirror",
+      "goal": "Design the full contract for making planned_legs.trip_id optional: the live-db migration strategy (SQLite has no ALTER COLUMN, and applySchema()'s CREATE TABLE IF NOT EXISTS idiom never touches an existing table, so the live flights.db's existing NOT NULL constraint needs a real one-time table rebuild, gated to run exactly once), duplicate-detection and seq scoping for legs with no trip, the CreatePlannedLegInput/findPlannedLegBySource signatures, the new unified-listing surface AC5 needs, the two new loose-creation routes, the FlightManager/types.ts null-tolerance contract, and the client-side type mirror and \"No trip\" display convention so Phases 2 and 3 can implement without further decisions. Write .claude/runs/2026-09-16-loose-flight-prefile/design.md with numbered sections (cite them as ctx.sh design 2026-09-16-loose-flight-prefile <n> in later tasks).",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-16-loose-flight-prefile/design.md",
+        ".claude/runs/2026-09-16-loose-flight-prefile/contracts/**"
+      ],
+      "acceptance_criteria": [
+        "States the exact DDL for planned_legs.trip_id (dropping NOT NULL, keeping REFERENCES trips(id) ON DELETE CASCADE) and specifies the one-time rebuild recipe for an EXISTING table (new table with the nullable column, INSERT INTO ... SELECT, drop old, rename, recreate every index), gated by checking PRAGMA table_info(planned_legs) for trip_id's notnull flag so it runs exactly once, in the same idempotent style as the existing PRAGMA table_info + ALTER TABLE ADD COLUMN migrations already in src/db/schema.ts.",
+        "States whether the rebuild needs PRAGMA foreign_keys OFF/ON bracketing given planned_waypoints, planned_alternates, acars_messages, flights and ground_sessions all hold a foreign key referencing planned_legs.id, and planned_legs itself references trips.id — verified against real SQLite ALTER TABLE RENAME/foreign-key semantics, not assumed.",
+        "States that idx_planned_legs_trip(trip_id, seq) and idx_planned_legs_source(trip_id, source_sha256) need no structural change (SQLite index keys admit NULL) — or specifies the alternative if it decides otherwise, with the reason.",
+        "Specifies findPlannedLegBySource's new signature, findPlannedLegBySource(tripId: number | null, sha256: string), and the exact SQL predicate that scopes \"no trip\" as its own duplicate-detection pool distinct from every trip's pool and from every other loose leg only by sha256 (SQLite's `trip_id = NULL` never matches, so the predicate must use IS or an explicit OR NULL branch).",
+        "Specifies seq assignment for a loose leg using SQLite's IS operator (`WHERE trip_id IS ?`, matching NULL to NULL), states this is the only change needed in createPlannedLeg's seq query, and states as frozen/out-of-scope that reorderPlannedLegs and PATCH /trips/:id/planned-legs/order stay trip-scoped only — loose legs are excluded from reordering and always list in seq/id order the same way trip legs do.",
+        "Specifies CreatePlannedLegInput.tripId: number | null as the only change to that interface.",
+        "Specifies the new unified-listing function and route (name, path and response shape) that returns every planned leg — loose and trip-linked — with children attached, and states its ordering rule; states explicitly that GET /trips/:id/planned-legs is unchanged and keeps returning only that trip's legs.",
+        "Specifies the two new loose-creation routes: POST /api/planned-legs (multipart .lnmpln, mirrors POST /trips/:id/planned-legs minus the trip lookup/404) and POST /api/planned-legs/simbrief (JSON, mirrors the trip-nested SimBrief route minus the trip lookup/404), and states their response shapes (FileOutcome / result objects) are identical to their trip-nested counterparts so existing client-side response parsing can be reused unchanged.",
+        "States that PATCH /api/planned-legs/:legId, DELETE /api/planned-legs/:legId, and PUT /api/flights/:id/planned-leg need NO route-shape change, since all three are already keyed by legId or flightId rather than tripId.",
+        "Specifies the FlightManager contract change: PlannedLegCache.tripId/.tripName (src/flightManager.ts) become number | null / string | null; types.ts's PlannedLegLiveStatus.tripId/.tripName become number | null / string | null (matching the precedent GroundSessionLiveStatus already sets in the same file); states that buildPlannedLegCache and buildGroundSessionCache must call getTripName(leg.trip_id) only when leg.trip_id !== null, setting tripName: null otherwise, and that getTripName's own signature (tripId: number) does not change.",
+        "States as a frozen, verify-only fact (not new design) that getPlannedLegCandidatesForActiveTrip()'s JOIN to trips ON is_active = 1 structurally excludes every loose leg from automatic leg-matching and ground-session auto-matching, that this is correct and intentional (auto-matching is inherently an active-trip concept), and that manual link via PUT /api/flights/:id/planned-leg is unaffected since it looks the leg up by id alone.",
+        "States as a frozen, verify-only fact that src/routes/acars.ts, src/acars.ts, src/db/acarsMessages.ts and src/routes/groundSessions.ts need no contract change: every read/write there is keyed by planned_leg_id or flight_id, never trip_id (confirmed by grep during planning — zero matches).",
+        "Specifies the client-side mirror: client/src/types.ts's PlannedLeg.trip_id becomes number | null (PlannedLegWithChildren inherits it) and PlannedLegLiveStatus.tripId/.tripName become number | null / string | null, mirroring the server 1:1.",
+        "States the literal \"No trip\" display convention used wherever a trip name would otherwise show for a planned leg, and states that no `Link to={`/trip/${trip_id}`}` site may ever render with trip_id null (must guard or omit the link).",
+        "Specifies the new unified Prefiles page's minimum content: every planned leg (loose and trip-linked) with its status badge, route, and either a trip link or the literal \"No trip\" with no link; a creation section reusing the existing .lnmpln upload and SimBrief import UI patterns from TripDetail.tsx, posting to the two new loose routes.",
+        "Contains no implementation code beyond DDL and interface/type stubs."
+      ],
+      "context": [
+        "src/db/schema.ts",
+        "src/db/plannedLegs.ts",
+        "src/routes/plannedLegs.ts",
+        "src/flightManager.ts:113-190,760-812",
+        "src/types.ts:95-135,240-290,700-740",
+        "tests/db/schema.test.ts",
+        "tests/helpers/db.ts:140-300",
+        "client/src/types.ts:95-110,330-340,415-425",
+        "client/src/pages/TripDetail.tsx:395-425",
+        "client/src/pages/Home.tsx:100-120,265-280",
+        "client/src/pages/FlightDetail.tsx:95-105,300-310",
+        "client/src/pages/AcarsMessages.tsx:235-242",
+        "client/src/components/PlannedLegRows.tsx"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "backend_sr",
+      "title": "Loose-planned-leg schema migration, CRUD, and routes",
+      "goal": "Implement the contract frozen in ctx.sh design 2026-09-16-loose-flight-prefile 1 2 3 4 5 6: make planned_legs.trip_id nullable with a real migration for the existing live schema (not just fresh-DB DDL), update CRUD (create/find-by-source/seq/list-all) for loose legs, and add the two loose-creation routes plus the unified-listing route.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [
+        "src/db/schema.ts",
+        "src/db/plannedLegs.ts",
+        "src/types.ts",
+        "src/routes/plannedLegs.ts",
+        "tests/db/schema.test.ts",
+        "tests/db/plannedLegs.test.ts",
+        "tests/helpers/db.ts"
+      ],
+      "acceptance_criteria": [
+        "planned_legs.trip_id is nullable per design.md's DDL section on both a fresh database and an existing one: a new Vitest case in tests/db/schema.test.ts hand-builds a pre-migration planned_legs table (trip_id NOT NULL) with a seeded row, calls applySchema(), and asserts PRAGMA table_info(planned_legs) reports trip_id notnull=0 while the seeded row survives with every column unchanged; calling applySchema() a second time is a no-op (no duplicate rebuild, no error, no row change) — run with `npm test -- schema.test`.",
+        "A scratch copy of the real flights.db is upgraded end to end: `cp flights.db flights.db-wal flights.db-shm $SCRATCH/`, start a scratch server against the copy on another port under Node 20, then read the copy read-only with better-sqlite3 to confirm PRAGMA table_info(planned_legs) now shows trip_id nullable and that `select count(*) from planned_legs`, `from flights`, `from trips` match the live file's pre-migration counts exactly.",
+        "createPlannedLeg accepts tripId: number | null; seq for a loose leg is computed with `WHERE trip_id IS ?`; a Vitest test in tests/db/plannedLegs.test.ts inserts two loose legs and asserts they get seq 1 then 2, and that an existing trip's seq numbering is unaffected.",
+        "findPlannedLegBySource(tripId: number | null, sha256) treats \"no trip\" as its own duplicate pool: a Vitest test proves two loose legs with the same sha256 are detected as duplicates of each other, and that a loose leg is NOT a duplicate of a trip-linked leg sharing the same sha256 (and vice versa).",
+        "The new unified-listing function/route from design.md returns every planned leg — loose and trip-linked — with children attached; a Vitest test seeds one of each and asserts both appear in the result.",
+        "GET /trips/:id/planned-legs is unchanged: a test or curl check confirms it still returns only that trip's legs, same shape as before.",
+        "POST /api/planned-legs (loose .lnmpln upload) and POST /api/planned-legs/simbrief (loose SimBrief import) exist and mirror their trip-nested counterparts' response shapes exactly: `curl -F lnmpln=@samples/lnmpln/<a real fixture> http://localhost:<scratch-port>/api/planned-legs` against a scratch server returns 201 with a created leg whose trip_id is null, and the response's `results`/`imported`/`batch` fields match the trip-nested route's shape field-for-field.",
+        "PATCH /api/planned-legs/:legId, DELETE /api/planned-legs/:legId and PUT /api/flights/:id/planned-leg have no route-shape changes in this diff — confirm by reading the diff, not just asserting it.",
+        "tests/helpers/db.ts's seedPlannedLeg no longer forces `trip_id: number` in its `over` type (it becomes `number | null`), and its comment \"trip_id is required: a planned leg with no trip is not a reachable state\" is corrected to say null is now a supported, reachable state.",
+        "npx tsc (or npm run build) and npm test both pass with zero failures.",
+        "No change to flights.flight_plan_name or the flight_plans/ directory in this diff."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 1 2 3 4 5 6",
+        "src/db/schema.ts",
+        "src/db/plannedLegs.ts",
+        "src/routes/plannedLegs.ts",
+        "tests/db/schema.test.ts",
+        "tests/db/plannedLegs.test.ts",
+        "tests/helpers/db.ts"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "reviewer",
+      "title": "Review: loose-planned-leg schema, CRUD and routes",
+      "goal": "Re-run the evidence for T-002 against ctx.sh design 2026-09-16-loose-flight-prefile 1 2 3 4 5 6 and T-002's acceptance criteria verbatim; confirm the live-db migration is safe, idempotent and lossless, and that trip-nested behavior is byte-identical to before.",
+      "depends_on": ["T-002"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-16-loose-flight-prefile/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Re-runs npm test, npx tsc, and the scratch-db migration check independently (does not trust T-002's report) and records the exact commands and their output in reviews/T-002.md.",
+        "Confirms trip_id's NOT NULL removal via a fresh PRAGMA table_info read on both a newly created scratch db and a freshly upgraded scratch copy of the live flights.db, and confirms row counts (flights, trips, planned_legs) are unchanged by the upgrade.",
+        "Confirms findPlannedLegBySource's and the seq-assignment SQL match design.md's frozen predicates exactly, not just \"close enough\", by reading the actual SQL in the diff.",
+        "Confirms the two new loose-creation routes and the unified-listing route match design.md's frozen REST surface (paths, methods, response shapes), and that no existing route's shape changed.",
+        "Verdict stated at the top of reviews/T-002.md: approve or request_changes, with the concrete evidence each verdict rests on."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 1 2 3 4 5 6",
+        "ctx.sh task 2026-09-16-loose-flight-prefile T-002"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "backend_sr",
+      "title": "FlightManager and ground-session null-trip tolerance; verify ACARS is already trip-agnostic",
+      "goal": "Implement ctx.sh design 2026-09-16-loose-flight-prefile 6 7 8: make PlannedLegCache and every live-status cache tolerate a leg with trip_id === null, and confirm end-to-end — without changing — that ACARS, ground-session dispatch/loadsheet access, and active-trip auto-matching already behave correctly for a loose leg.",
+      "depends_on": ["T-003"],
+      "allowed_paths": [
+        "src/flightManager.ts",
+        "src/types.ts",
+        "tests/flightManager.test.ts",
+        "tests/flightManager.acars.test.ts",
+        "tests/helpers/index.ts"
+      ],
+      "acceptance_criteria": [
+        "PlannedLegCache.tripId/.tripName (src/flightManager.ts) become number | null / string | null; buildPlannedLegCache calls getTripName only when leg.trip_id !== null and sets tripName: null otherwise.",
+        "buildGroundSessionCache applies the identical guard for a ground session's linked leg.",
+        "types.ts's PlannedLegLiveStatus.tripId/.tripName become number | null / string | null (matching the precedent already set by GroundSessionLiveStatus in the same file); every construction site (getPlannedLegStatus()) compiles and passes the null through unchanged.",
+        "tests/helpers/index.ts's makePlannedLegWithChildren gains a way to build a loose-leg fixture (trip_id: null) without changing its existing default (trip_id: 1) for any current caller.",
+        "A new Vitest case in tests/flightManager.test.ts starts and links a flight to a loose planned leg (trip_id null) and asserts getPlannedLegStatus() returns tripId: null, tripName: null while destinationIdent/nextWaypointIdent/remainingDistanceNm populate exactly as for a trip-linked leg — run with `npm test -- flightManager`.",
+        "End-to-end manual verification against a scratch server + scratch db (own port, own FLIGHTS_DB_PATH): create a loose leg via POST /api/planned-legs; with some OTHER trip set active, confirm a flight starting near the loose leg's departure does NOT auto-match it (no trip to be \"active\" under); manually link the flight to the loose leg via PUT /api/flights/:id/planned-leg; confirm GET /api/status while flying reports the leg with tripId: null; file an ACARS dispatch release / weather request / OOOI event for that flight and confirm each appears in the flight's ACARS thread (GET /api/planned-legs/:legId/acars-messages or the flight-scoped equivalent) identically to a trip-linked leg; open a ground session for that flight's pre-flight parking and confirm it links the loose leg and that its dispatch/loadsheet routes (src/routes/groundSessions.ts) respond exactly as for a trip-linked leg. Record the curl transcript in the task's report.",
+        "The report states explicitly, with the grep/read evidence, that src/routes/acars.ts, src/acars.ts, src/db/acarsMessages.ts, src/routes/groundSessions.ts and getPlannedLegCandidatesForActiveTrip()'s active-trip JOIN needed NO code change.",
+        "npx tsc (or npm run build) and npm test pass with zero failures."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 6 7 8",
+        "src/flightManager.ts:113-190,760-812",
+        "src/types.ts:249-264,718-739",
+        "src/db/plannedLegs.ts:385-436",
+        "src/routes/acars.ts",
+        "src/routes/groundSessions.ts",
+        "tests/flightManager.test.ts",
+        "tests/helpers/index.ts"
+      ]
+    },
+    {
+      "id": "T-005",
+      "role": "reviewer",
+      "title": "Review: FlightManager null-trip tolerance and ACARS verification",
+      "goal": "Re-run the evidence for T-004: confirm the null-tolerance fix is complete and confirm, independently, that ACARS/ground-session behavior for a loose leg genuinely needed no code change rather than taking the implementer's word for it.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-16-loose-flight-prefile/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Re-runs npm test and npx tsc independently and records output in reviews/T-004.md.",
+        "Independently re-runs at least the ACARS dispatch-release and OOOI-event checks against a scratch server with a loose leg, rather than trusting T-004's transcript alone.",
+        "Greps src/routes/acars.ts, src/acars.ts, src/db/acarsMessages.ts and src/routes/groundSessions.ts itself to confirm zero trip_id references, corroborating the verify-only claim.",
+        "Confirms PlannedLegCache/PlannedLegLiveStatus/GroundSessionLiveStatus type changes match design.md sections 6-8 exactly.",
+        "Verdict stated at the top of reviews/T-004.md: approve or request_changes, with the concrete evidence each verdict rests on."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 6 7 8",
+        "ctx.sh task 2026-09-16-loose-flight-prefile T-004"
+      ]
+    },
+    {
+      "id": "T-006",
+      "role": "frontend_sr",
+      "title": "Loose-prefile creation entry point, unified listing, and No-trip surfacing across the client",
+      "goal": "Implement ctx.sh design 2026-09-16-loose-flight-prefile 9 10: mirror the server's nullable trip_id in client/src/types.ts, add a page to create and list prefiles with no trip context, and fix every existing page that assumed a planned leg's trip is always present.",
+      "depends_on": ["T-005"],
+      "allowed_paths": [
+        "client/src/types.ts",
+        "client/src/App.tsx",
+        "client/src/components/Sidebar.tsx",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/pages/Prefiles.tsx",
+        "client/src/pages/TripDetail.tsx",
+        "client/src/pages/Home.tsx",
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/pages/AcarsMessages.tsx"
+      ],
+      "acceptance_criteria": [
+        "client/src/types.ts mirrors every server type change from T-002/T-004 exactly: PlannedLeg.trip_id: number | null, PlannedLegLiveStatus.tripId/.tripName: number | null / string | null.",
+        "A new page (client/src/pages/Prefiles.tsx) is routed in App.tsx and linked from Sidebar.tsx; it lists every planned leg from the new unified GET /api/planned-legs endpoint, reusing GhostLegRow/plannedLegBadge/interleaveTripRows from PlannedLegRows.tsx rather than re-implementing row rendering, and shows a trip link for a trip-linked leg or the literal \"No trip\" (no link) for a loose one.",
+        "The same page offers loose-prefile creation: a .lnmpln file upload and a SimBrief import, posting to POST /api/planned-legs and POST /api/planned-legs/simbrief respectively, reusing the request/response handling patterns already in TripDetail.tsx's handleImportPlannedLegs and its SimBrief-import handler (read for reference, not imported as a dependency).",
+        "Edit/cancel from the new page work identically to TripDetail.tsx's: status PATCH (skip/unskip) and delete call the same legId-scoped endpoints and update the list without a full page reload.",
+        "TripDetail.tsx's loadLinkableLegs() (the manual-link-flight picker's candidate list) is changed to also surface loose legs — today it fans out only over /api/trips plus each trip's own /api/trips/:id/planned-legs, which structurally can never include a leg with no trip. Verified manually against a scratch server: create a loose leg, open a trip's link-flight picker, confirm the loose leg appears in the candidate list labeled \"No trip\".",
+        "Home.tsx's equivalent plannedLegOptions loader (same fan-out pattern) gets the identical fix, verified the same way from its own flight-linking picker.",
+        "FlightDetail.tsx's planned-leg trip link renders \"No trip\" with no link when plannedLeg.trip_id is null, instead of linking to /trip/null.",
+        "AcarsMessages.tsx's back-link falls back the same way a missing planned leg already does (to /flights, or to the new Prefiles page) when the leg's trip_id is null, instead of linking to /trip/null.",
+        "The report states, with evidence (reading each file), that TripMap.tsx, FlightMap.tsx and PrintTrip.tsx need no change: each only ever receives one specific trip's own planned_legs array, which by construction never contains a loose leg — and that LivePanel.tsx needs no change either, since it renders only plannedLeg.destinationIdent/.nextWaypointIdent/.remainingDistanceNm, never .tripName/.tripId.",
+        "End-to-end manual check using the scratch-build recipe (copy client/, npm run build there, run a scratch server with cwd set to that scratch root against a scratch db): create a loose prefile from the new page, confirm it appears in the unified list marked \"No trip\", edit/cancel it, link it to a flight from the trip page's picker — and confirm client/dist/index.html's mtime in the real tree is unchanged afterward.",
+        "npx tsc / npm run build (in the scratch client copy) succeed with zero errors."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 9 10",
+        "client/src/types.ts:95-110,330-340,415-425",
+        "client/src/pages/TripDetail.tsx:395-425,660-740",
+        "client/src/pages/Home.tsx:100-120,265-280",
+        "client/src/pages/FlightDetail.tsx:95-105,300-310",
+        "client/src/pages/AcarsMessages.tsx:235-242",
+        "client/src/components/PlannedLegRows.tsx",
+        "client/src/App.tsx",
+        "client/src/components/Sidebar.tsx"
+      ]
+    },
+    {
+      "id": "T-007",
+      "role": "reviewer",
+      "title": "Review: loose-prefile client (creation, unified listing, No-trip surfacing)",
+      "goal": "Re-run the evidence for T-006: confirm the new page and every fixed picker/link actually work against a scratch build, and that the real-tree client/dist was never touched.",
+      "depends_on": ["T-006"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-16-loose-flight-prefile/reviews/**"
+      ],
+      "acceptance_criteria": [
+        "Re-runs the scratch-build client verification independently (own copy, own build, own scratch server) rather than trusting T-006's report, and records commands/output in reviews/T-006.md.",
+        "Confirms client/src/types.ts matches the server contract from T-002/T-004 field-for-field.",
+        "Clicks through (or scripts an equivalent check of) creating a loose prefile, seeing it in the unified list marked \"No trip\", editing/cancelling it, and linking it to a flight from the trip page's picker.",
+        "Confirms client/dist/index.html's mtime in the real tree is unchanged after the review's own scratch build.",
+        "Verdict stated at the top of reviews/T-006.md: approve or request_changes, with the concrete evidence each verdict rests on."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-loose-flight-prefile 9 10",
+        "ctx.sh task 2026-09-16-loose-flight-prefile T-006"
+      ]
+    }
+  ]
+}

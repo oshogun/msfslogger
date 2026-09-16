@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { getFlightById } from '../db/flights';
 import { getTripById } from '../db/trips';
 import {
-  createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource,
+  createPlannedLeg, getPlannedLegsForTrip, getPlannedLegById, findPlannedLegBySource, getAllPlannedLegs,
   deletePlannedLeg, reorderPlannedLegs, setPlannedLegStatus, setPlannedLegHandOutcome,
   linkFlightToPlannedLeg, unlinkFlightFromPlannedLeg,
   PlannedLegAlreadyLinkedError, PlannedLegHasLinkedFlightError, PlannedLegHandCloseConflictError,
@@ -187,6 +187,110 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
     res.status(201).json({ imported, batch, results });
   });
 
+  // A copy of the trip-nested route above with the trip lookup removed: same
+  // upload middleware and field name, same XML sniff, parse, sha256, in-batch
+  // duplicate tracking, chain sort, insert loop and response shape — a loose
+  // prefile belongs to no trip, so there is no :id to validate or 404 on.
+  router.post('/planned-legs', uploadLnmpln.array('lnmpln', MAX_LNMPLN_FILES), (req, res) => {
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    if (files.length === 0) { res.status(400).json({ error: 'No files uploaded' }); return; }
+
+    const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === '1';
+
+    interface FileOutcome {
+      filename: string;
+      status: 'imported' | 'duplicate' | 'rejected';
+      planned_leg_id?: number;
+      warnings?: { code: string; message: string }[];
+      error?: string;
+    }
+
+    const results: FileOutcome[] = [];
+    const toInsert: { filename: string; sha256: string; plan: ParsedFlightPlan; resultIndex: number }[] = [];
+    const seenInBatch = new Map<string, number>();
+    const duplicateOfInBatch = new Map<number, number>();
+
+    for (const file of files) {
+      const filename = file.originalname;
+
+      if (!looksLikeXml(file.buffer)) {
+        results.push({ filename, status: 'rejected', error: "NOT_XML: file does not begin with '<'" });
+        continue;
+      }
+
+      let plan: ParsedFlightPlan;
+      try {
+        plan = parseLnmpln(file.buffer);
+      } catch (err) {
+        if (err instanceof LnmplnParseError) {
+          results.push({ filename, status: 'rejected', error: `${err.code}: ${err.message}` });
+          continue;
+        }
+        res.status(500).json({ error: String(err) });
+        return;
+      }
+
+      const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+
+      if (!allowDuplicates) {
+        const existing = findPlannedLegBySource(null, sha256);
+        if (existing) {
+          results.push({
+            filename, status: 'duplicate', planned_leg_id: existing.id,
+            error: `Already imported without a trip as leg ${existing.seq}`,
+          });
+          continue;
+        }
+
+        const dupOf = seenInBatch.get(sha256);
+        if (dupOf !== undefined) {
+          results.push({
+            filename, status: 'duplicate',
+            error: `Duplicate of "${results[dupOf].filename}" earlier in this upload`,
+          });
+          duplicateOfInBatch.set(results.length - 1, dupOf);
+          continue;
+        }
+      }
+
+      for (const w of plan.warnings) {
+        console.warn(`[LNMPLN] ${filename}: ${w.code}: ${w.message}`);
+      }
+
+      results.push({ filename, status: 'imported', warnings: plan.warnings });
+      seenInBatch.set(sha256, results.length - 1);
+      toInsert.push({ filename, sha256, plan, resultIndex: results.length - 1 });
+    }
+
+    const order = chainOrderForBatch(toInsert.map((t) => t.plan));
+
+    const imported: PlannedLegWithChildren[] = [];
+    try {
+      for (const idx of order.order) {
+        const entry = toInsert[idx];
+        const legId = createPlannedLeg({
+          tripId: null, plan: entry.plan, sourceFilename: entry.filename, sourceSha256: entry.sha256,
+        });
+        results[entry.resultIndex].planned_leg_id = legId;
+        imported.push(getPlannedLegById(legId)!);
+      }
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+      return;
+    }
+
+    for (const [dupIdx, origIdx] of duplicateOfInBatch) {
+      results[dupIdx].planned_leg_id = results[origIdx].planned_leg_id;
+    }
+
+    if (imported.length === 0) {
+      res.status(400).json({ imported, results });
+      return;
+    }
+    const batch = { ordering: (order.resolved ? 'chain' : 'upload') as 'chain' | 'upload', reason: order.reason };
+    res.status(201).json({ imported, batch, results });
+  });
+
   // A sibling of the .lnmpln import above, not an extension of it: one request
   // to SimBrief is one plan, so this route takes a JSON body and answers with a
   // single `result` object rather than a `results` array a caller might assume
@@ -318,12 +422,118 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
     }
   });
 
+  // A copy of the trip-nested SimBrief import above with the trip lookup
+  // removed. The step order is the contract, exactly as it is there: settings
+  // read, network call, parse, duplicate check, then createPlannedLeg as the
+  // first and only write to planned_legs, then — and only then — the ACARS
+  // dispatch release in its own try/catch.
+  router.post('/planned-legs/simbrief', async (req, res) => {
+    const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === true;
+
+    const userId = getSetting(SIMBRIEF_USER_ID_SETTING);
+    if (userId === null) {
+      console.error('[SIMBRIEF] import failed: NO_USER_ID (no trip)');
+      res.status(400).json({
+        error: 'No SimBrief User ID is saved. Enter your SimBrief Pilot ID above and save it, then try again.',
+        code: 'NO_USER_ID',
+      });
+      return;
+    }
+
+    let plan: ParsedSimbriefPlan;
+    try {
+      plan = parseSimbriefPlan(await fetchSimbriefPlan(userId));
+    } catch (err) {
+      if (err instanceof SimbriefFetchError) {
+        console.error(`[SIMBRIEF] import failed: ${err.message}`);
+        res.status(SIMBRIEF_FAILURE_STATUS[err.code]).json({ error: err.userMessage, code: err.code });
+        return;
+      }
+      if (err instanceof SimbriefParseError) {
+        console.error(`[SIMBRIEF] import failed: BAD_BODY (${err.code}: ${err.message})`);
+        res.status(502).json({ error: 'SimBrief returned a plan with no usable route.', code: 'BAD_BODY' });
+        return;
+      }
+      console.error(`[SIMBRIEF] import failed: INTERNAL (${String(err)})`);
+      res.status(500).json({ error: String(err) });
+      return;
+    }
+
+    const label = `${plan.departure.ident} → ${plan.destination.ident}${plan.ofp.flightNumber ? ` (${plan.ofp.flightNumber})` : ''}`;
+    const ofpId = plan.ofp.requestId ?? 'unknown';
+    const sha256 = createHash('sha256')
+      .update(`simbrief\n${plan.ofp.requestId ?? ''}\n${plan.ofp.sequenceId ?? ''}\n${plan.ofp.timeGenerated ?? ''}`)
+      .digest('hex');
+
+    if (!allowDuplicates) {
+      const existing = findPlannedLegBySource(null, sha256);
+      if (existing) {
+        console.log(`[SIMBRIEF] import duplicate: no-trip leg ${existing.id} ${plan.departure.ident}->${plan.destination.ident} ofp ${ofpId}`);
+        res.json({
+          imported: [],
+          result: {
+            status: 'duplicate', planned_leg_id: existing.id, label, warnings: [],
+            error: `This SimBrief plan is already imported without a trip as leg ${existing.seq}. Generate a new OFP on simbrief.com, or re-import to add it again.`,
+          },
+        });
+        return;
+      }
+    }
+
+    try {
+      const legId = createPlannedLeg({
+        tripId: null, plan, sourceFilename: `simbrief-${ofpId}.json`, sourceSha256: sha256,
+      });
+      console.log(
+        `[SIMBRIEF] import ok: no-trip leg ${legId} ${plan.departure.ident}->${plan.destination.ident} ` +
+        `${plan.waypoints.length} wpts ${plan.approxDistanceNm.toFixed(1)}nm ofp ${ofpId}`,
+      );
+
+      try {
+        const issuedAt = new Date().toISOString();
+        const payload = buildDispatchPayload(plan);
+        insertAcarsMessageOnce({
+          planned_leg_id: legId,
+          direction: 'uplink',
+          category: 'dispatch',
+          label: DISPATCH_RELEASE_LABEL,
+          body: buildDispatchReleaseBody(payload, issuedAt),
+          payload_json: JSON.stringify(payload),
+          dedup_key: dispatchDedupKey(legId),
+          sent_at: issuedAt,
+        });
+      } catch (err) {
+        console.error(`[SIMBRIEF] dispatch release not filed: leg ${legId} ofp ${ofpId} (${String(err)})`);
+      }
+
+      res.status(201).json({
+        imported: [getPlannedLegById(legId)!],
+        result: { status: 'imported', planned_leg_id: legId, label, warnings: plan.warnings },
+      });
+    } catch (err) {
+      console.error(`[SIMBRIEF] import failed: DB_ERROR (no trip, ofp ${ofpId}, ${String(err)})`);
+      res.status(500).json({ error: String(err), code: 'DB_ERROR' });
+    }
+  });
+
   router.get('/trips/:id/planned-legs', (req, res) => {
     const tripId = parseInt(req.params.id, 10);
     if (isNaN(tripId)) { res.status(400).json({ error: 'Invalid trip id' }); return; }
     if (!getTripById(tripId)) { res.status(404).json({ error: 'Trip not found' }); return; }
     try {
       res.json(getPlannedLegsForTrip(tripId));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Unified listing for the Prefiles page and for every picker that would
+  // otherwise fan out over GET /trips/:id/planned-legs per trip. No query
+  // parameters — filtering is the client's job. Empty array when there are no
+  // legs at all, never 404.
+  router.get('/planned-legs', (req, res) => {
+    try {
+      res.json(getAllPlannedLegs());
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

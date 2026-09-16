@@ -121,8 +121,8 @@ function describeRefusal(result: LegMatchResult): string {
 interface PlannedLegCache {
   flightId: number;
   plannedLegId: number;
-  tripId: number;
-  tripName: string;
+  tripId: number | null;
+  tripName: string | null;
   destinationIdent: string;
   waypoints: { ident: string; lat: number; lon: number }[];
   remainingFromNm: number[];
@@ -139,7 +139,7 @@ function buildPlannedLegCache(flightId: number, leg: PlannedLegWithChildren): Pl
     flightId,
     plannedLegId: leg.id,
     tripId: leg.trip_id,
-    tripName: getTripName(leg.trip_id) ?? '',
+    tripName: leg.trip_id !== null ? getTripName(leg.trip_id) ?? '' : null,
     destinationIdent: leg.destination_ident,
     waypoints,
     remainingFromNm,
@@ -162,7 +162,7 @@ function buildGroundSessionCache(session: GroundSession): GroundSessionLiveStatu
     const leg = getPlannedLegById(session.planned_leg_id);
     if (leg) {
       tripId = leg.trip_id;
-      tripName = getTripName(leg.trip_id) ?? null;
+      tripName = leg.trip_id !== null ? getTripName(leg.trip_id) ?? null : null;
       departureIdent = leg.departure_ident;
       destinationIdent = leg.destination_ident;
     }

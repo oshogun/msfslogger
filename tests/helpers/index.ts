@@ -163,6 +163,15 @@ export function makePlannedLegWithChildren(over: Partial<PlannedLegWithChildren>
   };
 }
 
+/**
+ * Same fixture, but a loose leg (trip_id: null) — for a test that needs a
+ * planned leg with no owning trip. Everything else is
+ * makePlannedLegWithChildren's default unless overridden.
+ */
+export function makeLoosePlannedLegWithChildren(over: Partial<PlannedLegWithChildren> = {}): PlannedLegWithChildren {
+  return makePlannedLegWithChildren({ trip_id: null, ...over });
+}
+
 // ── Geometry helpers ─────────────────────────────────────────────────────────
 // One arc-minute is NOT one nautical mile in this codebase (R=3440.065 in
 // src/geo.ts) — never hardcode "/60" in this module.
