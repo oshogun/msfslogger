@@ -10,7 +10,9 @@ const MAX_PARKING_POSITION_LENGTH = 120;
 /**
  * /api/ground-sessions and /api/ground-sessions/current — mounted at '/api' by
  * src/server.ts, behind requireAuth and requireSameOrigin, and before the SPA
- * catch-all.
+ * catch-all. GET /ground-sessions/current also accepts an x-ingest-token
+ * header with no session cookie, the same shared secret the Windows agent
+ * uses; the two writes below stay session-only.
  *
  * Takes flightManager for two reasons: a manually-created session's
  * `aircraft` comes from the last telemetry frame, same as every other place

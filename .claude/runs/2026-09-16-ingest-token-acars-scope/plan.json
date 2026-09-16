@@ -1,0 +1,112 @@
+{
+  "run_id": "2026-09-16-ingest-token-acars-scope",
+  "goal": "Let a request carrying a valid x-ingest-token header reach a named, explicit list of routes (GET /api/status, ACARS read/write routes, GET /api/ground-sessions/current) without a session cookie, while every other /api route stays cookie-only exactly as today. This widens the scope of the existing INGEST_TOKEN — no new secret, no login flow, no prefix/wildcard bypass.",
+  "frozen_decisions": [
+    "Chosen: \"Extend ingest-token scope\" — Add a token-authorized path for GET /api/status, the ACARS read/write routes, and ground-session reads — same shared secret the agent already uses, no cookie, no login UI. Keeps the sidecar-owns-the-token boundary they already built. Requires a server-side change here (auth middleware) scoped carefully so the token can't do everything a session can.",
+    "Chosen: \"Widen the existing INGEST_TOKEN\" — Simplest: one shared secret, already deployed to the agent and the sidecar's config.json. New server-side auth path checks the same token for GET /api/status, the ACARS read/write routes, and ground-session reads. A leak exposes telemetry ingest plus ACARS/loadsheet/WX access, but nothing session-only (flight history browsing, account settings, etc.).",
+    "The user explicitly did not choose a second/separate datalink token, and did not choose a client-side login flow. Both alternatives are out of scope for this run.",
+    "keep the enumeration explicit, matching how /api/ingest/* is already special-cased in requireSameOrigin today, not a prefix/wildcard match",
+    "ground-session writes (POST /ground-sessions, DELETE /ground-sessions/current) are deliberately left off this list unless Designer finds a concrete need",
+    "No DevOps phase — no build/packaging/deploy/CI/secrets change"
+  ],
+  "sequencing_rationale": [
+    "This changes the server's auth contract, not a route body, so Design must freeze the mechanism (new scoped middleware vs. a global requireAuth change), the finalized route list, the requireSameOrigin interaction, and the error contract before any code moves — per project convention, a contract change always gets a Design phase.",
+    "Implementation is one seam: the new middleware in src/auth/middleware.ts and its mount points in src/server.ts are edited together by one backend_sr task, since splitting the middleware definition from its wiring would just be two cold reads of the same design slice for no parallelism (both files are read/write by the same task, so there is nothing to parallelize).",
+    "Review is its own phase, gated after implementation, because the acceptance criterion this run cares most about — routes NOT on the list must still reject a token-only request with 401 — is a security regression check that has to run against a live scratch server, not just a diff read.",
+    "No DevOps phase: intake explicitly skips it, this run has no build/packaging/deploy/secrets surface."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Design the token-scoped auth contract",
+      "ships": "A frozen design.md the Orchestrator can relay verbatim to the windows-client session: the finalized route list, the new middleware's exact behavior, its mount points, its requireSameOrigin interaction, and the 401 error-body shape for each failure mode.",
+      "tasks": ["T-001"]
+    },
+    {
+      "phase": 2,
+      "name": "Implement scoped token auth",
+      "ships": "The named routes accept x-ingest-token with no cookie and behave identically to a session request; every other /api route is unchanged.",
+      "tasks": ["T-002"]
+    },
+    {
+      "phase": 3,
+      "name": "Review",
+      "ships": "Reviewed, verified-against-a-running-scratch-server confirmation that the scoped routes work by token and that the skeleton-key regression (AC3) does not exist.",
+      "tasks": ["T-003"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Design requireAuthOrIngestToken: mechanism, route list, requireSameOrigin interaction, error contract",
+      "goal": "Freeze the auth-contract change described in the intake (.claude/runs/2026-09-16-ingest-token-acars-scope/intake.md — read it in full first, it is the source of truth for this task and is ~110 lines). Design a new middleware (name it requireAuthOrIngestToken or equivalent) that accepts EITHER a valid session (req.session.user, same check as the existing requireAuth in src/auth/middleware.ts lines 7-18) OR a valid x-ingest-token header (same SHA-256/timingSafeEqual comparison src/ingest.ts already does at lines 116-120 and 167-178, against config.ingest.token from src/config.ts — do not write a second comparison implementation). It must be mounted ONLY on the specific routes in the finalized list below — never as a replacement for the blanket `app.use('/api', requireAuth)` at src/server.ts line 81, which every other route must keep relying on unchanged. Work out and document the concrete mounting mechanism given that requireAuth already runs globally before every router in src/server.ts (lines 81, 134, 140, 146, 153, 158, 165, 171) — e.g. whether the scoped middleware runs before the blanket requireAuth and marks the request as authenticated so requireAuth becomes a no-op for it, or whether GET /api/status and the routers in src/routes/acars.ts and src/routes/groundSessions.ts move to their own per-router mount ahead of the blanket requireAuth line with the new middleware applied per-route inside them. Whichever shape is chosen, the design must show, route by route, that a request to anything NOT on the list still hits the unchanged requireAuth and gets 401 on a token-only request — this is the property Review will verify against a live server, so state precisely which code path produces that 401 for an off-list route. Finalize the route list against the candidates in the intake (GET /api/status; GET /api/acars/canned-messages; GET and POST /api/flights/:id/acars-messages; POST /api/flights/:id/acars-messages/wx; GET and POST /api/planned-legs/:legId/acars-messages; POST /api/planned-legs/:legId/acars-messages/wx; POST /api/planned-legs/:legId/acars-messages/loadsheet; GET /api/ground-sessions/current) — drop any route you cannot justify against a concrete sidecar need already stated in the intake, do not add any. Specify the requireSameOrigin interaction: src/auth/middleware.ts lines 25-59, specifically the existing /api/ingest/* exemption at lines 39-42 — the newly-scoped routes need the same treatment (no Origin required) when hit with a token and no cookie, without loosening the CSRF check for the same route hit with a cookie and an Origin header. Specify the error contract: exact status codes and JSON body shapes for (a) no token and no cookie on a scoped route, (b) wrong token and no cookie on a scoped route, (c) valid token but the route is not on the scoped list. Match the existing shape conventions (src/auth/middleware.ts line 17 `{ error: 'Authentication required' }`, src/ingest.ts line 176 `{ error: 'Invalid or missing ingest token' }`) rather than inventing a new envelope, and state whether scoped-route failures reuse one of those bodies verbatim or need a distinct one — the sidecar needs to tell 'not reachable' from 'wrong token' from 'not authorized for this route' per the intake. Include a worked table of every route on the final list against its middleware chain (which functions run, in what order) so the implementer does not have to re-derive it.",
+      "depends_on": [],
+      "allowed_paths": [".claude/runs/2026-09-16-ingest-token-acars-scope/design.md"],
+      "acceptance_criteria": [
+        "design.md states the exact middleware mounting mechanism (function names, file, line-level insertion point) for src/auth/middleware.ts and src/server.ts, with a route-by-route table showing which middleware chain each of the finalized routes and one off-list example route (e.g. GET /api/flights) run through",
+        "design.md's finalized route list is a subset of the intake's candidate list, each entry justified against a concrete sidecar need already stated in the intake — no route added beyond the candidates, any dropped route says why",
+        "design.md specifies the requireSameOrigin change (or explicit non-change) needed so a token-bearing, cookie-less, Origin-less request to a scoped route is not rejected by the CSRF check, referencing src/auth/middleware.ts lines 39-42 as the existing precedent",
+        "design.md specifies the exact status code and JSON body for each of: no-credential request to a scoped route, wrong-token request to a scoped route, valid-token request to an off-list route, matching or explicitly extending the existing error-body conventions in src/auth/middleware.ts:17 and src/ingest.ts:176",
+        "design.md explicitly confirms the token comparison reuses the sha256/timingSafeEqual helper pattern from src/ingest.ts (lines 116-120, 167-178) rather than a new implementation, and names where the shared comparison lives after this change (e.g. extracted into src/auth/middleware.ts or a shared module) so the implementer does not have two copies"
+      ],
+      "context": [
+        ".claude/runs/2026-09-16-ingest-token-acars-scope/intake.md",
+        "src/auth/middleware.ts",
+        "src/ingest.ts",
+        "src/config.ts",
+        "src/server.ts",
+        "src/routes/acars.ts",
+        "src/routes/groundSessions.ts",
+        "ctx.sh design 2026-09-14-acars-message-center (route/response shapes being exposed)"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-002",
+      "role": "backend_sr",
+      "title": "Implement requireAuthOrIngestToken and mount it on the finalized route list",
+      "goal": "Implement the design frozen in .claude/runs/2026-09-16-ingest-token-acars-scope/design.md verbatim: the new middleware in src/auth/middleware.ts, its mount points in src/server.ts (and src/routes/acars.ts / src/routes/groundSessions.ts if the design mounts it per-router rather than at the app.use level), and the requireSameOrigin change the design specifies. Do not re-derive the mechanism, the route list, or the error bodies — they are frozen; read the design's route-by-route middleware table and error-contract table and implement exactly what they say. If the design is ambiguous or incomplete on any point needed to implement, stop and report back rather than guessing.",
+      "depends_on": ["T-001"],
+      "allowed_paths": ["src/auth/middleware.ts", "src/server.ts", "src/routes/acars.ts", "src/routes/groundSessions.ts"],
+      "acceptance_criteria": [
+        "npx tsc (or npm run build) succeeds with no new errors",
+        "npm test passes unchanged",
+        "against a scratch server (own port, own copy of flights.db, INGEST_TOKEN set to a known scratch value) each finalized route returns 200/204 with the correct body for a request bearing only x-ingest-token and no cookie, verified with curl for at least GET /api/status, GET /api/acars/canned-messages, and one write route (e.g. POST /api/flights/:id/acars-messages) against seeded scratch data",
+        "against the same scratch server, one of the finalized routes with neither token nor cookie returns the exact status/body the design specifies",
+        "against the same scratch server, a route NOT on the finalized list (e.g. GET /api/flights) with a valid x-ingest-token and no cookie still returns 401 with the unchanged requireAuth body, and a session-authenticated browser-style request (cookie, matching Origin) to a finalized route still succeeds unchanged",
+        "the scratch server is torn down by tracked PID at the end of the task, and the live server/flights.db were never touched (state the live flights.db's newest row id or md5 before and after per .claude/ENVIRONMENT.md)"
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-ingest-token-acars-scope (full, once written by T-001)",
+        "src/auth/middleware.ts",
+        "src/ingest.ts",
+        "src/config.ts",
+        "src/server.ts",
+        "src/routes/acars.ts",
+        "src/routes/groundSessions.ts"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "reviewer",
+      "title": "Review the scoped-token auth change, with a live-server skeleton-key check",
+      "goal": "Review T-002's diff against the frozen design (.claude/runs/2026-09-16-ingest-token-acars-scope/design.md) for correctness, and independently re-verify the security-critical property this run exists to guarantee: a route NOT on the finalized list still rejects a token-only, cookie-less request with 401. Do not accept T-002's report of this as sufficient — start your own scratch server (new port, scratch copy of flights.db, a scratch INGEST_TOKEN you set yourself) and run the curl requests yourself.",
+      "depends_on": ["T-002"],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "reviewer independently starts a scratch server and, with curl, confirms that at least two routes NOT on the finalized list (e.g. GET /api/flights and GET /api/trips) return 401 with the unchanged requireAuth body when sent a valid x-ingest-token and no cookie — command output pasted into the review, not just described",
+        "reviewer independently confirms, against the same scratch server, that every route on the finalized list accepts the token with no cookie and returns the same body shape a session request would get",
+        "reviewer confirms requireSameOrigin's CSRF check is not loosened for a cookie-bearing browser request to a finalized route: a POST to a finalized route with a session cookie and a mismatched Origin still gets 403",
+        "reviewer confirms npm test and npx tsc still pass",
+        "reviewer's scratch server was torn down by tracked PID and the live flights.db was never touched, stated in the review"
+      ],
+      "context": [
+        "ctx.sh design 2026-09-16-ingest-token-acars-scope",
+        "ctx.sh task 2026-09-16-ingest-token-acars-scope T-002",
+        "git diff for T-002's changed files"
+      ],
+      "model_hint": "opus"
+    }
+  ]
+}

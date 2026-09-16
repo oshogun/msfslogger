@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import { ingestScopeOf } from './ingestScope';
 
 /** The express-session cookie name. Read here and by whoever configures the
  *  session middleware so the two never drift. */
@@ -8,10 +9,30 @@ export const SESSION_COOKIE_NAME = 'msfslogger.sid';
  * 401 gate for every /api route except /api/auth/* and /api/ingest/*,
  * mounted as `app.use('/api', requireAuth)` after those two are registered.
  * Body verbatim from contracts/samples/gated-401.json.
+ *
+ * A request the ingest-token scope gate marked as carrying a valid token for
+ * this specific route is let through the same as a session would be; every
+ * other route reaches the same 401 it always has, and reads the same
+ * unmarked, undefined scope it always has.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (req.session && req.session.user) {
     next();
+    return;
+  }
+
+  const scope = ingestScopeOf(req);
+  if (scope === 'valid') {
+    next();
+    return;
+  }
+  if (scope !== undefined) {
+    // The route would have accepted an ingest token; say so on the failure,
+    // so a token client can tell "wrong secret" from "not my route".
+    res.set('X-Ingest-Token-Scope', 'accepted');
+  }
+  if (scope === 'invalid') {
+    res.status(401).json({ error: 'Invalid or missing ingest token', code: 'INVALID_INGEST_TOKEN' });
     return;
   }
   res.status(401).json({ error: 'Authentication required' });
@@ -37,6 +58,13 @@ export function requireSameOrigin(req: Request, res: Response, next: NextFunctio
   // Step 3 — the agent is not a browser, has no cookie, and is authenticated
   // by token instead.
   if (req.path.startsWith('/api/ingest/')) {
+    next();
+    return;
+  }
+  // Step 3b — the sidecar is not a browser either: no cookie at all, and
+  // authenticated by the same token instead. A browser that has a session
+  // cookie still takes the Origin check below, even on these routes.
+  if (ingestScopeOf(req) === 'valid' && !sessionCookieFrom(req)) {
     next();
     return;
   }

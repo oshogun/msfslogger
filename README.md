@@ -54,7 +54,8 @@ npm run set-password
 ```
 
 Set a shared ingest token. The same value must be configured on the Windows
-agent:
+agent, and is also what a datalink client (the MCDU app) uses to reach the
+status and ACARS endpoints:
 
 ```bash
 export INGEST_TOKEN="$(openssl rand -hex 24)"

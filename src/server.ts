@@ -10,6 +10,7 @@ import { getConfig } from './config';
 import { getOrCreateAppSecret } from './db';
 import { SqliteSessionStore } from './auth/sessionStore';
 import { requireAuth, requireSameOrigin, SESSION_COOKIE_NAME } from './auth/middleware';
+import { createIngestTokenScopeGate } from './auth/ingestScope';
 import { createAuthRouter } from './auth/routes';
 import {
   MAX_FLIGHT_PLAN_BYTES, MAX_LNMPLN_BYTES, MAX_LNMPLN_FILES,
@@ -68,6 +69,11 @@ export function createServer(flightManager: FlightManager): express.Express {
       maxAge: config.sessionMaxAgeMs,
     },
   }));
+
+  // Classifier, not a gate: marks a request that matches the ingest-token
+  // route allowlist. Mounted after session() because it must see
+  // req.session.user, and before requireSameOrigin, which reads the mark.
+  app.use(createIngestTokenScopeGate(config.ingest));
 
   // CSRF defence in depth behind SameSite=Lax; skips GET/HEAD/OPTIONS, non-/api
   // paths and /api/ingest/*.
