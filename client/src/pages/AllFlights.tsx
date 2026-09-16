@@ -117,6 +117,21 @@ export function AllFlights() {
     }
   }
 
+  async function handleCreateBlankTrip() {
+    const name = prompt('Trip name:');
+    if (!name?.trim()) return;
+    try {
+      const { id: tripId } = await apiFetch<{ id: number }>('/api/trips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      navigate(`/trip/${tripId}`);
+    } catch (err) {
+      alert('Failed to create trip: ' + (err as Error).message);
+    }
+  }
+
   async function handleExportKml() {
     if (selectedIds.size === 0) return;
     if (selectedIds.size > 100) { alert('Select at most 100 flights to export.'); return; }
@@ -197,7 +212,10 @@ export function AllFlights() {
 
   return (
     <main className="container">
-      <div className="flights-header"><h2>Flight Log</h2></div>
+      <div className="flights-header">
+        <h2>Flight Log</h2>
+        <button className="btn btn-ghost" onClick={handleCreateBlankTrip}>New Trip</button>
+      </div>
 
       {n > 0 && (
         <div className="combine-toolbar">
