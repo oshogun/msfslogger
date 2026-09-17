@@ -577,6 +577,29 @@ export interface LoadsheetRequestResponse {
   sheet: LoadsheetFigures;
 }
 
+/** The machine-readable twin of a PDC's body, stored as the uplink message's payload_json and returned inline so no client parses the body text. */
+export interface ClearanceDetails {
+  v: 1;
+  departure_icao: string | null;
+  destination_icao: string | null;
+  route: string | null;
+  initial_altitude_ft: number;
+  squawk: string;
+}
+
+/** POST /api/planned-legs/:legId/acars-messages/clearance — 201 when the pair was written, 200 when it already existed. The request takes no body. */
+export interface ClearanceRequestResponse {
+  planned_leg_id: number;
+  /** false when this leg already had a clearance and these are the stored rows. */
+  created: boolean;
+  /** direction 'downlink', label 'REQUEST CLEARANCE'. */
+  request: AcarsMessage;
+  /** direction 'uplink', label 'PDC'. correlation_id === request.id. */
+  reply: AcarsMessage;
+  /** The clearance fields, already parsed, so no client has to scrape the body text. */
+  clearance: ClearanceDetails;
+}
+
 /** POST /api/flights/:id/acars-messages/wx request body. */
 export interface RequestWxRequest {
   /** Any string; validated server-side (see isValidIcaoShape in src/acars.ts). */

@@ -27,12 +27,18 @@ import {
   MIN_ETA_GROUND_SPEED_KTS,
   MIN_POSITION_REPORT_INTERVAL_MIN,
   NO_DISPATCH_DATA_MESSAGE,
+  NO_FLIGHT_PLAN_MESSAGE,
+  CLEARANCE_REQUEST_LABEL,
+  CLEARANCE_LABEL,
+  DEFAULT_INITIAL_ALTITUDE_FT,
   POSITION_REPORT_LABEL,
   buildDispatchPayload,
   buildDispatchReleaseBody,
   buildLoadsheetFigures,
   buildLoadsheetReplyBody,
   buildLoadsheetRequestBody,
+  buildClearanceDetails,
+  buildClearanceBody,
   buildOooiBody,
   buildOooiMessage,
   buildOooiPayload,
@@ -43,6 +49,10 @@ import {
   type PositionReportInput,
   cannedMessageIdList,
   clampRoute,
+  clearanceRequestDedupKey,
+  clearanceDedupKey,
+  deriveInitialAltitudeFt,
+  squawkForLeg,
   dispatchDedupKey,
   estimateEnrouteSec,
   field,
@@ -68,7 +78,7 @@ import {
   validateAcarsBody,
 } from '../src/acars';
 import { parseSimbriefPlan } from '../src/simbrief';
-import type { DispatchPayload, LoadsheetFigures } from '../src/types';
+import type { ClearanceDetails, DispatchPayload, LoadsheetFigures } from '../src/types';
 
 describe('isAcarsDirection', () => {
   it('accepts the two directions', () => {
@@ -1067,5 +1077,130 @@ describe('parsePositionReportIntervalMs', () => {
 
   it('defaults on an unparseable value', () => {
     expect(parsePositionReportIntervalMs('abc')).toBe(600_000);
+  });
+});
+
+describe('PDC constants and dedup keys', () => {
+  it('are the exact wire-contract strings', () => {
+    expect(NO_FLIGHT_PLAN_MESSAGE).toBe('NO FLIGHT PLAN ON FILE');
+    expect(CLEARANCE_REQUEST_LABEL).toBe('REQUEST CLEARANCE');
+    expect(CLEARANCE_LABEL).toBe('PDC');
+    expect(DEFAULT_INITIAL_ALTITUDE_FT).toBe(5000);
+  });
+
+  it('build the two literal formulas, keyed on the planned leg id', () => {
+    expect(clearanceRequestDedupKey(42)).toBe('clearance-req:leg:42');
+    expect(clearanceDedupKey(42)).toBe('clearance:leg:42');
+  });
+
+  it('gives a different leg its own keys, and the request and reply never collide', () => {
+    expect(clearanceRequestDedupKey(1)).not.toBe(clearanceRequestDedupKey(2));
+    expect(clearanceDedupKey(1)).not.toBe(clearanceDedupKey(2));
+    expect(clearanceRequestDedupKey(42)).not.toBe(clearanceDedupKey(42));
+  });
+});
+
+describe('deriveInitialAltitudeFt', () => {
+  it('defaults to 5000 when cruise altitude is unknown', () => {
+    expect(deriveInitialAltitudeFt(null)).toBe(DEFAULT_INITIAL_ALTITUDE_FT);
+  });
+
+  it('uses the cruise altitude when it is below the default', () => {
+    expect(deriveInitialAltitudeFt(3500)).toBe(3500);
+    expect(deriveInitialAltitudeFt(0)).toBe(0);
+  });
+
+  it('caps at 5000 when the cruise altitude is above it', () => {
+    expect(deriveInitialAltitudeFt(28000)).toBe(DEFAULT_INITIAL_ALTITUDE_FT);
+  });
+
+  it('a cruise altitude exactly at 5000 stays 5000', () => {
+    expect(deriveInitialAltitudeFt(5000)).toBe(5000);
+  });
+});
+
+describe('squawkForLeg', () => {
+  const RESERVED = new Set(['0000', '7500', '7600', '7700']);
+  const SAMPLE_LEG_IDS = [1, 2, 3, 7, 42, 100, 4096, 999999];
+
+  it('is deterministic: the same leg id always yields the same code', () => {
+    for (const legId of SAMPLE_LEG_IDS) {
+      expect(squawkForLeg(legId)).toBe(squawkForLeg(legId));
+    }
+  });
+
+  it('is always four characters, each an octal digit 0-7', () => {
+    for (const legId of SAMPLE_LEG_IDS) {
+      expect(squawkForLeg(legId)).toMatch(/^[0-7]{4}$/);
+    }
+  });
+
+  it('never returns a reserved code', () => {
+    for (const legId of SAMPLE_LEG_IDS) {
+      expect(RESERVED.has(squawkForLeg(legId))).toBe(false);
+    }
+  });
+
+  it('is not a constant function: different legs get different codes', () => {
+    const codes = new Set(SAMPLE_LEG_IDS.map(squawkForLeg));
+    expect(codes.size).toBeGreaterThan(1);
+  });
+});
+
+describe('buildClearanceDetails', () => {
+  it('maps the dispatch payload fields, clamping the route the same way the load sheet does', () => {
+    const details = buildClearanceDetails(basePayload(), 42);
+    expect(details).toEqual<ClearanceDetails>({
+      v: 1,
+      departure_icao: 'UHPP',
+      destination_icao: 'UHSS',
+      route: basePayload().route,
+      initial_altitude_ft: DEFAULT_INITIAL_ALTITUDE_FT,
+      squawk: squawkForLeg(42),
+    });
+  });
+
+  it('carries a null origin, destination or route through rather than substituting a fallback', () => {
+    const details = buildClearanceDetails(basePayload({ origin: null, destination: null, route: null }), 1);
+    expect(details.departure_icao).toBeNull();
+    expect(details.destination_icao).toBeNull();
+    expect(details.route).toBe('NIL');
+  });
+
+  it('gives the same leg the same clearance twice, and a different leg a different squawk', () => {
+    const a = buildClearanceDetails(basePayload(), 5);
+    const b = buildClearanceDetails(basePayload(), 5);
+    expect(a).toEqual(b);
+    const c = buildClearanceDetails(basePayload(), 6);
+    expect(a.squawk).not.toBe(c.squawk);
+  });
+});
+
+describe('buildClearanceBody', () => {
+  it('renders the fixed six-line body with the real captured OFP', () => {
+    const payload = realDispatchPayload();
+    const details = buildClearanceDetails(payload, 42);
+    const body = buildClearanceBody(details);
+    expect(body).toBe([
+      'PDC',
+      'UHPP TO UHSS',
+      `CLEARED VIA ${payload.route}`,
+      'CLIMB AND MAINTAIN 5000FT',
+      `SQUAWK ${details.squawk}`,
+      'SIMULATED CLEARANCE - NOT FOR REAL WORLD USE',
+    ].join('\n'));
+    expect(body.split('\n')).toHaveLength(6);
+  });
+
+  it('falls back to ???? for a missing departure or destination and NIL for a missing route', () => {
+    const details = buildClearanceDetails(basePayload({ origin: null, destination: null, route: null }), 1);
+    const body = buildClearanceBody(details);
+    expect(body.split('\n')[1]).toBe('???? TO ????');
+    expect(body.split('\n')[2]).toBe('CLEARED VIA NIL');
+  });
+
+  it('always carries the simulation disclaimer as the last line', () => {
+    const body = buildClearanceBody(buildClearanceDetails(basePayload(), 1));
+    expect(body.split('\n').at(-1)).toBe('SIMULATED CLEARANCE - NOT FOR REAL WORLD USE');
   });
 });

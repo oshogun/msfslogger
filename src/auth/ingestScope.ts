@@ -22,6 +22,7 @@ export const INGEST_SCOPED_ROUTES: readonly { method: 'GET' | 'POST'; pattern: R
   { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/acars-messages$/, name: 'planned-leg-acars-post' },
   { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/acars-messages\/wx$/, name: 'planned-leg-acars-wx' },
   { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/acars-messages\/loadsheet$/, name: 'planned-leg-acars-loadsheet' },
+  { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/acars-messages\/clearance$/, name: 'planned-leg-acars-clearance' },
   { method: 'GET', pattern: /^\/api\/ground-sessions\/current$/, name: 'ground-session-current' },
   { method: 'GET', pattern: /^\/api\/settings\/simbrief$/, name: 'settings-simbrief-read' },
   { method: 'POST', pattern: /^\/api\/planned-legs\/simbrief$/, name: 'planned-leg-simbrief-import' },

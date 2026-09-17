@@ -7,7 +7,7 @@
  */
 
 import type {
-  AcarsDirection, CannedAcarsMessage, CreateAcarsMessage, DispatchPayload, LoadsheetFigures,
+  AcarsDirection, CannedAcarsMessage, ClearanceDetails, CreateAcarsMessage, DispatchPayload, LoadsheetFigures,
   OooiEvent, OooiPayload, PositionReportPayload,
 } from './types';
 import type { ParsedSimbriefPlan } from './simbrief';
@@ -398,6 +398,70 @@ export function buildLoadsheetReplyBody(p: DispatchPayload, sheet: LoadsheetFigu
     field('LANDING WT', qty(sheet.landing_weight)),
     `ISSUED ${issuedAt}`,
     'ESTIMATED FIGURES - SIMULATION ONLY - NOT FOR ACTUAL LOADING',
+  ];
+  return lines.join('\n');
+}
+
+// ── PDC (Pre-Departure Clearance) ────────────────────────────────────────────
+//
+// A simulated clearance, generated from the same on-file dispatch release the
+// load sheet reads — a leg with no filed route has nothing to clear it
+// against. Keyed to the planned leg, same as the loadsheet request/reply
+// pair, and idempotent for the same reason: the same dispatch payload always
+// yields the same clearance, so a second request returns the first one
+// rather than filing a duplicate.
+
+export const NO_FLIGHT_PLAN_MESSAGE = 'NO FLIGHT PLAN ON FILE';
+export const CLEARANCE_REQUEST_LABEL = 'REQUEST CLEARANCE';
+export const CLEARANCE_LABEL = 'PDC';
+export const DEFAULT_INITIAL_ALTITUDE_FT = 5000;
+
+export function clearanceRequestDedupKey(legId: number): string {
+  return `clearance-req:leg:${legId}`;
+}
+export function clearanceDedupKey(legId: number): string {
+  return `clearance:leg:${legId}`;
+}
+
+/** min(5000, cruiseAltFt) when cruiseAltFt is known and lower; else 5000. No initial-climb-altitude data exists anywhere on a planned leg (SID has no altitude column), so this is a fixed simulated default, not derived from real procedure data. */
+export function deriveInitialAltitudeFt(cruiseAltFt: number | null): number {
+  if (cruiseAltFt === null) return DEFAULT_INITIAL_ALTITUDE_FT;
+  return Math.min(DEFAULT_INITIAL_ALTITUDE_FT, cruiseAltFt);
+}
+
+/** Deterministic 4-digit octal (digits 0-7) squawk from the leg id — same leg always gets the same code (AC2). Excludes the reserved codes 0000/7500/7600/7700. */
+export function squawkForLeg(legId: number): string {
+  const RESERVED = new Set(['0000', '7500', '7600', '7700']);
+  let n = (Math.abs(Math.trunc(legId)) * 2654435761) % 4096;
+  let code = n.toString(8).padStart(4, '0');
+  while (RESERVED.has(code)) {
+    n = (n + 1) % 4096;
+    code = n.toString(8).padStart(4, '0');
+  }
+  return code;
+}
+
+/** Field values only, no formatting — the message body and the JSON payload derive from this one struct so they cannot disagree. */
+export function buildClearanceDetails(p: DispatchPayload, legId: number): ClearanceDetails {
+  return {
+    v: 1,
+    departure_icao: p.origin,
+    destination_icao: p.destination,
+    route: clampRoute(p.route),
+    initial_altitude_ft: deriveInitialAltitudeFt(p.cruise_alt_ft),
+    squawk: squawkForLeg(legId),
+  };
+}
+
+/** The clearance body: departure/destination, cleared route, initial altitude, squawk, and an unambiguous simulation disclaimer (never to be read as a real-world IFR clearance). */
+export function buildClearanceBody(details: ClearanceDetails): string {
+  const lines = [
+    'PDC',
+    `${details.departure_icao ?? '????'} TO ${details.destination_icao ?? '????'}`,
+    `CLEARED VIA ${details.route ?? 'NIL'}`,
+    `CLIMB AND MAINTAIN ${levelText(details.initial_altitude_ft)}`,
+    `SQUAWK ${details.squawk}`,
+    'SIMULATED CLEARANCE - NOT FOR REAL WORLD USE',
   ];
   return lines.join('\n');
 }

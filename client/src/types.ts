@@ -604,6 +604,34 @@ export interface LoadsheetRequestResponse {
   sheet: LoadsheetFigures;
 }
 
+/** The machine-readable twin of a PDC's body, stored as the uplink message's payload_json and returned inline so no client parses the body text. */
+export interface ClearanceDetails {
+  v: 1;
+  departure_icao: string | null;
+  destination_icao: string | null;
+  route: string | null;
+  initial_altitude_ft: number;
+  squawk: string;
+}
+
+/**
+ * POST /api/planned-legs/:legId/acars-messages/clearance 200/201 body. The
+ * request takes no body at all.
+ *
+ * `created` is false when the leg already had a clearance: the two messages
+ * are then the stored ones, already in the thread, so they are merged into
+ * local state by id rather than appended.
+ */
+export interface ClearanceRequestResponse {
+  planned_leg_id: number;
+  created: boolean;
+  /** direction 'downlink', label 'REQUEST CLEARANCE'. */
+  request: AcarsMessage;
+  /** direction 'uplink', label 'PDC'. correlation_id === request.id. */
+  reply: AcarsMessage;
+  clearance: ClearanceDetails;
+}
+
 export interface WxWeatherPayload {
   icao: string;
   metar: string;

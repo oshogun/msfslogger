@@ -13,11 +13,13 @@ import {
   parseDispatchPayload, buildLoadsheetFigures, buildLoadsheetRequestBody, buildLoadsheetReplyBody,
   normaliseIcao, isValidIcaoShape, wxRequestLabelAndBody, wxReplyLabel,
   buildWxReplyBody, buildWxUnavailableBody, WX_UNAVAILABLE_LABEL,
+  NO_FLIGHT_PLAN_MESSAGE, CLEARANCE_REQUEST_LABEL, CLEARANCE_LABEL,
+  clearanceRequestDedupKey, clearanceDedupKey, buildClearanceDetails, buildClearanceBody,
 } from '../acars';
 import { getCachedWeather, WeatherFetchError } from '../weatherClient';
 import type {
   AcarsThread, CannedAcarsMessageList, LoadsheetRequestResponse, WxRequestResponse, WxWeatherPayload,
-  PlannedLegAcarsThread, PlannedLegWxRequestResponse,
+  PlannedLegAcarsThread, PlannedLegWxRequestResponse, ClearanceRequestResponse,
 } from '../types';
 
 /**
@@ -480,6 +482,66 @@ export function createAcarsRouter(): Router {
         request: requestResult.message,
         reply: replyResult.message,
         sheet,
+      };
+      res.status(replyResult.created ? 201 : 200).json(body);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Leg-scoped, not flight-scoped, and gated the same way as the load sheet
+  // above: a PDC is generated from the leg's on-file dispatch release, and a
+  // leg with none has no filed route to clear it against. Takes no request
+  // body. Idempotent: a second call for the same leg returns the same pair
+  // rather than filing a second one, because the same dispatch payload always
+  // derives the same clearance.
+  router.post('/planned-legs/:legId/acars-messages/clearance', (req, res) => {
+    const legId = parseInt(req.params.legId, 10);
+    if (isNaN(legId)) { res.status(400).json({ error: 'Invalid id', code: 'INVALID_ID' }); return; }
+
+    try {
+      if (!getPlannedLegById(legId)) {
+        res.status(404).json({ error: `Planned leg ${legId} not found`, code: 'PLANNED_LEG_NOT_FOUND' });
+        return;
+      }
+
+      const dispatchMessage = findAcarsMessageByDedupKey(dispatchDedupKey(legId));
+      const payload = parseDispatchPayload(dispatchMessage?.payload_json ?? null);
+      if (!payload) {
+        res.status(409).json({ error: NO_FLIGHT_PLAN_MESSAGE, code: 'NO_FLIGHT_PLAN' });
+        return;
+      }
+
+      const details = buildClearanceDetails(payload, legId);
+      const issuedAt = new Date().toISOString();
+
+      const requestResult = insertAcarsMessageOnce({
+        planned_leg_id: legId,
+        direction: 'downlink',
+        category: 'pdc',
+        label: CLEARANCE_REQUEST_LABEL,
+        body: CLEARANCE_REQUEST_LABEL,
+        dedup_key: clearanceRequestDedupKey(legId),
+        sent_at: issuedAt,
+      });
+      const replyResult = insertAcarsMessageOnce({
+        planned_leg_id: legId,
+        direction: 'uplink',
+        category: 'pdc',
+        label: CLEARANCE_LABEL,
+        body: buildClearanceBody(details),
+        payload_json: JSON.stringify(details),
+        correlation_id: requestResult.message.id,
+        dedup_key: clearanceDedupKey(legId),
+        sent_at: issuedAt,
+      });
+
+      const body: ClearanceRequestResponse = {
+        planned_leg_id: legId,
+        created: replyResult.created,
+        request: requestResult.message,
+        reply: replyResult.message,
+        clearance: details,
       };
       res.status(replyResult.created ? 201 : 200).json(body);
     } catch (err) {

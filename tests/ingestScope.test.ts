@@ -93,12 +93,13 @@ const NUMERIC_ID_PATHS: Array<[string, string]> = [
   ['POST', '/api/planned-legs/42/acars-messages'],
   ['POST', '/api/planned-legs/42/acars-messages/wx'],
   ['POST', '/api/planned-legs/42/acars-messages/loadsheet'],
+  ['POST', '/api/planned-legs/42/acars-messages/clearance'],
   ['GET', '/api/ground-sessions/current'],
 ];
 
 describe('isIngestScopedRoute', () => {
-  it('has exactly twelve entries, one per scoped route', () => {
-    expect(INGEST_SCOPED_ROUTES).toHaveLength(12);
+  it('has exactly thirteen entries, one per scoped route', () => {
+    expect(INGEST_SCOPED_ROUTES).toHaveLength(13);
   });
 
   it.each(NUMERIC_ID_PATHS)('matches %s %s with a numeric id', (method, path) => {
@@ -372,6 +373,7 @@ describe('the allowlist against the real route tables', () => {
     'POST /api/planned-legs/:legId/acars-messages',
     'POST /api/planned-legs/:legId/acars-messages/wx',
     'POST /api/planned-legs/:legId/acars-messages/loadsheet',
+    'POST /api/planned-legs/:legId/acars-messages/clearance',
     'GET /api/ground-sessions/current',
     'GET /api/settings/simbrief',
     'POST /api/planned-legs/simbrief',

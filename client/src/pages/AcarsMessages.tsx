@@ -7,6 +7,7 @@ import type {
   AcarsThread,
   CannedAcarsMessage,
   CannedAcarsMessageList,
+  ClearanceRequestResponse,
   LoadsheetRequestResponse,
   PlannedLegAcarsThread,
   PlannedLegWithChildren,
@@ -16,6 +17,8 @@ import type {
 
 /** Sentinel id for sendingId while a load sheet request is in flight — cannot collide with a canned id. */
 const LOADSHEET_SENDING_ID = 'loadsheet';
+/** Sentinel id for sendingId while a clearance request is in flight — cannot collide with a canned id. */
+const CLEARANCE_SENDING_ID = 'clearance';
 /** Sentinel id for sendingId while a weather request is in flight — cannot collide with a canned id. */
 const WX_SENDING_ID = 'wx';
 
@@ -205,6 +208,36 @@ export function AcarsMessages() {
     }
   }
 
+  async function handleRequestClearance() {
+    if (plannedLegId === null) return;
+    setSendingId(CLEARANCE_SENDING_ID);
+    setSendError('');
+    try {
+      const response = await apiFetch<ClearanceRequestResponse>(
+        `/api/planned-legs/${plannedLegId}/acars-messages/clearance`,
+        { method: 'POST' },
+      );
+      // A re-request returns the same stored pair (created: false), already in
+      // the thread — merge by id rather than push, or the duplicate rows would
+      // collide on React key.
+      setMessages(prev => {
+        const merged = [...prev];
+        for (const m of [response.request, response.reply]) {
+          const existingIndex = merged.findIndex(existing => existing.id === m.id);
+          if (existingIndex === -1) merged.push(m);
+          else merged[existingIndex] = m;
+        }
+        merged.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id - b.id);
+        return merged;
+      });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
   async function handleRequestWx() {
     const icao = wxIcao.trim().toUpperCase();
     setSendingId(WX_SENDING_ID);
@@ -301,6 +334,14 @@ export function AcarsMessages() {
                   onClick={handleRequestLoadsheet}
                 >
                   {sendingId === LOADSHEET_SENDING_ID ? 'Requesting…' : 'REQUEST LOADSHEET'}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  disabled={plannedLegId === null || sendingId !== null}
+                  title={plannedLegId === null ? 'No planned leg linked to this flight' : undefined}
+                  onClick={handleRequestClearance}
+                >
+                  {sendingId === CLEARANCE_SENDING_ID ? 'Requesting…' : 'REQUEST CLEARANCE'}
                 </button>
                 <input
                   type="text"
