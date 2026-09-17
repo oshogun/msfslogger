@@ -11,3 +11,6 @@ server.log
 backups/
 certs/
 *.pem
+client/e2e/.auth/
+client/playwright-report/
+client/test-results/

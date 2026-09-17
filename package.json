@@ -17,7 +17,9 @@
     "set-password": "node dist/setPassword.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:types": "tsc -p tsconfig.test.json"
+    "test:types": "tsc -p tsconfig.test.json",
+    "test:client": "cd client && npm test",
+    "test:e2e": "cd client && npm run test:e2e"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
