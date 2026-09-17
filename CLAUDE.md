@@ -51,6 +51,14 @@ the pages directly, still gated by Reviewer) and its own full-rebuild vs.
 targeted-refresh split. Do not invent an ad-hoc docs process inline; do not
 route it through `planner`/`designer`/the implementer roles.
 
+**CI/workflow work (`.github/workflows/**`)** is different from docs: `devops`
+already owns it, so it routes through the normal three tiers above. Load
+**[`/update-ci`](.claude/skills/update-ci/SKILL.md)** anyway before touching a
+workflow file — it picks the tier for the specific change and gives the
+scratch-clone verification recipe this repo's live-server hazards require, so
+a broken workflow gets caught locally instead of by pushing and watching
+Actions fail.
+
 ### The loop
 
 1. **Intake** — restate the goal and success criteria, and write
