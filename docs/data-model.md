@@ -1,0 +1,194 @@
+# Data model
+
+msfslogger stores everything in a single SQLite database file (`better-sqlite3`,
+WAL journal mode, foreign keys enforced), opened by `src/db/connection.ts` and
+schema-managed by `src/db/schema.ts` (`CREATE TABLE IF NOT EXISTS` plus
+idempotent `ALTER TABLE` migrations run on every startup — there is no
+separate migration-runner or migration-file directory).
+
+Path: `FLIGHTS_DB_PATH` env var, default `./flights.db` (relative to the
+process's working directory). See [configuration.md](configuration.md).
+
+## Entity overview
+
+```
+trips (1) ──── (N) flights            [flights.trip_id, no FK constraint]
+trips (1) ──── (N) planned_legs       [planned_legs.trip_id, ON DELETE CASCADE]
+planned_legs (1) ── (N) planned_waypoints   [ON DELETE CASCADE]
+planned_legs (1) ── (N) planned_alternates  [ON DELETE CASCADE]
+planned_legs (0..1) ── (0..1) flights        [flights.planned_leg_id, unique, ON DELETE SET NULL]
+flights (1) ──── (N) flight_points    [ON DELETE CASCADE]
+flights (1) ──── (N) acars_messages   [nullable FK, ON DELETE CASCADE]
+planned_legs (1) ── (N) acars_messages [nullable FK, ON DELETE CASCADE]
+ground_sessions ── flights            [flight_id, nullable, ON DELETE SET NULL]
+ground_sessions ── planned_legs       [planned_leg_id, nullable, ON DELETE SET NULL]
+```
+
+A message needs at least one of `flight_id`/`planned_leg_id` (enforced in
+`src/db/acarsMessages.ts`, not a database `CHECK`). `flights.trip_id` is a
+plain integer column with no `REFERENCES` clause — trip membership is managed
+entirely in application code (`src/db/trips.ts`).
+
+## Tables
+
+### `flights`
+
+One row per recorded flight (in progress or completed).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `aircraft` | TEXT | |
+| `departure_lat`, `departure_lon` | REAL | |
+| `arrival_lat`, `arrival_lon` | REAL | |
+| `start_time` | TEXT NOT NULL | ISO 8601 |
+| `end_time` | TEXT | NULL while in progress |
+| `duration_sec` | INTEGER | excludes pauses/interruptions — see [architecture.md](architecture.md#flight-state-machine) |
+| `distance_nm` | REAL | |
+| `max_altitude_ft`, `max_airspeed_kts` | REAL | |
+| `point_count` | INTEGER | |
+| `notes` | TEXT | operator-editable |
+| `departure_icao`, `departure_name`, `arrival_icao`, `arrival_name` | TEXT | resolved via nearest-airport lookup |
+| `flight_plan_name` | TEXT | filename of an attached PDF flight plan |
+| `trip_id` | INTEGER | loose reference, no FK constraint |
+| `planned_leg_id` | INTEGER REFERENCES `planned_legs(id)` ON DELETE SET NULL | unique (one flight per leg) |
+| `planned_leg_link_source` | TEXT | `'auto'` \| `'manual'` \| NULL |
+| `planned_leg_prev_trip_id` | INTEGER | trip held before a leg-link moved the flight; restored on unlink |
+
+### `flight_points`
+
+Track log — one row per recorded telemetry sample.
+
+| Column | Type |
+|---|---|
+| `id` | INTEGER PK |
+| `flight_id` | INTEGER NOT NULL → `flights(id)` ON DELETE CASCADE |
+| `ts` | TEXT NOT NULL |
+| `lat`, `lon` | REAL NOT NULL |
+| `altitude_ft`, `airspeed_kts`, `ground_speed_kts`, `heading_deg`, `vertical_speed_fpm` | REAL NOT NULL |
+| `on_ground` | INTEGER NOT NULL (0/1) |
+
+### `trips`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `name` | TEXT NOT NULL | |
+| `notes` | TEXT | |
+| `created_at` | TEXT NOT NULL | |
+| `is_active` | INTEGER NOT NULL DEFAULT 0 | at most one row may be active (partial unique index) |
+
+### `planned_legs`
+
+A route leg imported from `.lnmpln` or SimBrief, before (or instead of) being
+flown.
+
+| Column group | Notes |
+|---|---|
+| `id`, `trip_id` (nullable = loose leg), `seq` | identity/ordering |
+| `status` | `'planned'` \| `'flown'` \| `'diverted'` \| `'skipped'` — CHECK-constrained. No `'linked'` status; linkage is derived from `flights.planned_leg_id`. |
+| `departure_ident`, `departure_name`, `departure_lat`, `departure_lon`, `departure_is_airport` | first waypoint |
+| `departure_start`, `departure_start_type`, `departure_pos_lat`, `departure_pos_lon` | parking spot, display-only |
+| `destination_ident`, `destination_name`, `destination_lat`, `destination_lon`, `destination_is_airport` | last waypoint |
+| `is_snippet` | route fragment, not full airport-to-airport |
+| `cruise_alt_ft`, `flightplan_type`, `aircraft_type` | |
+| `sid_*` (5 cols), `star_*` (3 cols), `approach_*` (10 cols) | procedures flattened; no per-procedure waypoints stored |
+| `waypoint_count`, `alternate_count`, `approx_distance_nm` | `approx_distance_nm` sums en-route waypoints only, excluding SID/STAR/approach |
+| `arrival_deviation_nm` | written at landing, for both `'flown'` and `'diverted'` outcomes |
+| `remarks`, `plan_created_at` | |
+| `source_filename`, `source_sha256`, `source_program`, `imported_at` | provenance; raw file bytes are not retained |
+
+### `planned_waypoints` / `planned_alternates`
+
+En-route waypoints and alternate airports for a planned leg.
+
+| Column | `planned_waypoints` | `planned_alternates` |
+|---|---|---|
+| `id`, `planned_leg_id` (→ `planned_legs`, ON DELETE CASCADE), `seq` | ✓ | ✓ |
+| `ident`, `name`, `type` | ✓ | ✓ |
+| `region`, `airway`, `track`, `comment` | ✓ | — |
+| `lat`, `lon` | NOT NULL | nullable (optional in source format) |
+| `alt_ft` | computed profile altitude | — |
+
+### `acars_messages`
+
+Datalink thread, scoped to a flight and/or a planned leg (at least one
+required).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `flight_id` | → `flights(id)` ON DELETE CASCADE | nullable — pre-pushback messages have no flight yet |
+| `planned_leg_id` | → `planned_legs(id)` ON DELETE CASCADE | nullable |
+| `direction` | TEXT NOT NULL | `'uplink'` / `'downlink'` |
+| `category` | TEXT NOT NULL | `'pdc'`, `'wx'`, `'freetext'`, `'position-report'`, `'dispatch'`, `'oooi'` (open set) |
+| `label` | TEXT | display heading |
+| `body` | TEXT NOT NULL | |
+| `payload_json` | TEXT | opaque machine-readable twin |
+| `correlation_id` | → `acars_messages(id)` ON DELETE SET NULL | request/reply link |
+| `dedup_key` | TEXT | idempotency key; unique where non-null |
+| `sent_at` | TEXT NOT NULL | |
+| `read_at` | TEXT | unused — no writer sets this yet |
+
+### `ground_sessions`
+
+A record of being parked/taxiing at an airport, before a `flights` row
+exists. Never deleted by the application.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | INTEGER PK | |
+| `source` | TEXT NOT NULL CHECK (`'auto'` \| `'manual'`) | fixed at insert |
+| `airport_icao`, `airport_name`, `lat`, `lon` | nullable | |
+| `parking_position`, `parking_position_source` | TEXT | free text; source CHECK (`'auto'` \| `'manual'`) |
+| `planned_leg_id` | → `planned_legs(id)` ON DELETE SET NULL | |
+| `planned_leg_link_source` | TEXT CHECK (`'auto'` \| `'manual'`) | |
+| `aircraft` | TEXT | |
+| `started_at` | TEXT NOT NULL | |
+| `ended_at` | TEXT | NULL = open; at most one open row (partial unique index) |
+| `ended_reason` | TEXT | `'flight-started'` \| `'sim-exit'` \| `'crash'` \| `'slew'` \| `'superseded'` \| `'corrected'` \| `'manual'` |
+| `flight_id` | → `flights(id)` ON DELETE SET NULL | set when the session ended because a flight started |
+| `created_at`, `updated_at` | TEXT NOT NULL | |
+
+### `auth_user`
+
+Single operator account — `id` pinned to `1` via `CHECK (id = 1)`. Columns:
+`id`, `username`, `password_hash` (`scrypt$N$r$p$<salt>$<key>`), `created_at`,
+`updated_at`. Written only by `npm run set-password` (see
+[operations.md](operations.md)).
+
+### `auth_session`
+
+`express-session` store backing the web UI's login cookie: `sid` TEXT PK,
+`data` TEXT NOT NULL (JSON), `expires_at` INTEGER NOT NULL (epoch ms). Swept
+periodically by the server (see [operations.md](operations.md)).
+
+### `app_secret` / `app_setting`
+
+Two small key-value tables: `app_secret` holds server-generated secrets (e.g.
+a session secret, when `SESSION_SECRET` isn't set); `app_setting` holds
+operator-editable settings (currently the SimBrief pilot ID, under key
+`simbrief_user_id`). Both are `name` (TEXT PK) / `value` (TEXT NOT NULL) plus
+a timestamp.
+
+## CRUD modules
+
+Each table has a matching module under `src/db/` exposing typed functions —
+application code never writes raw SQL outside `src/db/`:
+
+| Module | Owns |
+|---|---|
+| `connection.ts` | The shared `better-sqlite3` handle: `initDb()`, `getDb()`, `closeDb()` (checkpoints WAL on close). |
+| `flights.ts` | `insertFlight`, `closeFlight`, `updateFlight`, `insertPoint`, `getFlights`/`getFlightById`, `deleteFlight`, `combineFlights`, flight-plan filename helpers. |
+| `trips.ts` | `createTrip`, `getTrips`/`getTripById`, `updateTrip`, `deleteTrip`, `assignFlightToTrip`/`removeFlightFromTrip`. |
+| `plannedLegs.ts` | `createPlannedLeg` (leg + waypoints + alternates, atomic), leg reads/reorder/status, leg↔flight linking, active-trip get/set. |
+| `groundSessions.ts` | Open/close/list a ground session, gap-filling and the manual-entry precedence rules. |
+| `acarsMessages.ts` | Insert (with dedup-key upsert), list by flight or by planned leg. |
+| `settings.ts` | Auth user, app secrets, app settings, and the `auth_session` store's own get/set/destroy/sweep. |
+
+## Flight state machine → data model
+
+Rows are created by `src/flightManager.ts` as a flight is detected, not by
+any client request — see [architecture.md § Flight state machine](architecture.md#flight-state-machine)
+for the full IDLE → GROUND → FLYING transition logic, pause/duration
+accounting, and how leg matching decides `planned_leg_id`.

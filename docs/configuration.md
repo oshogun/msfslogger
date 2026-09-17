@@ -1,0 +1,76 @@
+# Configuration
+
+All configuration is via environment variables — there is no config file.
+The server reads security-relevant variables in exactly one place,
+`src/config.ts` (`loadConfig()`), and fails fast on a bad value: any
+`ConfigError` is printed to stderr and the process exits before opening the
+database or listening on a port. A handful of non-security variables are
+read directly by the module they affect, noted below.
+
+## Server — validated by `src/config.ts`
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `3000` | HTTP(S) listen port. |
+| `BIND_HOST` | No | `0.0.0.0` | Listen address. Loopback values (`127.0.0.1`, `::1`, `localhost`) get relaxed plaintext-HTTP rules — see `ALLOW_PLAINTEXT_HTTP`. |
+| `TLS_CERT_FILE` | No, but must be set together with `TLS_KEY_FILE` | — | Path to a PEM certificate. Setting only one of the pair is a startup error. |
+| `TLS_KEY_FILE` | No, paired with `TLS_CERT_FILE` | — | Path to a PEM private key. |
+| `TLS_KEY_PASSPHRASE` | No | — | Passphrase for an encrypted private key. |
+| `ALLOW_PLAINTEXT_HTTP` | No (only consulted when TLS isn't configured) | off | Opt-in to serve plaintext HTTP on a non-loopback `BIND_HOST`. Without TLS *and* without this on a non-loopback host, the server refuses to start. Loopback hosts always get plaintext regardless of this value. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
+| `INGEST_TOKEN` | **Yes**, unless `ALLOW_UNAUTHENTICATED_INGEST` is set | — | Shared secret required on `x-ingest-token` for `/api/ingest/*` and the ingest-scoped API routes (see [api.md](api.md)). Recommended ≥16 characters (shorter values only warn, don't block startup). Must match exactly on the Windows agent's `INGEST_TOKEN`. |
+| `ALLOW_UNAUTHENTICATED_INGEST` | No | off | Disables the ingest-token check entirely. Development/trusted-LAN only — see [security.md](security.md). If both this and `INGEST_TOKEN` are set, the token wins (with a startup warning). |
+| `SESSION_SECRET` | No | random, persisted in the DB | Signs the session cookie. If unset, a random 32-byte secret is generated once and stored in the `app_secret` table, so sessions survive a restart without one. If set, must be ≥16 characters. |
+
+Example, generating a strong ingest token:
+
+```bash
+export INGEST_TOKEN="$(openssl rand -hex 24)"
+```
+
+## Server — read outside `config.ts` (not fail-fast validated)
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLIGHTS_DB_PATH` | `./flights.db` (relative to CWD) | SQLite database file path. |
+| `EXPORT_BASE_URL` | `http(s)://127.0.0.1:${PORT}` (scheme follows TLS config) | Base URL the headless PDF renderer (Puppeteer) navigates to internally. Override only for advanced/dev setups (e.g. pointing exports at a Vite dev server). |
+| `TRAFFIC_ENABLED` | on | Server-side opt-out for AI-traffic ingestion. `0`/`false`/`off`/`no` disables; anything else (including unset) leaves it on. **Independent of the agent's own `TRAFFIC_ENABLED`** — both sides must be configured, setting one doesn't imply the other. |
+| `POSITION_REPORT_INTERVAL_MIN` | `10` | Minutes between automatic ACARS position reports while flying a linked leg. `0` disables. Values between 0 and 0.5 are clamped to 0.5 (30s); unparseable or negative values fall back to the default. |
+| `SIMBRIEF_API_BASE_URL` | SimBrief's public API | Test/dev seam — not normally set. |
+| `WEATHER_API_BASE_URL` | `https://aviationweather.gov/api/data` | Test/dev seam — not normally set. |
+
+## Windows agent (`agent/`)
+
+Set on the Windows machine running MSFS, not on the server. Full detail in
+[`agent/README.md`](../agent/README.md); summarized here for completeness.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `SERVER_URL` | Yes | — | Base URL of the msfslogger server, e.g. `https://192.168.0.30:3000`. |
+| `INGEST_TOKEN` | Yes | — | Must match the server's `INGEST_TOKEN` exactly. |
+| `NODE_EXTRA_CA_CERTS` | Only for HTTPS with a self-signed cert | — | Path to the server's certificate file, so Node's `fetch` trusts it. |
+| `TRAFFIC_ENABLED` | No | on | Agent-side opt-out for gathering AI traffic. Same accepted values as the server's variable, read independently. |
+| `TRAFFIC_RADIUS_M` | No | `40000` | AI-traffic sweep radius in meters, clamped to `[1000, 200000]`. |
+
+The agent also takes a `--sim`/`-s` CLI flag (`2020` default, `2024`, `fsx`)
+selecting the SimConnect protocol revision — not an environment variable.
+
+## Docker Compose
+
+`docker-compose.yml` passes these through from the shell/`.env` — none are
+baked into the image: `INGEST_TOKEN`, `TLS_CERT_FILE`, `TLS_KEY_FILE`,
+`ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`. See [setup.md](setup.md#docker) and
+[operations.md](operations.md).
+
+## Validating your configuration
+
+There's no `config check` command — configuration is validated implicitly by
+starting the server:
+
+```bash
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+npm start
+```
+
+A bad or missing value prints one or more `[Config] ...`-prefixed lines to
+stderr and exits with status 1 before touching the database or opening a
+port. A clean start prints `[HTTP] Server running at <scheme>://<host>:<port>`.

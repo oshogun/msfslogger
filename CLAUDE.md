@@ -39,6 +39,18 @@ workflow's cost is only worth paying when the work has phases, and the loop is
 not a ceremony to perform on itself — configuration and doc changes to the
 workflow are tier 1.
 
+**Documentation work in `docs/` or `README.md` beyond a one-line typo** —
+creating or substantively updating system documentation — is none of the
+three tiers above: no implementer role owns `docs/**`/`README.md` (`backend_*`
+own `src/**`/`tests/**`/`agent/**`, `frontend_*` own `client/**`), so it
+can't route through the standard Implement step, and it introduces no
+schema/API contract, so Designer doesn't apply either. Use the
+**[`/update-docs`](.claude/skills/update-docs/SKILL.md)** skill for this —
+it has its own procedure (parallel research agents, the Orchestrator writes
+the pages directly, still gated by Reviewer) and its own full-rebuild vs.
+targeted-refresh split. Do not invent an ad-hoc docs process inline; do not
+route it through `planner`/`designer`/the implementer roles.
+
 ### The loop
 
 1. **Intake** — restate the goal and success criteria, and write

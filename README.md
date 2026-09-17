@@ -1,67 +1,53 @@
 # msfslogger
 
 Self-hosted flight logging for Microsoft Flight Simulator 2020/2024 and FSX.
-msfslogger records flight tracks and statistics in a local SQLite database and
-presents them in a React web application.
+msfslogger records flight tracks and statistics in a local SQLite database
+and presents them in a React web application.
 
-The project consists of:
+The project has three parts:
 
 - an Express and TypeScript server in `src/`;
 - a React and Vite web client in `client/`;
-- a supported Node.js SimConnect agent in `agent/` for a separate Windows PC.
+- a Node.js SimConnect agent in `agent/`, for connecting a simulator on a
+  separate Windows PC.
 
-Full usage and administration documentation is in the
-[msfslogger wiki](https://github.com/oshogun/msfslogger/wiki).
+**Full documentation lives in [`docs/`](docs/index.md).** This README is
+just enough to get a working install.
 
-## Requirements
+## Prerequisites
 
-- Node.js 20 (pinned by `.nvmrc`)
+- Node.js **20** (pinned by `.nvmrc` — `better-sqlite3` is a native
+  dependency and will not load on newer Node ABIs)
 - npm
-- Microsoft Flight Simulator 2020/2024 or FSX on Windows
-- Docker and Docker Compose, if using the container installation
-
-Use Node 20 before installing. `better-sqlite3` is a native dependency and may
-not install or run on unsupported, newer Node ABIs.
+- MSFS 2020/2024 or FSX on Windows, to actually log flights
+- Docker and Docker Compose, if using the container install
 
 ```bash
 nvm install
 nvm use
 ```
 
-## Install from source
-
-Clone the repository and install both dependency sets:
+## Quickstart
 
 ```bash
 git clone git@github.com:oshogun/msfslogger.git
 cd msfslogger
 npm install
-cd client
-npm install
-cd ..
-```
+cd client && npm install && cd ..
 
-Build the web client and server:
-
-```bash
 npm run build
-```
-
-Create the operator account:
-
-```bash
 npm run set-password
 ```
 
-Set a shared ingest token. The same value must be configured on the Windows
-agent, and is also what a datalink client (the MCDU app) uses to reach the
-status and ACARS endpoints:
+Set a shared ingest token (also required on the Windows agent, and by any
+other datalink client reaching the status/ACARS endpoints):
 
 ```bash
 export INGEST_TOKEN="$(openssl rand -hex 24)"
 ```
 
-For a LAN-accessible installation, configure HTTPS:
+For anything beyond loopback access, configure HTTPS — the server refuses
+plaintext HTTP on a non-loopback bind by default:
 
 ```bash
 export TLS_CERT_FILE=/path/to/cert.pem
@@ -69,13 +55,11 @@ export TLS_KEY_FILE=/path/to/key.pem
 npm start
 ```
 
-The server listens on port `3000` by default. See
-[Configuration and security](https://github.com/oshogun/msfslogger/wiki/Configuration-and-Security)
-for TLS setup and all environment variables.
+The server listens on port `3000`. See [`docs/setup.md`](docs/setup.md) for
+generating a self-signed cert and [`docs/configuration.md`](docs/configuration.md)
+for every environment variable.
 
 ### Development
-
-Loopback development does not require TLS:
 
 ```bash
 export BIND_HOST=127.0.0.1
@@ -83,8 +67,8 @@ export INGEST_TOKEN=devtoken1234567890
 npm run dev
 ```
 
-Open `http://localhost:5173`. Vite proxies API requests to the server on port
-`3000`.
+Open `http://localhost:5173` — Vite proxies API requests to the server on
+port `3000`.
 
 ### Production
 
@@ -97,11 +81,7 @@ Re-run `npm run build` after pulling application changes.
 
 ## Connect the simulator
 
-If msfslogger runs on the same Windows machine as the simulator, the server
-connects to SimConnect locally.
-
-If the server and simulator are on different machines, run the supported agent
-on the Windows simulator PC:
+Run the agent on the Windows PC with MSFS:
 
 ```powershell
 cd agent
@@ -111,34 +91,17 @@ $env:INGEST_TOKEN = "<the server's token>"
 npm start -- --sim 2024
 ```
 
-Use `2020`, `2024`, or `fsx` for `--sim`. See the
-[Windows agent guide](https://github.com/oshogun/msfslogger/wiki/Windows-Agent)
-for HTTPS trust, traffic settings, and startup automation. Remote SimConnect
-over TCP is not supported.
+Use `2020` (default), `2024`, or `fsx` for `--sim`. See
+[`agent/README.md`](agent/README.md) for HTTPS trust, traffic settings, and
+startup automation.
 
-## Docker install
+## Docker
 
-Create the bind-mount targets before starting Compose. Otherwise Docker may
-create a directory named `flights.db`.
-
-```bash
-touch flights.db
-mkdir -p flight_plans
-export INGEST_TOKEN="$(openssl rand -hex 24)"
-export ALLOW_PLAINTEXT_HTTP=1 # trusted LAN only; prefer TLS
-docker compose build
-```
-
-Create the operator account in the container:
-
-```bash
-printf '%s\n' '<password>' | \
-  docker compose run --rm -T msfslogger node dist/setPassword.js
-docker compose up -d
-```
-
-See the [Docker guide](https://github.com/oshogun/msfslogger/wiki/Docker)
-before using this in production, particularly for TLS and SQLite WAL handling.
+An alternative to the source install above. Create the bind-mount targets
+first (`touch flights.db`, `mkdir -p flight_plans`), or Compose creates a
+directory named `flights.db` instead of using it as a file. Full steps,
+including creating the operator account inside the container:
+[`docs/setup.md#docker`](docs/setup.md#docker).
 
 ## Test and verify
 
@@ -148,31 +111,37 @@ npm run test:types
 npm test
 ```
 
-CI runs these checks on pushes and pull requests.
+CI runs these checks on every push and pull request.
 
-## Data and backups
-
-Runtime data is stored in `flights.db`; attached PDF flight plans are stored in
-`flight_plans/`. Back up a running installation with:
+## Backups
 
 ```bash
 npm run backup
 ```
 
-Do not copy an open `flights.db` by itself: SQLite WAL data may not yet be in
-the main file. See [Operations and backups](https://github.com/oshogun/msfslogger/wiki/Operations-and-Backups).
+Do not copy an open `flights.db` by itself — WAL data may not yet be in the
+main file. Full backup/restore guidance:
+[`docs/operations.md#backups`](docs/operations.md#backups).
 
 ## Documentation
 
-- [Installation](https://github.com/oshogun/msfslogger/wiki/Installation)
-- [Configuration and security](https://github.com/oshogun/msfslogger/wiki/Configuration-and-Security)
-- [Windows agent](https://github.com/oshogun/msfslogger/wiki/Windows-Agent)
-- [Features and workflow](https://github.com/oshogun/msfslogger/wiki/Features-and-Workflow)
-- [Exports](https://github.com/oshogun/msfslogger/wiki/Exports)
-- [Operations and backups](https://github.com/oshogun/msfslogger/wiki/Operations-and-Backups)
-- [Development](https://github.com/oshogun/msfslogger/wiki/Development)
+- [Documentation home](docs/index.md)
+- [Architecture](docs/architecture.md)
+- [Setup](docs/setup.md)
+- [Configuration](docs/configuration.md)
+- [Usage](docs/usage.md)
+- [API reference](docs/api.md)
+- [Data model](docs/data-model.md)
+- [Operations](docs/operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Development](docs/development.md)
+- [Security](docs/security.md)
 
-The Node.js agent in `agent/` remains the supported, default way to connect a
-simulator on a separate Windows PC. A separate, optional Tauri/MCDU-style
-desktop client is developed independently at
+The Node.js agent in `agent/` is the supported way to connect a simulator on
+a separate Windows PC. A separate, optional Tauri/MCDU-style desktop client
+is developed independently at
 [oshogun/msfslogger_mcdu](https://github.com/oshogun/msfslogger_mcdu).
+
+## License
+
+GPL-3.0 — see [`LICENSE`](LICENSE).
