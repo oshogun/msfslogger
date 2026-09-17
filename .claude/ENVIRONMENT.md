@@ -10,16 +10,41 @@ because none of it is specific to that feature.
 
 `node dist/index.js` serves the app on port `3000` against the live
 `flights.db`. It is the user's, it is in use, and no agent may stop, restart,
-rebuild over, or reconfigure it.
+rebuild over, or reconfigure it — full stop, even with the user's live,
+in-conversation go-ahead: the harness's own permission classifier has been
+observed to refuse a restart/deploy-shaped command outright regardless of
+what the user just approved (2026-09-16). If a restart is genuinely needed,
+tell the user the exact command and have *them* run it in their own
+terminal — do not kill the running process first and discover the block
+afterward, which leaves the server down with no way back in for the agent.
 
 - Read-only `curl` against `http://localhost:3000/api/...` is fine.
 - Anything that needs a server of its own starts one on **another port**
   (`PORT=3100 …`) against a **copy** of the database, and shuts it down when the
   task ends.
-- `npm run build` overwrites `dist/`, which the running server has already
-  loaded. It does not disturb the live process, but the user's next restart
-  picks up whatever was built — so a build must leave the tree in a shippable
-  state, never mid-edit.
+- `npm run build` / `vite build` — anything that **emits** build output, not
+  just typechecks — overwrites `dist/` and `client/dist/` on disk, which the
+  running server reads live (`client/dist` via `express.static`, on every
+  request, no restart needed to serve it). Running either directly in this
+  checkout is a live action against the running server, the same class of
+  mistake as writing to the live database — it has happened five times
+  across three days (see `feedback_env_var_pipe_scoping` memory, or
+  `2026-09-16-ingest-token-acars-scope`'s review and this run's). `npx tsc
+  --noEmit` / `npm run test:types` are safe — they never write `dist/`.
+  Anything that does must run against a **copy of the tree** in scratch, not
+  this checkout, even for "just a sanity build," and even when delegating —
+  say so explicitly in the task envelope (do not rely on the general "never
+  touch the live server" line being read narrowly enough to cover it).
+- **The real launcher is `./start.sh`** (repo root, gitignored — personal to
+  this machine, not something to read or reason about from git history).
+  `./start.sh -d` starts detached, `./start.sh -r -d` restarts, `./start.sh
+  -s` stops. It sets `TLS_CERT_FILE`/`TLS_KEY_FILE`/`INGEST_TOKEN` correctly
+  (the server serves HTTPS with a self-signed cert, not plaintext HTTP) and
+  rebuilds only when `src`/`client/src` are newer than `dist/index.js`. A
+  bare `node dist/index.js` reproduces none of that env and will either fail
+  the TLS/`BIND_HOST` startup guard or come up with the wrong `INGEST_TOKEN`
+  — do not reconstruct the launch command by hand from a filtered `/proc/<pid>/environ`
+  grep; use the script, or ask the user to.
 
 ## Use Node 20. The default `node` on this machine is wrong.
 
