@@ -39,6 +39,7 @@ made **in place** after the freeze.
 | A5 | 2026-09-17 | §1.5 | "the existing four" client scripts → "the existing three (`dev`, `build`, `preview`)". | Review round 1, N4. `client/package.json` scripts block holds exactly three. |
 | A6 | 2026-09-17 | §3.3 | "byte-identical fixture content" narrowed to equality of the rendered fixture rows; the two wall-clock-stamped tables are named explicitly. | Review round 1, N5. `src/db/settings.ts:30,57,83` stamp `new Date().toISOString()`, so `auth_user` and `app_setting` timestamps differ run to run. Neither is rendered by any page. |
 | A7 | 2026-09-17 | §2.3, §2.2, must-not-change 4, Risks 9 (new) | `globalSetup` now polls `${baseURL}/login` for readiness before the login POST, so the design no longer depends on Playwright starting `webServer` before `globalSetup`; the ordering is recorded as an **unconfirmed assumption** for T-005 to check. Must-not-change 4 gains a carve-out for a comment-only cleanup of root `vitest.config.ts:1`. | Review round 1, "Verified independently vs. taken on trust" + N6. The ordering rests on P5/P6 alone, which the Reviewer could not reproduce (no Playwright installed); `playwright.dev/docs/test-webserver` and `/docs/test-global-setup-teardown` (fetched 2026-09-17) state no ordering either way. `vitest.config.ts:1` read `// vitest.config.ts — CommonJS on purpose; see design §3.2.` — a run citation in application source, which this document's own header forbids. |
+| A8 | 2026-09-17 | §3.4 | "FlightDetail `/flight/1` — … and an unlinked planned-leg picker offering leg 1" → removed; FlightDetail renders aircraft, route, and the track on the map, nothing else. The manual-entry planned-leg picker exists only on Home (already listed above it) and the link-to-leg picker only on TripDetail (already listed below it). | Phase 3 review, F-1. `client/src/pages/FlightDetail.tsx` has no planned-leg picker of any kind — confirmed by grep and by the T-007/T-009 implementer and reviewer independently; the picker described here does not exist on this page. T-007's actual FlightDetail spec asserts only what the page renders. |
 
 When reality contradicts a frozen section, edit that section **in place**, keep
 its number, and add a row here: date, section, what changed, and the command
@@ -714,7 +715,10 @@ What each page gets from this, deterministically and non-empty:
   elements in total (header row, trip row, one leg, ungrouped header, one
   flight) — asserted in P6 as `toHaveCount(5)`.
 - **FlightDetail `/flight/1`** — aircraft, route `EFHK → EETN`, a 3-point track
-  on the map, and an unlinked planned-leg picker offering leg 1.
+  on the map. No "Planned Leg" section: that block only renders when
+  `flight.planned_leg_id != null` (`client/src/pages/FlightDetail.tsx:289`),
+  and flight 1 is deliberately unlinked — see A8. There is no control on this
+  page for linking an unlinked flight to a leg.
 - **TripDetail `/trip/1`** — the trip name, one flown leg, one planned leg
   `EETN → ESSA`, and the SimBrief panel in its empty state.
 
