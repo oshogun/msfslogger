@@ -82,6 +82,12 @@ export interface SimbriefSettings {
   simbrief_user_id: string | null;
 }
 
+/** GET and PUT /api/settings/sayintentions. Absence is null, never a 404. The key is write-only (never returned in raw form). */
+export interface SayIntentionsSettings {
+  sayintentions_api_key_set: boolean;
+  sayintentions_api_key_masked: string | null;
+}
+
 // ── Planned legs ──────────────────────────────────────────────────────────────
 //
 // Mirrors src/types.ts and src/lnmpln.ts field-for-field, including
@@ -655,4 +661,68 @@ export interface WxRequestResponse {
   request: AcarsMessage;
   reply: AcarsMessage;
   weather: WxWeatherPayload | null;
+}
+
+// ── SayIntentions ─────────────────────────────────────────────────────────
+
+/**
+ * One msfslogger flight bound to whatever SayIntentions session the stored
+ * key held at the moment the operator pressed LINK.
+ */
+export interface SayIntentionsLink {
+  flight_id: number;
+  /** SayIntentions' own flight/session id, as a string, captured at link time. */
+  upstream_flight_id: string | null;
+  /** Highest comm_history[].id imported so far. null before the first import. */
+  since_id: number | null;
+  /** Highest comm_history[].id that already existed at link time. */
+  baseline_comm_id: number;
+  /** ISO 8601 UTC. */
+  linked_at: string;
+  /** ISO 8601 UTC; null until the first import. */
+  last_import_at: string | null;
+  /** Rows this link has written into acars_messages, cumulative. */
+  imported_count: number;
+}
+
+/** GET /api/flights/:id/sayintentions/link — always 200 for an existing flight. */
+export interface SayIntentionsLinkStatus {
+  flight_id: number;
+  linked: boolean;
+  link: SayIntentionsLink | null;
+  /** false when no key is stored. The UI hides its whole SayIntentions block on this alone. */
+  api_key_set: boolean;
+}
+
+/** POST /api/flights/:id/sayintentions/link — 201 on a new link, 200 on a re-link. */
+export interface SayIntentionsLinkResponse {
+  flight_id: number;
+  created: boolean;
+  link: SayIntentionsLink;
+  /** comm_history entries the first import would file, counted at link time. 0 with ?from=now. */
+  pending_messages: number;
+}
+
+/** POST /api/flights/:id/sayintentions/import — 201 when imported > 0, else 200. */
+export interface SayIntentionsImportResponse {
+  flight_id: number;
+  /** Rows written by this call. 0 is a success, not an error. */
+  imported: number;
+  /** Entries whose dedup_key was already on file. */
+  already_seen: number;
+  /** Entries that produced no row at all (no usable text in either direction). */
+  skipped: number;
+  /** The cursor after this import — the link's new since_id. */
+  since_id: number | null;
+  /** Exactly the rows written, oldest first. [] when imported === 0. */
+  messages: AcarsMessage[];
+}
+
+/** POST /api/planned-legs/:legId/sayintentions/clearance 201 body. */
+export interface SayIntentionsPushResponse {
+  planned_leg_id: number;
+  /** The exact text handed to sayAs. Never longer than 128 characters. */
+  sent_text: string;
+  /** The PDC message sent to SayIntentions, newly stored in acars_messages. */
+  message: AcarsMessage;
 }

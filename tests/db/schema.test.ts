@@ -47,6 +47,7 @@ describe('applySchema()', () => {
       'planned_alternates',
       'planned_legs',
       'planned_waypoints',
+      'sayintentions_links',
       'sqlite_sequence',
       'trips',
     ]);

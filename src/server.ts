@@ -21,6 +21,7 @@ import { createSettingsRouter } from './routes/settings';
 import { createPlannedLegsRouter } from './routes/plannedLegs';
 import { createExportsRouter } from './routes/exports';
 import { createAcarsRouter } from './routes/acars';
+import { createSayIntentionsRouter } from './routes/sayIntentions';
 import { createGroundSessionsRouter } from './routes/groundSessions';
 
 export function createServer(flightManager: FlightManager): express.Express {
@@ -169,6 +170,13 @@ export function createServer(flightManager: FlightManager): express.Express {
   // router's /flights/:id handlers match a two-segment path, this is three.
 
   app.use('/api', createAcarsRouter());
+
+  // ── SayIntentions pull ──────────────────────────────────────────────────────
+  // Mounted before the SPA catch-all, like every other /api router. Nothing
+  // already registered can capture /api/flights/:id/sayintentions/*: the
+  // flights router's handlers are two or three segments, this is four.
+
+  app.use('/api', createSayIntentionsRouter());
 
   // ── Ground sessions ────────────────────────────────────────────────────────
   // Mounted before the SPA catch-all, like every other /api router. Nothing

@@ -12,6 +12,11 @@ import type {
   PlannedLegAcarsThread,
   PlannedLegWithChildren,
   PlannedLegWxRequestResponse,
+  SayIntentionsImportResponse,
+  SayIntentionsLinkResponse,
+  SayIntentionsLinkStatus,
+  SayIntentionsPushResponse,
+  SayIntentionsSettings,
   WxRequestResponse,
 } from '../types';
 
@@ -21,6 +26,14 @@ const LOADSHEET_SENDING_ID = 'loadsheet';
 const CLEARANCE_SENDING_ID = 'clearance';
 /** Sentinel id for sendingId while a weather request is in flight — cannot collide with a canned id. */
 const WX_SENDING_ID = 'wx';
+/** Sentinel id for sendingId while a SayIntentions link/relink request is in flight. */
+const SI_LINK_SENDING_ID = 'si-link';
+/** Sentinel id for sendingId while a SayIntentions unlink request is in flight. */
+const SI_UNLINK_SENDING_ID = 'si-unlink';
+/** Sentinel id for sendingId while a SayIntentions import request is in flight. */
+const SI_IMPORT_SENDING_ID = 'si-import';
+/** Sentinel id for sendingId while a SayIntentions push request is in flight. */
+const SI_PUSH_SENDING_ID = 'si-push';
 
 /** A client-side-only sanity check; the server is still the authority (400 INVALID_ICAO). */
 function isPlausibleIcao(v: string): boolean {
@@ -79,6 +92,16 @@ export function AcarsMessages() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [sendError, setSendError] = useState('');
   const [wxIcao, setWxIcao] = useState('');
+  // null covers both "not loaded yet" and "unavailable" (no key, or the fetch
+  // itself failed) — the flight-scoped section renders the same muted line
+  // either way, per the swallow-to-null posture every SayIntentions fetch
+  // on this page uses.
+  const [siLinkStatus, setSiLinkStatus] = useState<SayIntentionsLinkStatus | null>(null);
+  const [siMessage, setSiMessage] = useState('');
+  // false means no key is saved; null means the fetch hasn't completed yet.
+  // This is distinct from siLinkStatus because in the planned-leg scope there
+  // is no link status fetch, only this key-presence check.
+  const [siKeySet, setSiKeySet] = useState<boolean | null>(null);
 
   const threadPath = scope === 'planned-leg'
     ? `/api/planned-legs/${legId}/acars-messages`
@@ -89,6 +112,7 @@ export function AcarsMessages() {
   const wxPath = scope === 'planned-leg'
     ? `/api/planned-legs/${legId}/acars-messages/wx`
     : `/api/flights/${id}/acars-messages/wx`;
+  const siLinkPath = `/api/flights/${id}/sayintentions/link`;
 
   useEffect(() => {
     let cancelled = false;
@@ -105,8 +129,23 @@ export function AcarsMessages() {
         if (err instanceof UnauthorizedError) throw err;
         return null;
       }),
+      // Only the flight scope can ever link to a SayIntentions session — a
+      // planned leg has no flight id for the link table's primary key. Same
+      // swallow-to-null posture as the canned-messages fetch above.
+      scope === 'flight'
+        ? apiFetch<SayIntentionsLinkStatus>(siLinkPath).catch(err => {
+          if (err instanceof UnauthorizedError) throw err;
+          return null;
+        })
+        : Promise.resolve(null),
+      // Fetch the key presence in both scopes (flight and planned-leg).
+      // Used by the push button which is rendered in both scopes.
+      apiFetch<SayIntentionsSettings>('/api/settings/sayintentions').catch(err => {
+        if (err instanceof UnauthorizedError) throw err;
+        return null;
+      }),
     ])
-      .then(([thread, cannedList]) => {
+      .then(([thread, cannedList, siStatus, siSettings]) => {
         if (cancelled) return;
         setMessages(thread.messages);
         // A planned-leg thread's own id is always the route param; only the
@@ -114,6 +153,8 @@ export function AcarsMessages() {
         setPlannedLegId(scope === 'planned-leg' ? Number(legId) : (thread as AcarsThread).planned_leg_id);
         if (cannedList) setCanned(cannedList.messages);
         else setCannedError('Canned messages unavailable');
+        setSiLinkStatus(siStatus);
+        setSiKeySet(siSettings ? siSettings.sayintentions_api_key_set : false);
       })
       .catch(err => {
         // A 401 has already been handled by the fetch helper, which redirects
@@ -260,6 +301,104 @@ export function AcarsMessages() {
     }
   }
 
+  // Shared by both LINK and RELINK — it's the same route either way.
+  async function handleSiLink() {
+    setSendingId(SI_LINK_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const response = await apiFetch<SayIntentionsLinkResponse>(siLinkPath, { method: 'POST' });
+      setSiLinkStatus({ flight_id: response.flight_id, linked: true, link: response.link, api_key_set: true });
+      setSiMessage(
+        `Linked to SayIntentions session ${response.link.upstream_flight_id ?? 'current'} — ${response.pending_messages} messages waiting.`
+      );
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  async function handleSiUnlink() {
+    setSendingId(SI_UNLINK_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      await apiFetch<{ flight_id: number; unlinked: boolean }>(siLinkPath, { method: 'DELETE' });
+      setSiLinkStatus(prev => (prev ? { ...prev, linked: false, link: null } : prev));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  async function handleSiImport() {
+    setSendingId(SI_IMPORT_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const response = await apiFetch<SayIntentionsImportResponse>(`/api/flights/${id}/sayintentions/import`, {
+        method: 'POST',
+      });
+      // A repeat import with nothing new upstream returns messages: [] — that
+      // is a success, not an error, and the merge below is then a no-op.
+      if (response.messages.length > 0) {
+        setMessages(prev => {
+          const merged = [...prev];
+          for (const m of response.messages) {
+            const existingIndex = merged.findIndex(existing => existing.id === m.id);
+            if (existingIndex === -1) merged.push(m);
+            else merged[existingIndex] = m;
+          }
+          merged.sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id - b.id);
+          return merged;
+        });
+      }
+      setSiMessage(response.imported > 0 ? `Imported ${response.imported} message(s).` : 'No new messages.');
+      // The import response carries the new cursor but not the link's
+      // cumulative counters or last-import timestamp, so those are refreshed
+      // from the same status endpoint the page loads on mount rather than
+      // approximated on the client.
+      try {
+        const refreshed = await apiFetch<SayIntentionsLinkStatus>(siLinkPath);
+        setSiLinkStatus(refreshed);
+      } catch (refreshErr) {
+        if (refreshErr instanceof UnauthorizedError) throw refreshErr;
+        // Leave the last known link status in place; the import itself already succeeded.
+      }
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  async function handleSiPush() {
+    if (plannedLegId === null) return;
+    setSendingId(SI_PUSH_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const response = await apiFetch<SayIntentionsPushResponse>(
+        `/api/planned-legs/${plannedLegId}/sayintentions/clearance`,
+        { method: 'POST' },
+      );
+      // A successful send returns the new row that was stored, which we append
+      // to the thread directly without merging.
+      setMessages(prev => [...prev, response.message]);
+      setSiMessage(`Sent to SayIntentions: ${response.message.body}`);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
+
   const title = scope === 'planned-leg'
     ? `ACARS Messages — Planned leg #${legId}`
     : `ACARS Messages — Flight #${id}`;
@@ -343,6 +482,24 @@ export function AcarsMessages() {
                 >
                   {sendingId === CLEARANCE_SENDING_ID ? 'Requesting…' : 'REQUEST CLEARANCE'}
                 </button>
+                {(() => {
+                  const hasPdcUplink = messages.some(m => m.category === 'pdc' && m.direction === 'uplink' && m.label === 'PDC');
+                  const isEnabled = siKeySet && plannedLegId !== null && hasPdcUplink && sendingId === null;
+                  let disabledReason = '';
+                  if (!siKeySet) disabledReason = 'No SayIntentions key saved (Prefiles → SayIntentions)';
+                  else if (plannedLegId === null) disabledReason = 'No planned leg linked to this flight';
+                  else if (!hasPdcUplink) disabledReason = 'No PDC clearance to send yet';
+                  return (
+                    <button
+                      className="btn btn-ghost"
+                      disabled={!isEnabled}
+                      title={!isEnabled ? disabledReason : undefined}
+                      onClick={handleSiPush}
+                    >
+                      {sendingId === SI_PUSH_SENDING_ID ? 'Sending…' : 'SEND TO SAYINTENTIONS'}
+                    </button>
+                  );
+                })()}
                 <input
                   type="text"
                   value={wxIcao}
@@ -378,7 +535,52 @@ export function AcarsMessages() {
               </div>
             )}
             {sendError && <p className="edit-error">{sendError}</p>}
+            {/* Shared by both scopes — the push confirmation renders here even
+                for a planned leg, where the SayIntentions section below (link
+                status, import) is flight-only and doesn't render at all. */}
+            {siMessage && <p className="flight-plan-status">{siMessage}</p>}
           </div>
+
+          {scope === 'flight' && (
+            <div className="notes-section">
+              <div className="section-title">SayIntentions</div>
+              {siLinkStatus === null || !siLinkStatus.api_key_set ? (
+                <p className="flight-plan-status">SayIntentions: no API key saved (Prefiles → SayIntentions).</p>
+              ) : (
+                <>
+                  <div className="acars-send">
+                    {siLinkStatus.linked ? (
+                      <>
+                        <button className="btn btn-ghost" disabled={sendingId !== null} onClick={handleSiLink}>
+                          {sendingId === SI_LINK_SENDING_ID ? 'Relinking…' : 'RELINK'}
+                        </button>
+                        <button className="btn btn-ghost" disabled={sendingId !== null} onClick={handleSiUnlink}>
+                          {sendingId === SI_UNLINK_SENDING_ID ? 'Unlinking…' : 'UNLINK'}
+                        </button>
+                      </>
+                    ) : (
+                      <button className="btn btn-ghost" disabled={sendingId !== null} onClick={handleSiLink}>
+                        {sendingId === SI_LINK_SENDING_ID ? 'Linking…' : 'LINK SAYINTENTIONS'}
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-ghost"
+                      disabled={sendingId !== null || !siLinkStatus.linked}
+                      title={siLinkStatus.linked ? undefined : 'Link this flight to a SayIntentions session first'}
+                      onClick={handleSiImport}
+                    >
+                      {sendingId === SI_IMPORT_SENDING_ID ? 'Importing…' : 'IMPORT SAYINTENTIONS COMMS'}
+                    </button>
+                  </div>
+                  {siLinkStatus.linked && siLinkStatus.link && (
+                    <p className="flight-plan-status">
+                      Linked · last import {siLinkStatus.link.last_import_at ? formatDate(siLinkStatus.link.last_import_at) : 'never'} · {siLinkStatus.link.imported_count} imported.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           <div className="notes-section">
             <div className="section-title">Thread</div>

@@ -7,6 +7,7 @@ import type {
   PlannedLegImportResponse,
   PlannedLegListItem,
   PlannedLegStatus,
+  SayIntentionsSettings,
   SimbriefImportResponse,
   SimbriefImportResult,
   SimbriefSettings,
@@ -39,6 +40,13 @@ export function Prefiles() {
   const [simbriefImporting, setSimbriefImporting] = useState(false);
   const [simbriefError, setSimbriefError] = useState('');
   const [simbriefResult, setSimbriefResult] = useState<SimbriefImportResult | null>(null);
+
+  // Same settings-field idiom as SimBrief above, but the server returns only
+  // a masked form of the key, never the raw value (write-only password input).
+  const [sayintentionsApiKey, setSayintentionsApiKey] = useState('');
+  const [sayintentionsSaved, setSayintentionsSaved] = useState<SayIntentionsSettings | undefined>(undefined);
+  const [sayintentionsSaving, setSayintentionsSaving] = useState(false);
+  const [sayintentionsSettingsError, setSayintentionsSettingsError] = useState('');
 
   const [skipBusyLegId, setSkipBusyLegId] = useState<number | null>(null);
   const [skipErrorByLeg, setSkipErrorByLeg] = useState<Record<number, string>>({});
@@ -76,6 +84,9 @@ export function Prefiles() {
         setSimbriefUserId(s.simbrief_user_id ?? '');
       })
       .catch(err => setSimbriefSettingsError((err as Error).message));
+    apiFetch<SayIntentionsSettings>('/api/settings/sayintentions')
+      .then(s => setSayintentionsSaved(s))
+      .catch(err => setSayintentionsSettingsError((err as Error).message));
   }, [loadLegs]);
 
   /** Same request/response handling as TripDetail.tsx's handleImportPlannedLegs, against the loose route. */
@@ -137,6 +148,41 @@ export function Prefiles() {
       setSimbriefSettingsError((err as Error).message);
     } finally {
       setSimbriefSaving(false);
+    }
+  }
+
+  async function handleSaveSayintentionsApiKey() {
+    setSayintentionsSaving(true);
+    setSayintentionsSettingsError('');
+    try {
+      const result = await apiFetch<SayIntentionsSettings>('/api/settings/sayintentions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sayintentions_api_key: sayintentionsApiKey.trim() || null }),
+      });
+      setSayintentionsSaved(result);
+      setSayintentionsApiKey('');
+    } catch (err) {
+      setSayintentionsSettingsError((err as Error).message);
+    } finally {
+      setSayintentionsSaving(false);
+    }
+  }
+
+  async function handleClearSayintentionsApiKey() {
+    setSayintentionsSaving(true);
+    setSayintentionsSettingsError('');
+    try {
+      const result = await apiFetch<SayIntentionsSettings>('/api/settings/sayintentions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sayintentions_api_key: null }),
+      });
+      setSayintentionsSaved(result);
+    } catch (err) {
+      setSayintentionsSettingsError((err as Error).message);
+    } finally {
+      setSayintentionsSaving(false);
     }
   }
 
@@ -348,6 +394,43 @@ export function Prefiles() {
         {simbriefResult?.status === 'duplicate' && (
           <p className="import-notice">{simbriefResult.error}</p>
         )}
+      </div>
+
+      <div className="simbrief-import-section">
+        <div className="section-title">SayIntentions</div>
+        <div className="flight-plan-upload">
+          <label htmlFor="prefiles-sayintentions-api-key" className="simbrief-id-label">SayIntentions API Key</label>
+          <input
+            id="prefiles-sayintentions-api-key"
+            type="password"
+            className="simbrief-id-input"
+            value={sayintentionsApiKey}
+            placeholder={sayintentionsSaved === undefined ? 'Loading…' : ''}
+            disabled={sayintentionsSaved === undefined || sayintentionsSaving}
+            onChange={e => setSayintentionsApiKey(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={sayintentionsSaved === undefined || sayintentionsSaving || !sayintentionsApiKey}
+            onClick={handleSaveSayintentionsApiKey}
+          >{sayintentionsSaving ? 'Saving…' : 'Save'}</button>
+          {sayintentionsSaved?.sayintentions_api_key_set && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={sayintentionsSaving}
+              onClick={handleClearSayintentionsApiKey}
+            >Clear</button>
+          )}
+        </div>
+        {sayintentionsSettingsError && <span className="edit-error">{sayintentionsSettingsError}</span>}
+        <p style={{ fontSize: '0.9em', color: '#7a8490', marginTop: '0.5rem' }}>
+          {sayintentionsSaved === undefined ? 'Loading…' : sayintentionsSaved.sayintentions_api_key_set ? `Saved: ${sayintentionsSaved.sayintentions_api_key_masked}` : 'No key saved'}
+        </p>
+        <p style={{ fontSize: '0.85em', color: '#7a8490', marginTop: '0.5rem' }}>
+          Optional. Enables importing SayIntentions comms into a flight's ACARS thread and sending a PDC into your live session.
+        </p>
       </div>
 
       <div className="legs-section">

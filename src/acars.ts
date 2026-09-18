@@ -466,6 +466,117 @@ export function buildClearanceBody(details: ClearanceDetails): string {
   return lines.join('\n');
 }
 
+/**
+ * Total: never throws. Reads a stored clearance's payload_json back into a
+ * ClearanceDetails, the same shape parseDispatchPayload uses for the dispatch
+ * release: `v !== 1` or an unparseable/non-object blob is `null`, and every
+ * other field falls back rather than failing the whole parse — a squawk that
+ * arrives as something other than a string reads as '0000' rather than
+ * discarding an otherwise-usable clearance.
+ */
+export function parseClearancePayload(raw: string | null): ClearanceDetails | null {
+  if (raw === null || raw === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const p = parsed as Record<string, unknown>;
+  if (p['v'] !== 1) return null;
+
+  const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+
+  return {
+    v: 1,
+    departure_icao: strOrNull(p['departure_icao']),
+    destination_icao: strOrNull(p['destination_icao']),
+    route: strOrNull(p['route']),
+    initial_altitude_ft: typeof p['initial_altitude_ft'] === 'number' ? p['initial_altitude_ft'] : DEFAULT_INITIAL_ALTITUDE_FT,
+    squawk: typeof p['squawk'] === 'string' ? p['squawk'] : '0000',
+  };
+}
+
+// ── Condensed ACARS_IN message ───────────────────────────────────────────────
+//
+// A one-line, <=128-character rendering of a clearance for SayIntentions'
+// sayAs(channel=ACARS_IN), which carries no disclaimer and clips the route
+// rather than the fixed fields around it — the departure and arrival transitions
+// are what a readback is actually about, so they are the two things that
+// survive a clip. Deliberately separate from buildClearanceBody: that body is
+// already stored, already read by the UI, and six lines long by design.
+
+/** SayIntentions' documented cap for channel=ACARS_IN. */
+export const MAX_ACARS_IN_CHARS = 128;
+
+/** Strips anything outside printable ASCII, uppercases, collapses whitespace
+ *  runs to one space, trims. Empty result (including the untouched literal
+ *  'NIL' clampRoute() emits, handled by the caller) -> null. */
+function normaliseRoute(route: string | null): string | null {
+  if (route === null) return null;
+  const cleaned = route
+    .replace(/[^\x20-\x7E]/g, ' ')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned === '' ? null : cleaned;
+}
+
+/**
+ * Fits a route's tokens into `budget` characters. The whole route wins if it
+ * fits; otherwise the first token and the last token are kept — the departure
+ * and arrival transitions — with as many middle tokens as fit before them,
+ * joined by ' .. '. Falls back to a hard character clip when even the first
+ * and last token cannot both fit, and to 'NIL' when there is no room at all.
+ */
+function clipRouteToBudget(tokens: string[], budget: number): string {
+  const whole = tokens.join(' ');
+  if (whole.length <= budget) return whole;
+
+  const last = tokens[tokens.length - 1];
+  const suffix = ` .. ${last}`;
+  if (tokens.length > 1 && suffix.length + tokens[0].length <= budget) {
+    let out = tokens[0];
+    for (let i = 1; i < tokens.length - 1; i++) {
+      const next = `${out} ${tokens[i]}`;
+      if (next.length + suffix.length > budget) break;
+      out = next;
+    }
+    return out + suffix;
+  }
+
+  if (budget >= 3) return `${whole.slice(0, budget - 2).trimEnd()}..`;
+  return 'NIL';
+}
+
+/**
+ * 'PDC <dep> <dst> CLRD <route> CLB <level> SQ <squawk>' — never longer than
+ * MAX_ACARS_IN_CHARS, for any ClearanceDetails: the route is clipped to
+ * whatever budget is left after the fixed head and tail, and a final slice
+ * makes the cap hold even if every earlier step somehow did not.
+ */
+export function buildCondensedClearanceMessage(details: ClearanceDetails): string {
+  const dep = (details.departure_icao ?? '').trim().toUpperCase() || '????';
+  const dst = (details.destination_icao ?? '').trim().toUpperCase() || '????';
+  const head = `PDC ${dep} ${dst} CLRD `;
+  const tail = ` CLB ${levelText(details.initial_altitude_ft)} SQ ${details.squawk}`;
+  const budget = MAX_ACARS_IN_CHARS - head.length - tail.length;
+
+  const route = normaliseRoute(details.route);
+  let routeText: string;
+  if (route === null || route === 'NIL') {
+    routeText = 'NIL';
+  } else if (budget < 5) {
+    routeText = 'NIL';
+  } else {
+    routeText = clipRouteToBudget(route.split(' '), budget);
+  }
+
+  const message = `${head}${routeText}${tail}`;
+  return message.length <= MAX_ACARS_IN_CHARS ? message : message.slice(0, MAX_ACARS_IN_CHARS);
+}
+
 // ── Weather request ──────────────────────────────────────────────────────────
 //
 // A crew-initiated request/reply pair, filed fresh on every call (no dedup

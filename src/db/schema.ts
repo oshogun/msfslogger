@@ -550,13 +550,43 @@ export function applySchema(db: Database.Database): void {
     -- server generates and the operator never sees: a DELETE-by-name bug here
     -- must not be able to log everyone out, and a future "show me the
     -- settings" endpoint must not be one SELECT * away from the session
-    -- secret. Nothing here is a credential — the only row today is the
-    -- SimBrief pilot ID, a public identifier SimBrief's API accepts
-    -- unauthenticated.
+    -- secret. One row here IS a credential — sayintentions_api_key, the
+    -- operator's own SayIntentions pilot key — so no route may return an
+    -- app_setting value without knowing which name it is reading (see
+    -- /api/settings/sayintentions, which returns only a masked form).
     CREATE TABLE IF NOT EXISTS app_setting (
       name       TEXT PRIMARY KEY,
       value      TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+
+    -- One msfslogger flight bound to whatever SayIntentions session the
+    -- operator's key held at the moment they pressed LINK. PRIMARY KEY, not
+    -- just a FK: one flight has at most one SayIntentions link, a database
+    -- guarantee rather than a convention, the same way idx_flights_planned_leg
+    -- makes the leg link one. CASCADE matches acars_messages: deleting a
+    -- flight deletes its link and its imported thread together, leaving no
+    -- orphan cursor behind.
+    CREATE TABLE IF NOT EXISTS sayintentions_links (
+      flight_id          INTEGER PRIMARY KEY REFERENCES flights(id) ON DELETE CASCADE,
+      -- SayIntentions' own flight/session id as seen at link time, stored as
+      -- TEXT because their JSON is not documented to be a number and a string
+      -- compares the same either way. NULL when the response carried none.
+      upstream_flight_id TEXT,
+      -- The polling cursor: the highest comm_history[].id already imported.
+      -- NULL before the first import, meaning "send no since_id at all".
+      since_id           INTEGER,
+      -- The highest comm_history[].id that existed when the link was made, so
+      -- ?from=now can start the cursor there and an operator can see how much
+      -- history predates the link. 0 when the session had no comms yet.
+      baseline_comm_id   INTEGER NOT NULL DEFAULT 0,
+      -- ISO 8601 UTC, same clock and format as flights.start_time and
+      -- acars_messages.sent_at.
+      linked_at          TEXT    NOT NULL,
+      last_import_at     TEXT,
+      -- Cumulative acars_messages rows this link has written. Display only;
+      -- nothing branches on it.
+      imported_count     INTEGER NOT NULL DEFAULT 0
     );
   `);
 

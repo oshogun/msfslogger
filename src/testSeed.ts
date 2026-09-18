@@ -36,6 +36,7 @@ const USAGE = 'Usage: FLIGHTS_DB_PATH=<path> node dist/testSeed.js   (no other a
 
 const RESET_TABLES = [
   'acars_messages',
+  'sayintentions_links',
   'ground_sessions',
   'flight_points',
   'planned_waypoints',

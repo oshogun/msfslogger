@@ -16,6 +16,7 @@ import { createAcarsRouter } from '../src/routes/acars';
 import { createGroundSessionsRouter } from '../src/routes/groundSessions';
 import { createSettingsRouter } from '../src/routes/settings';
 import { createPlannedLegsRouter } from '../src/routes/plannedLegs';
+import { createSayIntentionsRouter } from '../src/routes/sayIntentions';
 import type { FlightManager } from '../src/flightManager';
 
 const TOKEN = 'ingest-scope-test-token';
@@ -98,8 +99,8 @@ const NUMERIC_ID_PATHS: Array<[string, string]> = [
 ];
 
 describe('isIngestScopedRoute', () => {
-  it('has exactly thirteen entries, one per scoped route', () => {
-    expect(INGEST_SCOPED_ROUTES).toHaveLength(13);
+  it('has exactly nineteen entries, one per scoped route', () => {
+    expect(INGEST_SCOPED_ROUTES).toHaveLength(19);
   });
 
   it.each(NUMERIC_ID_PATHS)('matches %s %s with a numeric id', (method, path) => {
@@ -138,6 +139,50 @@ describe('isIngestScopedRoute', () => {
 
   it('does not match the trip-scoped sibling POST /api/trips/:id/planned-legs/simbrief', () => {
     expect(isIngestScopedRoute('POST', '/api/trips/123/planned-legs/simbrief')).toBe(false);
+  });
+
+  it('matches GET /api/settings/sayintentions', () => {
+    expect(isIngestScopedRoute('GET', '/api/settings/sayintentions')).toBe(true);
+  });
+
+  it('does not match the write sibling PUT /api/settings/sayintentions', () => {
+    expect(isIngestScopedRoute('PUT', '/api/settings/sayintentions')).toBe(false);
+  });
+
+  it('matches GET /api/flights/:id/sayintentions/link', () => {
+    expect(isIngestScopedRoute('GET', '/api/flights/42/sayintentions/link')).toBe(true);
+  });
+
+  it('matches POST /api/flights/:id/sayintentions/link', () => {
+    expect(isIngestScopedRoute('POST', '/api/flights/42/sayintentions/link')).toBe(true);
+  });
+
+  it('matches DELETE /api/flights/:id/sayintentions/link', () => {
+    expect(isIngestScopedRoute('DELETE', '/api/flights/42/sayintentions/link')).toBe(true);
+  });
+
+  it('does not match PATCH /api/flights/:id/sayintentions/link, a method none of its three entries list', () => {
+    expect(isIngestScopedRoute('PATCH', '/api/flights/42/sayintentions/link')).toBe(false);
+  });
+
+  it('matches POST /api/flights/:id/sayintentions/import', () => {
+    expect(isIngestScopedRoute('POST', '/api/flights/42/sayintentions/import')).toBe(true);
+  });
+
+  it('does not match the read sibling GET /api/flights/:id/sayintentions/import', () => {
+    expect(isIngestScopedRoute('GET', '/api/flights/42/sayintentions/import')).toBe(false);
+  });
+
+  it('matches POST /api/planned-legs/:legId/sayintentions/clearance', () => {
+    expect(isIngestScopedRoute('POST', '/api/planned-legs/42/sayintentions/clearance')).toBe(true);
+  });
+
+  it('does not match the read sibling GET /api/planned-legs/:legId/sayintentions/clearance', () => {
+    expect(isIngestScopedRoute('GET', '/api/planned-legs/42/sayintentions/clearance')).toBe(false);
+  });
+
+  it('does not match an arbitrary unlisted DELETE route, even though DELETE is now a valid method in the union', () => {
+    expect(isIngestScopedRoute('DELETE', '/api/flights/1')).toBe(false);
   });
 });
 
@@ -354,12 +399,14 @@ describe('the allowlist against the real route tables', () => {
   const plannedLegsRoutes = routesOf(
     createPlannedLegsRouter({} as unknown as FlightManager),
   );
+  const sayIntentionsRoutes = routesOf(createSayIntentionsRouter());
   const allRoutes = [
     { method: 'GET', path: '/api/status' }, // not from a router; asserted by name
     ...acarsRoutes,
     ...groundSessionRoutes,
     ...settingsRoutes,
     ...plannedLegsRoutes,
+    ...sayIntentionsRoutes,
   ];
 
   // Every route this run's design put on the list.
@@ -377,6 +424,12 @@ describe('the allowlist against the real route tables', () => {
     'GET /api/ground-sessions/current',
     'GET /api/settings/simbrief',
     'POST /api/planned-legs/simbrief',
+    'GET /api/settings/sayintentions',
+    'GET /api/flights/:id/sayintentions/link',
+    'POST /api/flights/:id/sayintentions/link',
+    'DELETE /api/flights/:id/sayintentions/link',
+    'POST /api/flights/:id/sayintentions/import',
+    'POST /api/planned-legs/:legId/sayintentions/clearance',
   ]);
 
   it.each(allRoutes.map(r => [`${r.method} ${r.path}`, r] as const))(

@@ -1,0 +1,80 @@
+{
+  "_note": "SYNTHETIC. Built from sayintentions-api-notes.md's field list, not captured from a live key — no key exists in this environment. T-003's inspector (src/inspect-sayintentions.ts) captures the real thing; if it disagrees, amend design.md §7.3 and §9.5 and update this file. Every field below is treated as optional by the client stub.",
+  "flight_id": 8841207,
+  "comm_history": [
+    {
+      "id": 51221,
+      "ident": "SWA1451",
+      "copilot": null,
+      "lat": 37.6188,
+      "lon": -122.3754,
+      "frequency": "121.800",
+      "is_acars": false,
+      "channel": "VOICE",
+      "stamp_zulu": "2026-09-17 14:31:02",
+      "station_name": "San Francisco Ground",
+      "incoming_message": "Southwest 1451, San Francisco Ground, taxi to runway 28R via Alpha, hold short of 1 Left.",
+      "incoming_message_english": "Southwest 1451, San Francisco Ground, taxi to runway 28R via Alpha, hold short of 1 Left.",
+      "outgoing_message": "Ground, Southwest 1451, gate 24, ready to taxi with information Kilo.",
+      "outgoing_message_english": "Ground, Southwest 1451, gate 24, ready to taxi with information Kilo.",
+      "language": "en",
+      "atc_url": "https://cdn.sayintentions.ai/audio/atc/51221.mp3",
+      "pilot_url": "https://cdn.sayintentions.ai/audio/pilot/51221.mp3"
+    },
+    {
+      "id": 51222,
+      "ident": "SWA1451",
+      "copilot": null,
+      "lat": 37.6188,
+      "lon": -122.3754,
+      "frequency": "135.100",
+      "is_acars": true,
+      "channel": "ACARS",
+      "stamp_zulu": "2026-09-17 14:33:12",
+      "station_name": "SFO CLNC",
+      "incoming_message": "PDC KSFO KLAX CLRD SSTIK3 BSR Q13 RZS KWANG2 CLB 5000FT SQ 2451",
+      "incoming_message_english": "PDC KSFO KLAX CLRD SSTIK3 BSR Q13 RZS KWANG2 CLB 5000FT SQ 2451",
+      "outgoing_message": null,
+      "outgoing_message_english": null,
+      "language": "en",
+      "atc_url": null,
+      "pilot_url": null
+    },
+    {
+      "id": 51223,
+      "ident": "SWA1451",
+      "copilot": null,
+      "lat": 37.6191,
+      "lon": -122.375,
+      "frequency": "121.800",
+      "is_acars": false,
+      "channel": "VOICE",
+      "stamp_zulu": "2026-09-17 14:35:40",
+      "station_name": null,
+      "incoming_message": "",
+      "incoming_message_english": "",
+      "outgoing_message": "Roger, Southwest 1451.",
+      "outgoing_message_english": "Roger, Southwest 1451.",
+      "language": "en",
+      "atc_url": null,
+      "pilot_url": "https://cdn.sayintentions.ai/audio/pilot/51223.mp3"
+    },
+    {
+      "id": 51224,
+      "_note": "An entry with no usable text in either direction. Counted as `skipped`; writes no row.",
+      "ident": "SWA1451",
+      "stamp_zulu": "2026-09-17 14:36:00",
+      "station_name": "San Francisco Ground",
+      "incoming_message": null,
+      "incoming_message_english": null,
+      "outgoing_message": "   ",
+      "outgoing_message_english": null,
+      "language": "en"
+    }
+  ],
+  "mission": {
+    "mission_id": 4471,
+    "mission_type": "freeflight",
+    "status": "active"
+  }
+}

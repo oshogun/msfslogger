@@ -23,6 +23,7 @@ import {
   LOADSHEET_LABEL,
   LOADSHEET_REQUEST_LABEL,
   MAX_ACARS_BODY_LENGTH,
+  MAX_ACARS_IN_CHARS,
   MAX_ROUTE_BODY_CHARS,
   MIN_ETA_GROUND_SPEED_KTS,
   MIN_POSITION_REPORT_INTERVAL_MIN,
@@ -39,6 +40,8 @@ import {
   buildLoadsheetRequestBody,
   buildClearanceDetails,
   buildClearanceBody,
+  buildCondensedClearanceMessage,
+  parseClearancePayload,
   buildOooiBody,
   buildOooiMessage,
   buildOooiPayload,
@@ -1202,5 +1205,140 @@ describe('buildClearanceBody', () => {
   it('always carries the simulation disclaimer as the last line', () => {
     const body = buildClearanceBody(buildClearanceDetails(basePayload(), 1));
     expect(body.split('\n').at(-1)).toBe('SIMULATED CLEARANCE - NOT FOR REAL WORLD USE');
+  });
+});
+
+describe('parseClearancePayload', () => {
+  it('round-trips exactly what buildClearanceDetails wrote', () => {
+    const details = buildClearanceDetails(basePayload(), 42);
+    expect(parseClearancePayload(JSON.stringify(details))).toEqual(details);
+  });
+
+  it('null and empty string both mean "nothing stored"', () => {
+    expect(parseClearancePayload(null)).toBeNull();
+    expect(parseClearancePayload('')).toBeNull();
+  });
+
+  it('unparseable JSON, a non-object, an array, and the wrong version all fail total', () => {
+    expect(parseClearancePayload('not json')).toBeNull();
+    expect(parseClearancePayload('"a string"')).toBeNull();
+    expect(parseClearancePayload('[1,2,3]')).toBeNull();
+    expect(parseClearancePayload(JSON.stringify({ ...buildClearanceDetails(basePayload(), 1), v: 2 }))).toBeNull();
+  });
+
+  it('falls back field by field rather than failing the whole parse', () => {
+    const parsed = parseClearancePayload(JSON.stringify({
+      v: 1, departure_icao: 42, destination_icao: null, route: 7, initial_altitude_ft: 'high', squawk: 9999,
+    }));
+    expect(parsed).toEqual<ClearanceDetails>({
+      v: 1,
+      departure_icao: null,
+      destination_icao: null,
+      route: null,
+      initial_altitude_ft: DEFAULT_INITIAL_ALTITUDE_FT,
+      squawk: '0000',
+    });
+  });
+});
+
+describe('buildCondensedClearanceMessage', () => {
+  // Seven worked examples, reproduced here byte for byte.
+
+  it('A — short route, fits whole (63 chars)', () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'KSFO', destination_icao: 'KLAX',
+      route: 'SSTIK3 BSR Q13 RZS KWANG2', initial_altitude_ft: 5000, squawk: '2451',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe('PDC KSFO KLAX CLRD SSTIK3 BSR Q13 RZS KWANG2 CLB 5000FT SQ 2451');
+    expect(out.length).toBe(63);
+  });
+
+  it('B — long route, clipped keeping the first and last fix (127 chars)', () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'EGLL', destination_icao: 'LFPG',
+      route:
+        'DET2F DET L6 DVR UL9 KONAN UL607 SPI UZ739 PIGOS UN872 LUMEN UM605 TANGO ' +
+        'UP600 REVTU UL610 SITET UN862 BIBAX UM728 OKRIX UY111 LORKU RANUX6A',
+      initial_altitude_ft: 5000, squawk: '5123',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe(
+      'PDC EGLL LFPG CLRD DET2F DET L6 DVR UL9 KONAN UL607 SPI UZ739 PIGOS UN872 LUMEN UM605 TANGO UP600 .. RANUX6A CLB 5000FT SQ 5123',
+    );
+    expect(out.length).toBe(127);
+  });
+
+  it('C — route === null (41 chars)', () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'SBGR', destination_icao: 'SBRJ', route: null, initial_altitude_ft: 4000, squawk: '0361',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe('PDC SBGR SBRJ CLRD NIL CLB 4000FT SQ 0361');
+    expect(out.length).toBe(41);
+  });
+
+  it("D — route is the literal 'NIL' clampRoute() emits (41 chars, same as C)", () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'SBGR', destination_icao: 'SBRJ', route: 'NIL', initial_altitude_ft: 4000, squawk: '0361',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe('PDC SBGR SBRJ CLRD NIL CLB 4000FT SQ 0361');
+    expect(out.length).toBe(41);
+  });
+
+  it('E — both ICAOs null, 18000 ft renders as a flight level (40 chars)', () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: null, destination_icao: null, route: 'DCT', initial_altitude_ft: 18000, squawk: '7401',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe('PDC ???? ???? CLRD DCT CLB FL180 SQ 7401');
+    expect(out.length).toBe(40);
+  });
+
+  it('F — one 400-character token with no whitespace to clip on (128 chars, the cap exactly)', () => {
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'KJFK', destination_icao: 'EGLL', route: 'X'.repeat(400), initial_altitude_ft: 5000, squawk: '1234',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe(
+      `PDC KJFK EGLL CLRD ${'X'.repeat(88)}.. CLB 5000FT SQ 1234`,
+    );
+    expect(out.length).toBe(128);
+  });
+
+  it("G — a 900-char route at clampRoute()'s own ceiling (127 chars)", () => {
+    const route = `${'WAYPT ABCDE FIXES UN123 '.repeat(37).trim().slice(0, 897)}...`;
+    const details: ClearanceDetails = {
+      v: 1, departure_icao: 'KJFK', destination_icao: 'EGLL', route, initial_altitude_ft: 5000, squawk: '1234',
+    };
+    const out = buildCondensedClearanceMessage(details);
+    expect(out).toBe(
+      'PDC KJFK EGLL CLRD WAYPT ABCDE FIXES UN123 WAYPT ABCDE FIXES UN123 WAYPT ABCDE FIXES UN123 WAYPT .. UN123... CLB 5000FT SQ 1234',
+    );
+    expect(out.length).toBe(127);
+  });
+
+  it('never exceeds MAX_ACARS_IN_CHARS (128) for any route length from 0 to 900 tokens, with or without separators', () => {
+    expect(MAX_ACARS_IN_CHARS).toBe(128);
+    let worst = 0;
+    for (let n = 0; n <= 900; n++) {
+      for (const sep of [' ', '']) {
+        const route = Array.from({ length: n }, (_, i) => `F${i}`).join(sep).slice(0, 900);
+        const out = buildCondensedClearanceMessage({
+          v: 1, departure_icao: 'AAAA', destination_icao: 'BBBB', route, initial_altitude_ft: 5000, squawk: '7401',
+        });
+        worst = Math.max(worst, out.length);
+        expect(out.length).toBeLessThanOrEqual(MAX_ACARS_IN_CHARS);
+      }
+    }
+    expect(worst).toBe(128);
+  });
+
+  it('never exceeds the cap even for a maximally long single-token route with no ICAOs and a null squawk-adjacent field', () => {
+    const out = buildCondensedClearanceMessage({
+      v: 1, departure_icao: null, destination_icao: null, route: 'Z'.repeat(900), initial_altitude_ft: 18000, squawk: '7700',
+    });
+    expect(out.length).toBeLessThanOrEqual(MAX_ACARS_IN_CHARS);
   });
 });

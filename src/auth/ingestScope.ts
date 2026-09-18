@@ -12,7 +12,7 @@ export type IngestScopeResult = 'valid' | 'invalid' | 'absent';
  * path only: no trailing slash, no query-string leniency needed since
  * req.path already excludes it, no wildcard prefix.
  */
-export const INGEST_SCOPED_ROUTES: readonly { method: 'GET' | 'POST'; pattern: RegExp; name: string }[] = [
+export const INGEST_SCOPED_ROUTES: readonly { method: 'GET' | 'POST' | 'DELETE'; pattern: RegExp; name: string }[] = [
   { method: 'GET', pattern: /^\/api\/status$/, name: 'status' },
   { method: 'GET', pattern: /^\/api\/acars\/canned-messages$/, name: 'acars-canned-messages' },
   { method: 'GET', pattern: /^\/api\/flights\/[^/]+\/acars-messages$/, name: 'flight-acars-read' },
@@ -26,6 +26,12 @@ export const INGEST_SCOPED_ROUTES: readonly { method: 'GET' | 'POST'; pattern: R
   { method: 'GET', pattern: /^\/api\/ground-sessions\/current$/, name: 'ground-session-current' },
   { method: 'GET', pattern: /^\/api\/settings\/simbrief$/, name: 'settings-simbrief-read' },
   { method: 'POST', pattern: /^\/api\/planned-legs\/simbrief$/, name: 'planned-leg-simbrief-import' },
+  { method: 'GET', pattern: /^\/api\/settings\/sayintentions$/, name: 'settings-sayintentions-read' },
+  { method: 'GET', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/link$/, name: 'flight-sayintentions-link-read' },
+  { method: 'POST', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/link$/, name: 'flight-sayintentions-link' },
+  { method: 'DELETE', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/link$/, name: 'flight-sayintentions-unlink' },
+  { method: 'POST', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/import$/, name: 'flight-sayintentions-import' },
+  { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/sayintentions\/clearance$/, name: 'planned-leg-sayintentions-push' },
 ];
 
 export function isIngestScopedRoute(method: string, path: string): boolean {

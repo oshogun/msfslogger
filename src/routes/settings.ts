@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import { getSetting, setSetting } from '../db';
 import { SIMBRIEF_USER_ID_SETTING, validateSimbriefUserId } from '../simbrief';
+import { SAYINTENTIONS_API_KEY_SETTING, validateSayIntentionsApiKey, maskApiKey } from '../sayIntentions';
 
 /**
  * /api/settings — mounted at '/api' by src/server.ts, so requireAuth gates both
@@ -38,6 +39,35 @@ export function createSettingsRouter(): Router {
       // Echo what was stored, post-trim, so the client renders what was saved
       // rather than what it typed.
       res.json({ simbrief_user_id: result.userId });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  router.get('/settings/sayintentions', (_req, res) => {
+    // Always 200, and — unlike /settings/simbrief — never the key itself: a
+    // SayIntentions API key is a credential, not a public identifier, so this
+    // route reports only whether one is stored and a masked form of it.
+    const key = getSetting(SAYINTENTIONS_API_KEY_SETTING);
+    res.json({ sayintentions_api_key_set: key !== null, sayintentions_api_key_masked: maskApiKey(key) });
+  });
+
+  router.put('/settings/sayintentions', (req, res) => {
+    const body = req.body as unknown;
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
+      return;
+    }
+
+    const result = validateSayIntentionsApiKey((body as Record<string, unknown>).sayintentions_api_key);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error, code: result.code });
+      return;
+    }
+
+    try {
+      setSetting(SAYINTENTIONS_API_KEY_SETTING, result.apiKey);
+      res.json({ sayintentions_api_key_set: result.apiKey !== null, sayintentions_api_key_masked: maskApiKey(result.apiKey) });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

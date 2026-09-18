@@ -97,6 +97,7 @@ const ALL_TABLES = [
   'planned_waypoints',
   'planned_alternates',
   'acars_messages',
+  'sayintentions_links',
   'flights',
   'planned_legs',
   'trips',
