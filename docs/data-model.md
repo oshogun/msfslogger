@@ -22,6 +22,7 @@ flights (1) ──── (N) acars_messages   [nullable FK, ON DELETE CASCADE]
 planned_legs (1) ── (N) acars_messages [nullable FK, ON DELETE CASCADE]
 ground_sessions ── flights            [flight_id, nullable, ON DELETE SET NULL]
 ground_sessions ── planned_legs       [planned_leg_id, nullable, ON DELETE SET NULL]
+flights (1) ── (0..1) sayintentions_links  [flight_id, PK, ON DELETE CASCADE]
 ```
 
 A message needs at least one of `flight_id`/`planned_leg_id` (enforced in
@@ -121,7 +122,7 @@ required).
 | `flight_id` | → `flights(id)` ON DELETE CASCADE | nullable — pre-pushback messages have no flight yet |
 | `planned_leg_id` | → `planned_legs(id)` ON DELETE CASCADE | nullable |
 | `direction` | TEXT NOT NULL | `'uplink'` / `'downlink'` |
-| `category` | TEXT NOT NULL | `'pdc'`, `'wx'`, `'freetext'`, `'position-report'`, `'dispatch'`, `'oooi'` (open set) |
+| `category` | TEXT NOT NULL | `'pdc'`, `'wx'`, `'freetext'`, `'position-report'`, `'dispatch'`, `'oooi'` — the *known/styled* set (`KNOWN_ACARS_CATEGORIES`, `src/acars.ts`), each with a client badge class. The column itself accepts any lower-kebab string up to 32 characters (`isValidAcarsCategory`'s shape check, not a `CHECK` constraint) — e.g. `'atc'`, written by the SayIntentions import (below), which renders through the client's generic fallback badge rather than a dedicated one |
 | `label` | TEXT | display heading |
 | `body` | TEXT NOT NULL | |
 | `payload_json` | TEXT | opaque machine-readable twin |
@@ -129,6 +130,24 @@ required).
 | `dedup_key` | TEXT | idempotency key; unique where non-null |
 | `sent_at` | TEXT NOT NULL | |
 | `read_at` | TEXT | unused — no writer sets this yet |
+
+### `sayintentions_links`
+
+At most one row per flight, binding it to a SayIntentions.AI session for the
+optional pull/import feature (see [architecture.md](architecture.md#external-integration-points)
+and [api.md](api.md#sayintentions--srcroutessayintentionsts)). Created by the
+operator explicitly (there is no automatic linking); never populated for a
+flight that hasn't been linked.
+
+| Column | Type | Notes |
+|---|---|---|
+| `flight_id` | INTEGER PK → `flights(id)` ON DELETE CASCADE | one row per flight, at most |
+| `upstream_flight_id` | TEXT | SayIntentions' own session id at link time, stored as text since their JSON shape isn't documented to be numeric; NULL if the response carried none |
+| `since_id` | INTEGER | import cursor — the highest `comm_history[].id` already imported; NULL before the first import (send no `since_id` at all) |
+| `baseline_comm_id` | INTEGER NOT NULL DEFAULT 0 | highest upstream id that existed at link time, so `?from=now` can start the cursor there |
+| `linked_at` | TEXT NOT NULL | ISO 8601 UTC |
+| `last_import_at` | TEXT | NULL until the first successful import |
+| `imported_count` | INTEGER NOT NULL DEFAULT 0 | cumulative rows written by this link; display only, nothing branches on it |
 
 ### `ground_sessions`
 
@@ -184,6 +203,7 @@ application code never writes raw SQL outside `src/db/`:
 | `plannedLegs.ts` | `createPlannedLeg` (leg + waypoints + alternates, atomic), leg reads/reorder/status, leg↔flight linking, active-trip get/set. |
 | `groundSessions.ts` | Open/close/list a ground session, gap-filling and the manual-entry precedence rules. |
 | `acarsMessages.ts` | Insert (with dedup-key upsert), list by flight or by planned leg. |
+| `sayIntentionsLinks.ts` | Get/upsert/delete a flight's SayIntentions link row, advance its import cursor. |
 | `settings.ts` | Auth user, app secrets, app settings, and the `auth_session` store's own get/set/destroy/sweep. |
 
 ## Flight state machine → data model

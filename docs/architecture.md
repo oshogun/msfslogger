@@ -19,7 +19,7 @@
 │  feature routers (flights, trips, planned-legs, exports, acars, …)    │
 │  serve client/dist/ (static) + JSON API, session or ingest-token auth │
 │                                                                        │
-│  outbound: SimBrief API, aviationweather.gov, headless Chromium (PDF) │
+│  outbound: SimBrief, aviationweather.gov, SayIntentions.AI, PDF       │
 └───────────────┬────────────────────────────────────────────┬─────────┘
                 │ same-origin HTTPS                            │ ingest-scoped
                 ▼                                              │ API (token)
@@ -47,8 +47,11 @@ Express + TypeScript, single process, single SQLite database
   settings) — this is what the MCDU app uses.
 - Generate PDF (via a self-navigated headless Chromium instance) and KML
   exports.
-- Integrate with two external HTTP services: SimBrief (OFP import) and
-  aviationweather.gov (METAR/TAF for ACARS weather replies).
+- Integrate with three external HTTP services: SimBrief (OFP import),
+  aviationweather.gov (METAR/TAF for ACARS weather replies), and
+  optionally SayIntentions.AI (pull its ATC/CPDLC comms into a flight's
+  ACARS thread, push an on-file PDC into the pilot's live session — off by
+  default, gated on an operator-supplied API key).
 
 See [api.md](api.md) for the full route table and [configuration.md](configuration.md)
 for every environment variable.
@@ -92,8 +95,9 @@ in [usage.md](usage.md) and [configuration.md](configuration.md).
 | SimConnect (local, Windows only) | agent reads | Live simulator telemetry |
 | SimBrief public API | server calls out | Importing a dispatch OFP as planned legs |
 | aviationweather.gov | server calls out | METAR/TAF for ACARS weather requests |
+| SayIntentions.AI SAPI | server calls out (optional) | Pull ATC/CPDLC comms into a flight's ACARS thread; push an on-file PDC as a real CPDLC message — off by default, needs an operator-supplied API key. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
 | OpenStreetMap tile server | browser calls out | Map tiles in the web UI |
-| MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) | calls in, via ingest-scoped API | In-sim datalink UI; separate repository, not documented here |
+| MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) | calls in, via ingest-scoped API | In-sim datalink UI, including the SayIntentions feature above; separate repository, not documented here |
 
 ## Runtime flow
 

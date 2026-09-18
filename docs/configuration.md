@@ -37,6 +37,7 @@ export INGEST_TOKEN="$(openssl rand -hex 24)"
 | `POSITION_REPORT_INTERVAL_MIN` | `10` | Minutes between automatic ACARS position reports while flying a linked leg. `0` disables. Values between 0 and 0.5 are clamped to 0.5 (30s); unparseable or negative values fall back to the default. |
 | `SIMBRIEF_API_BASE_URL` | SimBrief's public API | Test/dev seam — not normally set. |
 | `WEATHER_API_BASE_URL` | `https://aviationweather.gov/api/data` | Test/dev seam — not normally set. |
+| `SAYINTENTIONS_API_BASE_URL` | `https://apipri.sayintentions.ai/sapi` | Test/dev seam — not normally set. |
 
 ## Windows agent (`agent/`)
 

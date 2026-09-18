@@ -15,7 +15,7 @@ of truth, generated from `src/server.ts` and `src/routes/*.ts`.
 Every route below is one of exactly three values: **session** (cookie
 only), **session or token** (either credential works), or **public** (no
 auth at all). "Session or token" is not a default for `/api` — it applies
-*only* to the 13 method+path pairs in the explicit allow-list
+*only* to the 19 method+path pairs in the explicit allow-list
 `INGEST_SCOPED_ROUTES` (`src/auth/ingestScope.ts`). Everything else under
 `/api` is session-only: an otherwise-valid ingest token is never read for an
 off-list route, let alone accepted. Full mechanism (CSRF, throttling, token
@@ -131,6 +131,42 @@ session.
 |---|---|---|---|
 | GET | `/api/settings/simbrief` | session or token — allow-listed | `{simbrief_user_id}` — null if unset |
 | PUT | `/api/settings/simbrief` | session | Set the SimBrief pilot ID — note only the GET is allow-listed, not this write |
+| GET | `/api/settings/sayintentions` | session or token — allow-listed | `{sayintentions_api_key_set, sayintentions_api_key_masked}` — the raw key is never returned, only a fixed `'••••••••'` placeholder when set |
+| PUT | `/api/settings/sayintentions` | session | Set/clear the SayIntentions API key — like the SimBrief pair, only the GET is allow-listed; writing a credential is never token-reachable, categorically |
+
+## SayIntentions — `src/routes/sayIntentions.ts`
+
+Optional, default-off integration with [SayIntentions.AI](https://www.sayintentions.ai/)'s
+pilot-key API: importing its AI-ATC/CPDLC comms transcript into a flight's
+ACARS thread, and sending an on-file PDC into the pilot's live SayIntentions
+session as a real ACARS/CPDLC message. The link/import/clearance routes
+require a saved key (`409 NO_API_KEY` otherwise) — the link-status GET and
+the DELETE do not, since reporting or clearing a link needs no key. None of
+them ever returns the raw key. Every route in this table is allow-listed
+(six, counting the settings GET above) — see
+[architecture.md](architecture.md#external-integration-points) for why: the
+msfslogger server is the only thing that talks to SayIntentions directly,
+and the MCDU app is meant to be a full interface to this feature through the
+server, the same trust level already extended to the ACARS routes above.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/flights/:id/sayintentions/link` | session or token — allow-listed | Current link status for a flight: `{flight_id, linked, link, api_key_set}` |
+| POST | `/api/flights/:id/sayintentions/link` | session or token — allow-listed | Bind this flight to whatever SayIntentions session the saved key currently holds. `?from=now` imports only from this point forward; any other/missing value means "from session start" (the safe default — never an error) |
+| DELETE | `/api/flights/:id/sayintentions/link` | session or token — allow-listed | Remove the link, if any — always `200 {flight_id, unlinked}`, never errors on a missing link |
+| POST | `/api/flights/:id/sayintentions/import` | session or token — allow-listed | Pull new comms since the last import into the flight's ACARS thread (`category: 'atc'`), deduped and cursor-driven — safe to press repeatedly |
+| POST | `/api/planned-legs/:legId/sayintentions/clearance` | session or token — allow-listed | Condense the leg's on-file PDC to SayIntentions' 128-char `ACARS_IN` cap and send it as a real CPDLC message. Needs the key but not a link — leg-scoped, same as `planned-leg-acars-clearance` above |
+
+Errors specific to this feature: `409 NO_API_KEY`, `409 BAD_API_KEY`
+(upstream rejected the saved key), `409 NOT_LINKED`, `409 SESSION_CHANGED`
+(the flight's linked session no longer matches what the key returns — unlink
+and relink), `409 NO_COMMS_TO_LINK`, `409 NO_ACTIVE_SESSION` (push attempted
+with no active SayIntentions session — an expected outcome, not a fault),
+`409 NO_CLEARANCE`, `502 UPSTREAM_UNREACHABLE`/`UPSTREAM_ERROR`/
+`UPSTREAM_BAD_BODY`, `504 UPSTREAM_TIMEOUT`. The upstream call has a fixed
+10s client-side timeout (`SAYINTENTIONS_TIMEOUT_MS`,
+`src/sayIntentionsClient.ts`) — not something SayIntentions documents, our
+own margin.
 
 ## Auth — `src/auth/routes.ts`
 
@@ -171,8 +207,9 @@ routes fall through to Express's default error response.
 ## Consumers beyond the web UI
 
 The ingest-scoped routes above (status, ACARS, ground-session-current,
-SimBrief settings) exist so a non-browser client authenticated only by
-ingest token — the Windows agent, and the separate MCDU/Tauri desktop client
-(`oshogun/msfslogger_mcdu`) — can read status and exchange ACARS messages
-without a session login. See [architecture.md](architecture.md) for how
-these pieces fit together.
+SimBrief settings, SayIntentions) exist so a non-browser client
+authenticated only by ingest token — the Windows agent, and the separate
+MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) — can read status,
+exchange ACARS messages, and drive the SayIntentions integration without a
+session login. See [architecture.md](architecture.md) for how these pieces
+fit together.

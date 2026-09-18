@@ -73,6 +73,7 @@ token directly.
 | Session signing secret | `SESSION_SECRET` env var, or a random 32-byte value generated once and stored in the `app_secret` table | Set `SESSION_SECRET` explicitly if you want it independent of the database (e.g. to invalidate all sessions by rotating it without touching the DB). |
 | Operator password | never stored in plaintext | scrypt hash only, in `auth_user`. Set via `npm run set-password`'s hidden prompt or piped stdin — never as a CLI argument, to avoid it appearing in `ps` output or shell history. |
 | TLS private key | file on disk (`TLS_KEY_FILE`) | Optionally passphrase-protected (`TLS_KEY_PASSPHRASE`). Not read from the database. |
+| SayIntentions API key | operator-entered, `app_setting` table (unencrypted, same trust boundary as everything else in `flights.db`) | Optional — see [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). Never returned by the server in any response: `GET`/`PUT /api/settings/sayintentions` return only whether one is set and a fixed `'••••••••'` placeholder, never a character of the real value or even its length. Sent to SayIntentions itself as a query parameter on every upstream call (their API's own design, not ours). |
 
 None of these are logged. Example/dev values shown elsewhere in this
 documentation (e.g. `devtoken1234567890` for loopback dev) are not fit for

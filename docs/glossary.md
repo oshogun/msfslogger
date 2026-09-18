@@ -19,6 +19,7 @@ identifiers (table names, route names, variable names).
 | **OOOI** | Out / Off / On / In — the four real-world timestamp events marking pushback, takeoff, landing, and arrival at the gate. Filed automatically as ACARS messages by the flight state machine. |
 | **PDC** | Pre-Departure Clearance — an ACARS message type generated from on-file dispatch data. |
 | **Position report** | A periodic ACARS message filed automatically while flying a linked planned leg (interval configurable via `POSITION_REPORT_INTERVAL_MIN`). |
+| **SayIntentions.AI** | A third-party AI-ATC/CPDLC service for flight simulators. msfslogger has an optional, default-off integration with its pilot-key API: importing its comms transcript into a flight's ACARS thread, and sending an on-file PDC into a pilot's live SayIntentions session. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
 | **Ingest** | The one-way data path from the Windows SimConnect agent into the server: `POST /api/ingest/frame`, `/event`, `/traffic`. Authenticated by ingest token, not a session. |
 | **Ingest token** | The shared secret (`INGEST_TOKEN`) the agent (and other non-browser clients, like the MCDU app) present on the `x-ingest-token` header instead of a session cookie. See [security.md](security.md). |
 | **Frame** | One telemetry sample from SimConnect: position, altitude, airspeed, heading, on-ground flag, etc. The agent posts one roughly every second. |

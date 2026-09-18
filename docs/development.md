@@ -9,10 +9,11 @@ src/                  Express + TypeScript server
   auth/               Session, ingest-token, password, login-throttle logic
   inspect-*.ts        ts-node CLI inspectors for eyeballing behavior against real data
 client/               React + Vite web app
-  src/pages/          One component per route
+  src/pages/          One component per route, most with a *.test.tsx beside it
   src/components/     Shared UI, including all Leaflet map components
   src/hooks/          useSession (auth), useStatus (live polling)
   src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts
+  e2e/                Playwright end-to-end specs, run against a scratch instance
 agent/                Standalone Node.js SimConnect agent (runs on Windows, separate from the server's own package.json)
 tests/                Vitest suite — mirrors src/ for unit tests, tests/db/ for the db/ modules
 samples/              Read-only fixtures (e.g. .lnmpln files) used by tests
@@ -75,12 +76,62 @@ real `flights.db` or the port your own instance runs on), direct
 (`ts-node src/inspect-<name>.ts`) for behavior that's easier to check
 against a real fixture than to assert on in a unit test.
 
+### Frontend component tests
+
+`client/src/pages/*.test.tsx` (Vitest + React Testing Library, same `npm
+test` runner as the backend suite, run from `client/`) cover page-level
+behavior with the real fetch calls replaced by `mockFetchRoutes`
+(`client/src/test/mockFetch.ts`) and rendered via `renderWithProviders`
+(`client/src/test/renderWithProviders.tsx`) — no real server, no network.
+Covers 7 of the 11 page components; the two easter-egg pages (`Device`,
+`Override`) and the two headless print-export targets (`PrintFlight`,
+`PrintTrip`) have no dedicated test file.
+
+```bash
+cd client
+npm test            # run once
+npm run test:watch  # watch mode
+npm run test:types  # typecheck client/src + client tests
+```
+
+### End-to-end tests (Playwright)
+
+`client/e2e/specs/*.spec.ts` drive a real browser against a real,
+disposable instance of the app — the one place this project's test suite
+does start a live server, deliberately isolated from the developer's own:
+
+- `client/e2e/scratch-server.sh` provisions it: copies the repo into a
+  scratch directory outside the tree (refuses to run inside the repo, and
+  refuses port `3000` outright — both are hard guards in the script, not
+  conventions), builds it there, seeds a deterministic fixture database via
+  `src/testSeed.ts` (compiled into `dist/`, invoked as `FLIGHTS_DB_PATH=...
+  node dist/testSeed.js` — idempotent, and refuses to run against a
+  database that isn't either brand-new or already carries its own
+  fixtures), and starts the server on a scratch port (`3210` by default).
+- `npm run test:e2e` (from `client/`) runs Playwright against that instance;
+  `npm run test:e2e:ui` opens Playwright's interactive UI mode for the same
+  suite.
+- Covers the journeys named in `user_stories/frontend_testing.md`:
+  authentication, core data-visualization/interaction, and error/
+  loading-state handling (`client/e2e/specs/auth.spec.ts`,
+  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`).
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and every pull request (no
-branch filter), on Node 20 (from `.nvmrc`): `npm ci` (root and `client/`),
-`npm run build`, `npm run test:types`, `npm test`. There's no separate lint
-step and no coverage gate configured.
+branch filter), on Node 20 (from `.nvmrc`), as two jobs:
+
+- **`build-and-test`**: `npm ci` (root and `client/`), `npm run build`,
+  `npm run test:types` (root and client), `npm test` (root and client's
+  component suite).
+- **`e2e`** (depends on `build-and-test` passing first): installs the
+  Playwright Chromium browser, runs `cd client && npm run test:e2e` (with
+  `MSFSLOGGER_E2E_SCRATCH` pointed at the runner's temp directory), and
+  uploads Playwright's HTML report as a build artifact on success and
+  failure both (skipped only if the job is cancelled), plus traces/
+  screenshots/JUnit XML on failure only.
+
+There's no separate lint step and no coverage gate configured.
 
 ## Branching and review
 

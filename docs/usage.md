@@ -76,6 +76,14 @@ A simulated ACARS inbox/outbox per flight and per planned leg:
   dispatch data these return `409`).
 - Automatic OOOI (Out/Off/On/In) messages and periodic position reports are
   filed by the flight state machine itself, no action needed.
+- **Optional**: link a [SayIntentions.AI](https://www.sayintentions.ai/) pilot
+  API key under Prefiles to enable link/import (flight scope) and send
+  (flight and planned-leg scope) controls on the ACARS page — importing
+  SayIntentions' own AI-ATC/CPDLC transcript into this same thread, and
+  sending an on-file PDC into the pilot's live SayIntentions session as a
+  real CPDLC message. Off by default: with no key set, the ACARS page still
+  shows a disabled SayIntentions section explaining why, rather than nothing
+  at all. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts).
 
 ## Run, debug, test
 
@@ -86,8 +94,10 @@ A simulated ACARS inbox/outbox per flight and per planned leg:
 | Start (after build) | `npm start` |
 | Type-check the app | `npx tsc --noEmit` |
 | Type-check the app + tests | `npm run test:types` |
-| Run the test suite once | `npm test` |
-| Run the test suite in watch mode | `npm run test:watch` |
+| Run the backend test suite once | `npm test` |
+| Run the backend test suite in watch mode | `npm run test:watch` |
+| Run the frontend component tests | `cd client && npm test` |
+| Run the end-to-end (Playwright) tests | `cd client && npm run test:e2e` |
 
 All `node`/`npm`/`npx` commands assume Node 20 is active (`nvm use`). See
 [development.md](development.md) for the test suite's conventions.
