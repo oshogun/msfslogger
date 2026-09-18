@@ -45,6 +45,10 @@ Express + TypeScript, single process, single SQLite database
 - Serve a second, narrower JSON API to non-browser clients authenticated by
   ingest token only (status, ACARS, ground-session-current, SimBrief
   settings) — this is what the MCDU app uses.
+- Serve an optional [MCP](https://modelcontextprotocol.io/) endpoint
+  (`/mcp`, its own bearer-token credential, off unless `MCP_TOKEN` is set)
+  exposing the logbook as 18 tools to a remote MCP client such as Claude
+  Desktop/Code. See [api.md § MCP server](api.md#mcp-server--srcmcp).
 - Generate PDF (via a self-navigated headless Chromium instance) and KML
   exports.
 - Integrate with three external HTTP services: SimBrief (OFP import),
@@ -98,6 +102,7 @@ in [usage.md](usage.md) and [configuration.md](configuration.md).
 | SayIntentions.AI SAPI | server calls out (optional) | Pull ATC/CPDLC comms into a flight's ACARS thread; push an on-file PDC as a real CPDLC message — off by default, needs an operator-supplied API key. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
 | OpenStreetMap tile server | browser calls out | Map tiles in the web UI |
 | MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) | calls in, via ingest-scoped API | In-sim datalink UI, including the SayIntentions feature above; separate repository, not documented here |
+| MCP client (e.g. Claude Desktop/Code) | calls in, via `/mcp` with its own bearer token | Read/edit the logbook through 18 MCP tools — off by default, needs an operator-supplied `MCP_TOKEN`. See [api.md § MCP server](api.md#mcp-server--srcmcp). |
 
 ## Runtime flow
 
@@ -123,18 +128,21 @@ Middleware order is deliberate and load-bearing:
    `client/dist`.
 2. `/api/ingest/*` — mounted **before** session middleware, authenticated
    independently by ingest token.
-3. Session middleware (cookie `msfslogger.sid`, SQLite-backed store).
-4. An ingest-token *scope classifier* (marks eligible requests; doesn't gate
+3. `/mcp` — mounted only when `MCP_TOKEN` is set, also **before** session
+   middleware and outside `/api` entirely, authenticated independently by
+   its own bearer token. See [api.md § MCP server](api.md#mcp-server--srcmcp).
+4. Session middleware (cookie `msfslogger.sid`, SQLite-backed store).
+5. An ingest-token *scope classifier* (marks eligible requests; doesn't gate
    by itself).
-5. `requireSameOrigin` (CSRF defense-in-depth).
-6. `/api/auth/*` — public, mounted before the auth gate.
-7. `requireAuth` — the single gate for everything else under `/api`: passes
+6. `requireSameOrigin` (CSRF defense-in-depth).
+7. `/api/auth/*` — public, mounted before the auth gate.
+8. `requireAuth` — the single gate for everything else under `/api`: passes
    with a valid session **or** a validly-scoped ingest token.
-8. Feature routers (flights, trips, settings, planned legs, exports, acars,
+9. Feature routers (flights, trips, settings, planned legs, exports, acars,
    ground sessions).
-9. SPA catch-all (`GET *` → `client/dist/index.html`) for client-side
-   routing.
-10. A final error handler normalizing upload and malformed-JSON errors.
+10. SPA catch-all (`GET *` → `client/dist/index.html`) for client-side
+    routing.
+11. A final error handler normalizing upload and malformed-JSON errors.
 
 ### Shutdown
 

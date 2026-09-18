@@ -1,12 +1,25 @@
 import express, { Router } from 'express';
 import {
   getFlights, getFlightById, updateFlight, deleteFlight, combineFlights, getFlightPointCount,
-  setFlightPlanName, clearFlightPlanName,
+  setFlightPlanName, clearFlightPlanName, getFlightStats, searchFlights, countSearchFlights,
 } from '../db/flights';
+import type { FlightStatsFilter, FlightSearchResult } from '../db/flights';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from '../flightPlans';
 import { upload } from './uploads';
 import type { FlightManager } from '../flightManager';
 import type { FlightEditPayload } from '../types';
+
+const DATE_BOUND_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?Z)?$/;
+
+/** Parses a date/timestamp query param into the exact ISO-8601 form
+ *  flights.start_time is stored in, so bounding it is a plain string
+ *  comparison. Returns null for anything that isn't a real instant. */
+function normalizeDateBound(value: string): string | null {
+  if (!DATE_BOUND_RE.test(value)) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
 
 /**
  * /api/flights — mounted at '/api' by src/server.ts, behind requireAuth and
@@ -60,6 +73,101 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
         return;
       }
       res.status(201).json({ id: newId });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Must come before /flights/:id — same reason as /flights/combine above: a
+  // literal path registered after :id would be shadowed by it and silently
+  // parsed as an id instead.
+  router.get('/flights/search', (req, res) => {
+    const qRaw = req.query.q;
+    if (typeof qRaw !== 'string') {
+      res.status(400).json({ error: 'q is required and must be a non-empty string', code: 'INVALID_QUERY' });
+      return;
+    }
+    const trimmed = qRaw.trim();
+    if (trimmed.length === 0) {
+      res.status(400).json({ error: 'q is required and must be a non-empty string', code: 'INVALID_QUERY' });
+      return;
+    }
+    if (trimmed.length > 200) {
+      res.status(400).json({ error: 'q must be 200 characters or fewer', code: 'INVALID_QUERY' });
+      return;
+    }
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) {
+      res.status(400).json({ error: 'q is required and must be a non-empty string', code: 'INVALID_QUERY' });
+      return;
+    }
+    if (tokens.length > 8) {
+      res.status(400).json({ error: 'q must have at most 8 terms', code: 'TOO_MANY_TERMS' });
+      return;
+    }
+
+    let limit = 25;
+    if (req.query.limit !== undefined) {
+      const raw = req.query.limit;
+      if (typeof raw !== 'string' || !/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 100) {
+        res.status(400).json({ error: 'limit must be an integer between 1 and 100', code: 'INVALID_LIMIT' });
+        return;
+      }
+      limit = Number(raw);
+    }
+
+    let offset = 0;
+    if (req.query.offset !== undefined) {
+      const raw = req.query.offset;
+      if (typeof raw !== 'string' || !/^\d+$/.test(raw)) {
+        res.status(400).json({ error: 'offset must be a non-negative integer', code: 'INVALID_OFFSET' });
+        return;
+      }
+      offset = Number(raw);
+    }
+
+    try {
+      const flights = searchFlights(tokens, limit, offset);
+      const total = countSearchFlights(tokens);
+      const result: FlightSearchResult = { query: qRaw, total, limit, offset, flights };
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // Must come before /flights/:id — same reason as /flights/combine above.
+  router.get('/flights/stats', (req, res) => {
+    const filter: FlightStatsFilter = { from: null, to: null };
+
+    if (req.query.from !== undefined) {
+      if (typeof req.query.from !== 'string') {
+        res.status(400).json({ error: 'from must be a date (YYYY-MM-DD) or a UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)', code: 'INVALID_RANGE' });
+        return;
+      }
+      const normalized = normalizeDateBound(req.query.from);
+      if (normalized === null) {
+        res.status(400).json({ error: 'from must be a date (YYYY-MM-DD) or a UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)', code: 'INVALID_RANGE' });
+        return;
+      }
+      filter.from = normalized;
+    }
+
+    if (req.query.to !== undefined) {
+      if (typeof req.query.to !== 'string') {
+        res.status(400).json({ error: 'to must be a date (YYYY-MM-DD) or a UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)', code: 'INVALID_RANGE' });
+        return;
+      }
+      const normalized = normalizeDateBound(req.query.to);
+      if (normalized === null) {
+        res.status(400).json({ error: 'to must be a date (YYYY-MM-DD) or a UTC timestamp (YYYY-MM-DDTHH:MM:SSZ)', code: 'INVALID_RANGE' });
+        return;
+      }
+      filter.to = normalized;
+    }
+
+    try {
+      res.json(getFlightStats(filter));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

@@ -8,12 +8,12 @@ ground with more explanation, plus Docker and troubleshooting-adjacent notes.
 
 | Tool | Version | Why |
 |---|---|---|
-| Node.js | **20** (pinned by [`.nvmrc`](../.nvmrc)) | `better-sqlite3` is a native addon with no prebuilt binary for newer Node ABIs (e.g. the system default may be Node 26); it fails to load under the wrong version. |
-| npm | bundled with Node 20 | |
+| Node.js | **24** (pinned by [`.nvmrc`](../.nvmrc)), also declared via `engines.node` in `package.json` | `better-sqlite3` is a native addon; the pin keeps every contributor and CI on a Node ABI it has a confirmed prebuilt binary for. |
+| npm | bundled with Node 24 | |
 | Simulator | MSFS 2020, MSFS 2024, or FSX, on Windows | Only needed to actually log flights — the server/client run on any OS. |
 | Docker + Docker Compose | any recent version | Only for the [Docker install](#docker) path. |
 
-Always select Node 20 before running any `node`/`npm`/`npx` command in this
+Always select Node 24 before running any `node`/`npm`/`npx` command in this
 repo:
 
 ```bash
@@ -137,7 +137,7 @@ including HTTPS trust and AI-traffic settings, is in
 ## Validate the setup
 
 ```bash
-export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 24
 npm run build
 npm run test:types
 npm test

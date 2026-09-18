@@ -17,11 +17,13 @@ the account must exist before the server will listen at all.
 
 **`better-sqlite3` throws on require, or the process fails with a native
 module / ABI error.**
-Wrong Node version. This project pins Node 20 (`.nvmrc`) because
-`better-sqlite3` is a native addon with no prebuilt binary for newer Node
-ABIs. Run `nvm use` (or `nvm install` first) before any `node`/`npm`/`npx`
-command. This is not a dependency bug and rebuilding/upgrading
-`better-sqlite3` is not the fix.
+Wrong Node version. This project pins Node 24 (`.nvmrc`) because
+`better-sqlite3` is a native addon and needs a Node ABI it has a prebuilt
+binary for. Run `nvm use` (or `nvm install` first) before any
+`node`/`npm`/`npx` command. If this happens on Node 24 itself, `node_modules`
+likely has a stale native build from a previous Node version — delete
+`node_modules` and reinstall rather than assuming `better-sqlite3` itself is
+broken.
 
 ## Docker
 

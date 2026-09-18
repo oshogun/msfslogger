@@ -1,0 +1,1 @@
+{ "jsonrpc": "2.0", "error": { "code": -32000, "message": "Method Not Allowed: this MCP endpoint is stateless and accepts POST only" }, "id": null }

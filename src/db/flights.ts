@@ -140,8 +140,11 @@ const FILLER_COUNT = 8;
 /**
  * A single flight's own logged duration, never spanning into another flight.
  * Falls back to its own start→end wall clock for rows predating duration_sec.
+ *
+ * Takes only the three columns it needs (rather than a full Flight) so the
+ * stats aggregation below can reuse it against a narrower SELECT.
  */
-function ownDurationSec(flight: Flight): number {
+function ownDurationSec(flight: Pick<Flight, 'duration_sec' | 'end_time' | 'start_time'>): number {
   if (flight.duration_sec != null) return flight.duration_sec;
   if (!flight.end_time) return 0;
   return Math.max(0, Math.round(
@@ -270,4 +273,186 @@ export function combineFlights(idA: number, idB: number): number | null {
 
     return newId;
   })();
+}
+
+// ── Stats aggregation ─────────────────────────────────────────────────────────
+
+/** Both bounds already normalised to ISO-8601 UTC; from is inclusive, to is
+ *  exclusive, either may be null for "no bound". */
+export interface FlightStatsFilter {
+  from: string | null;
+  to: string | null;
+}
+
+export interface AircraftStat {
+  /** Exactly as stored in flights.aircraft — never normalised. */
+  aircraft: string;
+  flights: number;
+  duration_sec: number;
+  distance_nm: number;
+}
+
+export interface RouteStat {
+  /** `${departure_icao}-${arrival_icao}`, directional. */
+  route: string;
+  departure_icao: string;
+  arrival_icao: string;
+  flights: number;
+  duration_sec: number;
+  distance_nm: number;
+}
+
+export interface FlightStats {
+  filter: FlightStatsFilter;
+  totals: {
+    flights: number;
+    completed_flights: number;
+    duration_sec: number;
+    duration_hours: number;
+    distance_nm: number;
+    first_flight_start: string | null;
+    last_flight_start: string | null;
+  };
+  top_aircraft: AircraftStat[];
+  top_routes: RouteStat[];
+}
+
+interface FlightStatsRow {
+  id: number;
+  aircraft: string | null;
+  start_time: string;
+  end_time: string | null;
+  duration_sec: number | null;
+  distance_nm: number | null;
+  departure_icao: string | null;
+  arrival_icao: string | null;
+  point_count: number | null;
+}
+
+/** Top-N aggregates, keyed by an arbitrary string; started lazily on first hit. */
+function bumpAggregate<K>(map: Map<K, { flights: number; duration_sec: number; distance_nm: number }>, key: K, durationSec: number, distanceNm: number): void {
+  const entry = map.get(key) ?? { flights: 0, duration_sec: 0, distance_nm: 0 };
+  entry.flights += 1;
+  entry.duration_sec += durationSec;
+  entry.distance_nm += distanceNm;
+  map.set(key, entry);
+}
+
+export function getFlightStats(filter: FlightStatsFilter): FlightStats {
+  const conditions: string[] = [];
+  const params: string[] = [];
+  if (filter.from !== null) { conditions.push('start_time >= ?'); params.push(filter.from); }
+  if (filter.to !== null) { conditions.push('start_time < ?'); params.push(filter.to); }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const rows = getDb().prepare(`
+    SELECT id, aircraft, start_time, end_time, duration_sec, distance_nm,
+           departure_icao, arrival_icao, point_count
+    FROM flights ${where}
+  `).all(...params) as FlightStatsRow[];
+
+  let completedFlights = 0;
+  let totalDurationSec = 0;
+  let totalDistanceNm = 0;
+  let firstFlightStart: string | null = null;
+  let lastFlightStart: string | null = null;
+  const aircraftAgg = new Map<string, { flights: number; duration_sec: number; distance_nm: number }>();
+  const routeAgg = new Map<string, { departure_icao: string; arrival_icao: string; flights: number; duration_sec: number; distance_nm: number }>();
+
+  for (const row of rows) {
+    if (row.end_time !== null) completedFlights += 1;
+    const durationSec = ownDurationSec(row);
+    const distanceNm = row.distance_nm ?? 0;
+    totalDurationSec += durationSec;
+    totalDistanceNm += distanceNm;
+
+    if (firstFlightStart === null || row.start_time < firstFlightStart) firstFlightStart = row.start_time;
+    if (lastFlightStart === null || row.start_time > lastFlightStart) lastFlightStart = row.start_time;
+
+    // Skipped (not bucketed under "Unknown") when null or empty — guessing a
+    // grouping key would invent data the logbook doesn't have.
+    if (row.aircraft) {
+      bumpAggregate(aircraftAgg, row.aircraft, durationSec, distanceNm);
+    }
+
+    if (row.departure_icao && row.arrival_icao) {
+      const key = `${row.departure_icao}-${row.arrival_icao}`;
+      const entry = routeAgg.get(key) ?? { departure_icao: row.departure_icao, arrival_icao: row.arrival_icao, flights: 0, duration_sec: 0, distance_nm: 0 };
+      entry.flights += 1;
+      entry.duration_sec += durationSec;
+      entry.distance_nm += distanceNm;
+      routeAgg.set(key, entry);
+    }
+  }
+
+  const topAircraft: AircraftStat[] = [...aircraftAgg.entries()]
+    .map(([aircraft, v]) => ({ aircraft, flights: v.flights, duration_sec: v.duration_sec, distance_nm: Math.round(v.distance_nm * 10) / 10 }))
+    .sort((a, b) => b.flights - a.flights || b.duration_sec - a.duration_sec || (a.aircraft < b.aircraft ? -1 : a.aircraft > b.aircraft ? 1 : 0))
+    .slice(0, 5);
+
+  const topRoutes: RouteStat[] = [...routeAgg.entries()]
+    .map(([route, v]) => ({ route, departure_icao: v.departure_icao, arrival_icao: v.arrival_icao, flights: v.flights, duration_sec: v.duration_sec, distance_nm: Math.round(v.distance_nm * 10) / 10 }))
+    .sort((a, b) => b.flights - a.flights || (a.route < b.route ? -1 : a.route > b.route ? 1 : 0))
+    .slice(0, 5);
+
+  return {
+    filter,
+    totals: {
+      flights: rows.length,
+      completed_flights: completedFlights,
+      duration_sec: totalDurationSec,
+      duration_hours: Math.round((totalDurationSec / 3600) * 10) / 10,
+      distance_nm: Math.round(totalDistanceNm * 10) / 10,
+      first_flight_start: firstFlightStart,
+      last_flight_start: lastFlightStart,
+    },
+    top_aircraft: topAircraft,
+    top_routes: topRoutes,
+  };
+}
+
+// ── Free-text search ──────────────────────────────────────────────────────────
+
+export interface FlightSearchResult {
+  /** The raw q, echoed verbatim. */
+  query: string;
+  /** Total matches, ignoring limit/offset. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** Same shape as GET /api/flights (no points), start_time DESC. */
+  flights: Flight[];
+}
+
+const SEARCH_COLUMNS = ['notes', 'departure_icao', 'arrival_icao', 'departure_name', 'arrival_name', 'aircraft'] as const;
+
+function escapeLikeTerm(term: string): string {
+  return term.replace(/[\\%_]/g, '\\$&');
+}
+
+/** Every token must match at least one of SEARCH_COLUMNS (AND across tokens,
+ *  OR across columns). Shared by searchFlights and countSearchFlights so the
+ *  two queries can never disagree about which rows match. */
+function buildSearchWhere(tokens: readonly string[]): { sql: string; params: string[] } {
+  const conditions: string[] = [];
+  const params: string[] = [];
+  for (const token of tokens) {
+    const escaped = escapeLikeTerm(token.toLowerCase());
+    conditions.push(`(${SEARCH_COLUMNS.map(col => `COALESCE(${col}, '') LIKE '%' || ? || '%' ESCAPE '\\'`).join(' OR ')})`);
+    for (let i = 0; i < SEARCH_COLUMNS.length; i++) params.push(escaped);
+  }
+  return { sql: conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '', params };
+}
+
+export function searchFlights(tokens: readonly string[], limit: number, offset: number): Flight[] {
+  const { sql, params } = buildSearchWhere(tokens);
+  return getDb()
+    .prepare(`SELECT * FROM flights ${sql} ORDER BY start_time DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as Flight[];
+}
+
+export function countSearchFlights(tokens: readonly string[]): number {
+  const { sql, params } = buildSearchWhere(tokens);
+  const row = getDb().prepare(`SELECT COUNT(*) as cnt FROM flights ${sql}`).get(...params) as { cnt: number };
+  return row.cnt;
 }

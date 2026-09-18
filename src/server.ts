@@ -23,6 +23,7 @@ import { createExportsRouter } from './routes/exports';
 import { createAcarsRouter } from './routes/acars';
 import { createSayIntentionsRouter } from './routes/sayIntentions';
 import { createGroundSessionsRouter } from './routes/groundSessions';
+import { createMcpRouter } from './mcp/router';
 
 export function createServer(flightManager: FlightManager): express.Express {
   const app = express();
@@ -42,6 +43,15 @@ export function createServer(flightManager: FlightManager): express.Express {
   // and an ingest request must never allocate or touch the session store.
   // Authenticated by INGEST_TOKEN instead.
   app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest));
+
+  // A protocol endpoint, not a REST resource, deliberately outside /api: it
+  // authenticates with its own MCP_TOKEN bearer gate rather than requireAuth,
+  // and mounting it here — above express-session, like the ingest router —
+  // means an MCP request never allocates or touches a session row. Unmounted
+  // entirely when no MCP_TOKEN is configured.
+  if (config.mcp.enabled) {
+    app.use('/mcp', createMcpRouter(config.mcp, flightManager));
+  }
 
   // SESSION_SECRET when the operator set one, otherwise a random 32-byte secret
   // created on first run and stored in app_secret. There is no hard-coded
@@ -219,6 +229,14 @@ export function createServer(flightManager: FlightManager): express.Express {
          req.path === '/api/ground-sessions' ||
          req.path === '/api/ground-sessions/current')) {
       res.status(400).json({ error: 'Invalid request body', code: 'INVALID_BODY' });
+      return;
+    }
+    // A malformed JSON body never reaches the MCP transport — express.json()
+    // throws first — so this is the only place that can answer it, and it
+    // answers with a JSON-RPC parse error rather than the plain {error} shape
+    // above, per JSON-RPC 2.0.
+    if (err instanceof SyntaxError && 'body' in err && req.path === '/mcp') {
+      res.status(400).json({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
       return;
     }
     next(err);

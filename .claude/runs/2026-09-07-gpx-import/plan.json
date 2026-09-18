@@ -1,0 +1,274 @@
+{
+  "run_id": "2026-09-07-gpx-import",
+  "goal": "Let a user upload one or more .gpx GPS track files and have each become a normal flight record in this app. The importer parses the track, resamples it to the app's own point cadence, derives the per-point fields GPS does not carry (ground speed, heading, vertical speed), resolves departure/arrival ICAO with the existing findNearestAirport(), and writes the flight through the existing insertFlight/insertPoint/closeFlight path so the result is indistinguishable downstream from a SimConnect-recorded flight: it lists on Home, renders on the existing map and altitude chart, edits, deletes, exports to PDF, attaches to a trip and links to a planned leg with no special-cased UI. A new flights.source column ('simconnect' | 'gpx') records provenance so an imported flight can be labelled and so live-recording assumptions are never silently applied to a track that was never live.",
+  "frozen_decisions": [
+    "Add a column to `flights` (e.g. `source TEXT NOT NULL DEFAULT 'simconnect'`, value `'gpx'` for imports) so the UI can label an imported flight and so duration/interruption logic that assumes a live SimConnect recording (pause detection, active-trip auto-linking's \"just took off\" checks) isn't silently misapplied to a track that was never live. This is a schema change — routes this run through the Design step, not just Plan -> Implement.",
+    "Reuse the existing write path. The importer should call the same `insertFlight` / `insertPoint` / `closeFlight` functions `flightManager.ts` uses (`src/db.ts:313,321,371`), not a parallel write path — it synthesizes the same shape of finalized flight from a static point list instead of a live state machine.",
+    "Departure/arrival ICAO via the existing `findNearestAirport()` (`src/airports.ts:102`) on the track's first/last points — identical to the live flow.",
+    "No aircraft type in GPX. The upload form takes an optional free-text aircraft field (flights already support editing this after the fact, so it is not blocking).",
+    "Computed fields with no GPX source data (airspeed, heading, vertical speed, on-ground) are derived from consecutive trackpoints (bearing, distance/time, altitude delta/time) the same way the live recorder would — `on_ground` has no reliable signal from GPS alone and defaults to false for imported points.",
+    "Point density. Phone-recorded GPX tracks are commonly 1-second interval; the app's own recording writes one point per `RECORD_INTERVAL_MS` (5s, `flightManager.ts`). Open question for the Planner/Designer: import at native resolution, or resample to ~5s to match existing chart/map assumptions and keep `flight_points` row counts consistent with SimConnect-recorded flights. Recommend resampling for consistency.",
+    "Endpoint and upload conventions follow the `.lnmpln` precedent (`src/server.ts:426-546`, `uploadLnmpln` multer instance at `src/server.ts:24-27`): a dedicated small-file-size multer instance, XML content sniff, per-file try/parse/insert, a batch response shape `{imported, results}` with one entry per file (`status`, `flight_id` or `error`). Proposed route: `POST /api/flights/import/gpx`.",
+    "Client entry point follows the `TripDetail.tsx` `.lnmpln` import precedent (`TripDetail.tsx:158-202`) but lives on the Home page (a GPX import isn't tied to a trip) — file input (`accept=\".gpx\"`, multiple), optional aircraft/notes field, `FormData` POST, per-file result list, refresh the flight list afterward.",
+    "Parsing library. `fast-xml-parser` is already a dependency (used by `src/lnmpln.ts`) and GPX is XML — reuse it rather than adding a new GPX parsing dependency.",
+    "Duplicate import. Out of scope for v1: re-importing the same file twice creates two flights. (`.lnmpln`'s SHA-256 dedupe is for planned legs, a different table with different semantics — not reused here unless the Planner flags it as needed.)",
+    "Ship (DevOps) is skipped: this run touches no build, packaging, or deploy config. No new npm dependency is added."
+  ],
+  "planner_notes_on_frozen_decisions": [
+    "Decision 6 (point density) is the one decision the intake left genuinely open. This plan closes it: RESAMPLE, and T-001 must write the exact rule into design.md §4. Rationale: `combineFlights` (src/db.ts:604) synthesizes filler points on the assumption of a coarse cadence, the altitude chart and Leaflet polyline are sized for a few hundred points, and a 4-hour 1 Hz phone track is ~14,400 rows against ~2,900 for the same flight recorded live. Decimation (emit the first real fix at or after each 5 s boundary), never interpolation, so every stored point is a real GPS fix.",
+    "Decision 7 is followed with ONE sizing exception, flagged not overridden: `MAX_LNMPLN_BYTES` is 512 KB, which is correct for a few-KB flight plan and too small for a GPX track (a 1 Hz 4-hour track is comfortably 2-5 MB of XML). T-001 must set a separate `MAX_GPX_BYTES` and a hard cap on trackpoints per file, and state both numbers. The `.lnmpln` pattern (own multer instance, own limit) is preserved; only the number differs.",
+    "No blocker found for decision 9. `fast-xml-parser` is already configured for attribute parsing in src/lnmpln.ts:270-287 (`ignoreAttributes: false`, `attributeNamePrefix: '@_'`), which is exactly what GPX needs since trkpt lat/lon are attributes. GPX gets its OWN XMLParser instance in src/gpx.ts with its own `isArray` jpaths — src/lnmpln.ts is not touched by this run.",
+    "No blocker found for decisions 1-5, 8, 10.",
+    "src/gpx.ts must import haversineNm/bearingDeg from src/geo.ts and must NOT import ./db or ./airports — src/geo.ts:9-14 states this rule for exactly this situation, and it is what keeps the module pure enough for a CLI inspector.",
+    "`MAX_COUNTED_GAP_MS` (60_000) is exported from src/flightManager.ts:15, but importing it would drag ./db into the pure module. Copy the constant into src/gpx.ts with a comment naming flightManager.ts:15 as the source of truth, the same deliberate-copy idiom src/geo.ts uses."
+  ],
+  "sequencing_rationale": [
+    "Two phases, because there are exactly two seams. Phase 1 is 'the server can turn a .gpx into a flight' — provable by curl and a CLI inspector, and already user-visible because the imported flight renders on the existing Home list, map and altitude chart. Phase 2 is 'the user can do it from a button' plus the provenance label. Nothing else in this feature has a seam worth a phase.",
+    "The risky part is not the upload plumbing — that is a straight copy of the .lnmpln endpoint — it is the pure transform: metres-to-feet, timestamp normalisation, resampling, derived speed/heading/vertical-speed, and the duration rule. That transform is isolated in src/gpx.ts with zero DB or Express imports and its own inspector src/inspect-gpx.ts, so every number it produces is falsifiable from the command line against checked-in fixtures, with no server, no database and no test framework.",
+    "T-002 (pure module) precedes T-003 (schema + endpoint) rather than running beside it, so that each task leaves the tree type-checking on its own. Running them in parallel would leave src/server.ts importing a src/gpx.ts that does not exist yet, and neither dispatcher could then verify with `npx tsc --noEmit`. Parallelism here would buy wall-clock and cost the ability to check the work.",
+    "The schema migration and the endpoint are ONE task, not two, because splitting them puts two dispatchers on files that must agree about the same contract (whether insertFlight takes a source argument, or the endpoint stamps it after). One owner, one diff, one review.",
+    "The phase-1 reviewer is opus: this phase adds a column to the user's live flights table, and a migration that runs on their real logbook the next time they restart. That is the exact case CLAUDE.md reserves opus review for.",
+    "The escape-hatch rule is satisfied by construction: an imported flight uses only the existing manual paths (edit aircraft, attach to trip, manually link a planned leg). Nothing in this run acts automatically. design.md §9 must state that a GPX import deliberately does NOT run the active-trip auto-link, so the automation is never reached without a user action.",
+    "T-001 exists because this run introduces three contracts at once — a schema column, a new endpoint, and a shared type mirrored into the client. Freezing them in one document is cheaper than discovering the disagreement in review."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "GPX becomes a flight: pure transform, schema, endpoint",
+      "ships": "A .gpx file can be turned into a real flight two ways: `npx ts-node src/inspect-gpx.ts track.gpx` prints exactly the flight that would be created (route, duration, distance, max altitude, resampled point count) without touching a database, and `curl -F gpx=@track.gpx localhost:PORT/api/flights/import/gpx` creates it for real, after which it appears in GET /api/flights and renders on the existing flight detail page, map and altitude chart with no client change at all.",
+      "tasks": ["T-001", "T-002", "T-003", "T-004"]
+    },
+    {
+      "phase": 2,
+      "name": "Upload from the UI, and say where a flight came from",
+      "ships": "A user on the Home page picks one or more .gpx files, optionally types an aircraft name, uploads, sees a per-file result list, and the flight table refreshes with the new flights in it. Imported flights carry a visible 'GPX' badge on Home and on the flight detail page so a track that was never flown in the sim is never mistaken for one that was. README documents the feature.",
+      "tasks": ["T-005", "T-006"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Freeze the flights.source schema change, the GPX parse/derive contract, and the import endpoint and client contracts",
+      "goal": "Write .claude/runs/2026-09-07-gpx-import/design.md as a numbered-section document that every downstream task cites by slice. It must close every question a dispatcher would otherwise guess at: the exact DDL and migration idiom for flights.source, the ParsedGpxTrack type and its reject/warning codes, the resampling rule, the per-point derivation formulas, how the flight summary row is computed, the REST surface, the client contract, and how an imported flight interacts with combineFlights, auto-linking, journey and PDF export. Section numbering is load-bearing: T-002 will be handed `ctx.sh design 2026-09-07-gpx-import 3 4 5 6 10` and T-003 `ctx.sh design 2026-09-07-gpx-import 2 6 7 9`, so the numbering below is fixed, not a suggestion.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-gpx-import/design.md"
+      ],
+      "acceptance_criteria": [
+        "design.md exists with exactly these top-level numbered sections, in this order: §1 Scope and what an imported flight is; §2 Schema change: flights.source; §3 GPX parse contract; §4 Resampling; §5 Per-point derivation; §6 Flight summary; §7 REST surface; §8 Client contract; §9 Interaction with existing features; §10 Fixtures. `.claude/tools/ctx.sh design 2026-09-07-gpx-import 2` through `... 10` each print exactly one section.",
+        "§2 gives the literal ALTER statement and the guard around it, in the PRAGMA table_info(flights) + ALTER TABLE ADD COLUMN idiom already used at src/db.ts:237-271, and states where in initDb() it goes. It confirms that `ALTER TABLE flights ADD COLUMN source TEXT NOT NULL DEFAULT 'simconnect'` is legal in SQLite (non-null constant default) and therefore backfills every existing row without a data migration. It states whether a CHECK constraint is used and why (an ADD COLUMN cannot carry one — say so rather than leaving it implied).",
+        "§2 states whether `source` is written by a new parameter on insertFlight() or by a separate stamping call after insert, and names the resulting signature verbatim. It states that the SimConnect path (src/flightManager.ts:240) is either unchanged or changed in exactly one named way, and that no existing insertFlight call site is left passing a positional argument in a shifted slot.",
+        "§2 declares `source: 'simconnect' | 'gpx'` as a field on the Flight interface in BOTH src/types.ts:27-53 and client/src/types.ts:8-35, and states that the two must stay mirrored.",
+        "§3 declares the `ParsedGpxTrack` TypeScript interface (parser output: an ordered array of {ts (ISO UTC string), lat, lon, altitudeFt} plus track name, source filename, and warnings[]) and states that it lives in src/gpx.ts, not src/types.ts, so the pure module owns its own output shape.",
+        "§3 gives the fast-xml-parser configuration for GPX verbatim, including the `isArray` jpaths needed so that a file with one <trk>, one <trkseg> or one <trkpt> still parses to arrays, and states the decision on namespace-prefixed documents (`<gpx:trk>`) — either `removeNSPrefix: true` or an explicit reject.",
+        "§3 resolves each of these format traps with a named rule, and each rule names the reject code or warning code it produces: (a) lat/lon arrive as XML ATTRIBUTES and as strings under `parseAttributeValue: false`; (b) <ele> is METRES per the GPX schema and must be converted to feet (state the factor); (c) <ele> missing on some or all points; (d) <time> missing on some or all points; (e) multiple <trk> elements and multiple <trkseg> elements in one file; (f) <trkpt> vs <wpt> vs <rtept> — which are read and which are ignored; (g) GPX 1.0 <speed>/<course> and GPX 1.1 <extensions> — state that they are ignored and that everything is derived, per frozen decision 5; (h) timestamps with an offset or fractional seconds, normalised to ISO-8601 UTC because everything else in this tree stores `new Date().toISOString()`; (i) out-of-order, duplicate or equal timestamps (dt = 0 would divide by zero in §5); (j) BOM and the leading-'<' content sniff, reusing the looksLikeXml() rule at src/server.ts:35-39; (k) fewer than 2 trackpoints after filtering.",
+        "§3 lists every reject code as a stable UPPERCASE identifier with the one-line human message that accompanies it, in the style of LnmplnRejectCode (src/lnmpln.ts:28-37), and states that a reject throws a `GpxParseError` carrying the code — never a bare Error and never a stack trace to the user.",
+        "§4 states the resampling decision as FROZEN (resample, do not import at native resolution), gives the target interval in ms and the algorithm precisely enough to reimplement: whether it decimates (emits the first real fix at or after each boundary) or interpolates, what happens to the first and last point, and what happens when the native interval is already coarser than the target. It states the rationale in one sentence naming flight_points row-count consistency with the live recorder.",
+        "§4 states the hard cap on trackpoints accepted per file (before and/or after resampling) and the reject code for exceeding it.",
+        "§5 gives the formula for each of ground_speed_kts, heading_deg, vertical_speed_fpm, airspeed_kts and on_ground as a function of the previous and current resampled point, states which point of a pair the value is assigned to, and states what the FIRST point gets (it has no predecessor). It states explicitly that airspeed_kts carries ground speed because GPS has no air data, and that max_airspeed_kts on an imported flight is therefore a ground-speed maximum — the reason the source column exists.",
+        "§5 states the guard for dt <= 0 and the guard for an implausible derived value (a GPS glitch producing a 4000 kt segment), naming either a clamp, a warning, or an explicit decision to do neither.",
+        "§6 states how each closeFlight() argument is computed from the resampled points: end_time, arrival_lat/lon, duration_sec, distance_nm, max_altitude_ft, max_airspeed_kts, point_count. duration_sec must state whether it uses wall-clock (last ts minus first ts) or the sum-of-gaps-excluding-gaps-over-MAX_COUNTED_GAP_MS rule the live recorder uses at src/flightManager.ts:488-493, and why. It states that MAX_COUNTED_GAP_MS is copied into src/gpx.ts rather than imported, with the reason (importing flightManager would pull ./db into the pure module) and the src/geo.ts:1-14 deliberate-copy precedent.",
+        "§6 states that departure/arrival ICAO come from findNearestAirport() on the first and last resampled point with its default 10 nm radius, and what the flight row holds when no airport is within range (null, as the live path already does at src/flightManager.ts:240,294).",
+        "§7 specifies POST /api/flights/import/gpx completely: multipart field name, the dedicated multer instance name and its MAX_GPX_BYTES / MAX_GPX_FILES values, the optional `aircraft` (and any other) body fields and how they are trimmed and defaulted, the success status and body `{ imported, results }` with the exact per-file result object (filename, status, flight_id?, error?, warnings?), the failure statuses, and the behaviour when some files succeed and others fail. It states that a file that fails parsing must leave NO flight row behind, and names the mechanism (parse fully before the first insert, and/or a transaction).",
+        "§7 states where the route is registered in src/server.ts and why that position is safe: it must be ahead of app.get('*') (src/server.ts:776) and must not be shadowed by app.get/patch/delete('/api/flights/:id') (src/server.ts:317,325,355) or app.post('/api/flights/:id/flight-plan') (src/server.ts:365). Registering beside app.post('/api/flights/combine') (src/server.ts:152) is the suggested position; confirm or replace it.",
+        "§8 specifies the Home-page client contract: where the upload control sits relative to the existing flights-header and combine-toolbar, the file input attributes, the aircraft field, whether raw fetch or apiFetch is used and why (see the reasoning at client/src/pages/TripDetail.tsx:149-157 — a body that must be rendered on both 2xx and 4xx cannot go through apiFetch), the per-file result rendering, and the refresh call afterwards.",
+        "§8 specifies the provenance label: the badge text, the CSS class name following the existing .badge / .badge-* convention at client/src/index.css:397-431, and the two places it appears (the Home flight row and the FlightDetail header). It states what a 'simconnect' flight shows (nothing — the default is unlabelled).",
+        "§9 answers each of these explicitly: (a) what `source` the row produced by combineFlights() (src/db.ts:604) gets, given that it INSERTs a fresh row that would otherwise silently take the 'simconnect' default even when both inputs were GPX imports; (b) that a GPX import does NOT run the active-trip auto-link (src/flightManager.ts:244) and the user links a planned leg manually through the existing PUT /api/flights/:id/planned-leg; (c) that PDF export, the trip journey and the altitude chart need no change, or names the change; (d) that duplicate detection is out of scope for v1 and re-importing the same file creates a second flight.",
+        "§10 lists the fixture files T-002 must create under samples/gpx/synthetic/, one per rule in §3 and §4, each with its expected outcome (parsed with N points / rejected with code X), in the style of samples/lnmpln/synthetic/. Every reject code declared in §3 has at least one bad-*.gpx fixture, and there is at least one good multi-segment fixture and one good 1 Hz fixture whose resampled point count is stated as a number.",
+        "design.md contains no implementation code beyond type declarations, DDL, formulas and the parser configuration object.",
+        "design.md nowhere proposes a new npm dependency, a change to src/lnmpln.ts, or a change to the SimConnect recording path beyond the one insertFlight change §2 names."
+      ],
+      "context": [
+        ".claude/runs/2026-09-07-gpx-import/intake.md",
+        "src/db.ts:37-78 (flights and flight_points DDL), :237-289 (migration idiom), :313-348 (insertFlight/closeFlight), :371-388 (insertPoint), :604-630 (combineFlights)",
+        "src/flightManager.ts:11-15 (RECORD_INTERVAL_MS, MAX_COUNTED_GAP_MS), :237-268 (startFlight), :270-313 (endFlight), :474-517 (recordPoint/writePoint)",
+        "src/geo.ts (whole file — the no-new-copies rule and the two helpers to reuse)",
+        "src/airports.ts:102-111 (findNearestAirport)",
+        "src/lnmpln.ts:19-77 (reject/warning code style), :265-287 (XMLParser configuration), :480-520 (parser entry shape)",
+        "src/server.ts:15-39 (multer instances, looksLikeXml), :143-190 (flights routes), :426-546 (batch import endpoint precedent), :776-792 (SPA catch-all)",
+        "src/types.ts:27-53 (Flight)",
+        "client/src/types.ts:8-35 (mirrored Flight)",
+        "client/src/pages/Home.tsx (whole file — where the control lands)",
+        "client/src/pages/TripDetail.tsx:149-202 (client upload precedent)",
+        "client/src/index.css:397-431 (badge conventions)",
+        "samples/lnmpln/synthetic/ (fixture-naming precedent)"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-002",
+      "role": "dispatcher",
+      "title": "src/gpx.ts — pure parse, resample and derive — plus its CLI inspector and fixtures",
+      "goal": "Implement the whole risky transform as one pure module with no database, no Express and no filesystem coupling, then make it falsifiable from the command line. src/gpx.ts takes a Buffer and returns the finished flight: summary fields plus the resampled, fully-derived point list. src/inspect-gpx.ts prints that for any file. samples/gpx/synthetic/ proves each rule. Implement §3, §4, §5, §6 and §10 of the design exactly — pull them with `.claude/tools/ctx.sh design 2026-09-07-gpx-import 3 4 5 6 10`. This task writes NO database code and touches neither src/db.ts nor src/server.ts.",
+      "depends_on": ["T-001"],
+      "allowed_paths": [
+        "src/gpx.ts",
+        "src/inspect-gpx.ts",
+        "samples/gpx/**"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; cd /home/guilherme/msfslogger && npx tsc --noEmit` exits 0 with no output.",
+        "`grep -nE \"from '\\\\./(db|server|airports|flightManager)'\" src/gpx.ts` prints nothing: the module imports neither the database, the server, the airport table nor the flight state machine. `grep -n \"from './geo'\" src/gpx.ts` prints a line — haversineNm and bearingDeg are reused from src/geo.ts, not recopied (src/geo.ts:9-14).",
+        "src/gpx.ts exports the parse entry point, the derived-flight builder, the `GpxParseError` class and the ParsedGpxTrack type exactly as named in design.md §3 and §6. `grep -c 'export' src/gpx.ts` is non-zero and every name design.md §3/§6 declares appears in the file.",
+        "Every fixture listed in design.md §10 exists under samples/gpx/synthetic/ and each is a real file that a text editor could have produced — no fixture is generated at runtime by the inspector.",
+        "samples/gpx/README.md exists and names each fixture with its expected outcome in one line, in the style of samples/lnmpln/README.md.",
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; cd /home/guilherme/msfslogger && npx ts-node src/inspect-gpx.ts 'samples/gpx/synthetic/good-*.gpx'` exits 0 and prints, for each file, the route (departure ICAO -> arrival ICAO or a stated placeholder when no airport is in range), duration, distance in nm, max altitude in ft, max speed in kts, the native trackpoint count and the resampled point count.",
+        "Every `samples/gpx/synthetic/bad-*.gpx` fixture, run individually through `npx ts-node src/inspect-gpx.ts <file>`, exits non-zero and prints exactly one line naming the design.md §3 reject code and the offending element or value. No stack trace appears in the output of any of them. The report lists all of them with the code each produced.",
+        "The metres-to-feet conversion is demonstrated numerically: the report names a fixture whose <ele> values are known metres and shows the inspector's max-altitude output in feet alongside the hand-computed expected value, agreeing to within 1 ft.",
+        "The resampling rule is demonstrated numerically: the report shows, for the 1 Hz fixture named in design.md §10, the native trackpoint count and the resampled point count, and states the ratio against the target interval from §4. The resampled count matches the number design.md §10 states.",
+        "The duration rule is demonstrated: the report shows a fixture containing a recording gap larger than MAX_COUNTED_GAP_MS, the wall-clock span of the track, and the duration the module reports, and confirms which of the two design.md §6 specified.",
+        "Timestamp normalisation is demonstrated: a fixture with an offset timestamp (e.g. +02:00) and a fixture with fractional seconds both produce points whose `ts` values are ISO-8601 UTC strings ending in Z, shown in the report.",
+        "src/inspect-gpx.ts carries a header comment in the style of src/inspect-lnmpln.ts:1-17 stating what it is for and giving copy-pasteable invocations, and supports both shell-expanded and quoted glob arguments as that file does.",
+        "The report states the md5 of /home/guilherme/msfslogger/flights.db before and after the task and they are identical — this task must not open the database at all."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-07-gpx-import 3 4 5 6 10",
+        ".claude/tools/ctx.sh frozen 2026-09-07-gpx-import",
+        "src/geo.ts (import haversineNm and bearingDeg from here; read the header comment before writing any geo code)",
+        "src/lnmpln.ts:19-77 (error/warning code style), :265-287 (XMLParser configuration to model the GPX one on), :396-412 (Warnings collector)",
+        "src/inspect-lnmpln.ts:1-60 (inspector structure, glob expansion, exit-status rule)",
+        "src/flightManager.ts:11-15, :474-517 (the live recorder's cadence and per-point write, which this module mirrors for a static list)",
+        "samples/lnmpln/synthetic/ and samples/lnmpln/README.md (fixture naming and documentation precedent)"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-003",
+      "role": "dispatcher",
+      "title": "flights.source migration, mirrored Flight types, and POST /api/flights/import/gpx",
+      "goal": "Persist what T-002 computes. Add the source column with the project's existing PRAGMA-guarded ALTER idiom, mirror the field into both Flight interfaces, and register the import endpoint that parses each uploaded file with src/gpx.ts and writes it through insertFlight/insertPoint/closeFlight. Implement §2, §6, §7 and §9 of the design exactly — pull them with `.claude/tools/ctx.sh design 2026-09-07-gpx-import 2 6 7 9`. No client page is touched in this task; no parallel write path is introduced; no new npm dependency is added.",
+      "depends_on": ["T-002"],
+      "allowed_paths": [
+        "src/db.ts",
+        "src/types.ts",
+        "src/server.ts",
+        "client/src/types.ts"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; cd /home/guilherme/msfslogger && npx tsc --noEmit` exits 0, and `cd /home/guilherme/msfslogger/client && npx tsc` exits 0 (client tsconfig is noEmit, so this type-checks without writing anything).",
+        "The migration in initDb() matches the guarded idiom at src/db.ts:237-271 and design.md §2 verbatim. `grep -n \"source\" src/db.ts` shows the ALTER guarded by the PRAGMA table_info(flights) column list, not run unconditionally.",
+        "Migration proven against a COPY of the live database, never the live file: take a snapshot with `npm run backup`, copy it into a scratch working directory, record `SELECT COUNT(*) FROM flights` and the table list before, run initDb() against the copy under Node 20, then record the same after. The report shows: flight count unchanged, table list unchanged, `PRAGMA table_info(flights)` now containing `source`, and `SELECT source, COUNT(*) FROM flights GROUP BY source` returning every pre-existing row as 'simconnect'.",
+        "Migration idempotence proven: running initDb() a second time against the same copy leaves the schema and row counts unchanged and raises no error. The report shows both runs.",
+        "The report states the md5 of /home/guilherme/msfslogger/flights.db before and after the task, and they are identical.",
+        "`source` appears on the Flight interface in both src/types.ts and client/src/types.ts with the identical declared type. The report shows the two lines side by side.",
+        "The endpoint is registered in src/server.ts at the position design.md §7 names, and `grep -n \"app\\.\\(get\\|post\\|put\\|patch\\|delete\\)(\" src/server.ts` in the report shows it appearing before `app.get('*')` and not shadowed by any `/api/flights/:id` route. A curl to the new route in the end-to-end run below returns the import response and not the SPA index.html — the report shows the response body.",
+        "The endpoint uses its own multer instance with the MAX_GPX_BYTES and MAX_GPX_FILES values from design.md §7, and does not reuse `upload` or `uploadLnmpln`. `grep -n \"multer({\" src/server.ts` in the report shows three distinct instances.",
+        "End-to-end against a scratch server, never the user's: a scratch working copy containing dist/, client/dist/, airports.json and a copy of the backed-up database, started as `PORT=3999 node dist/index.js`. `curl -sS -F gpx=@samples/gpx/synthetic/<good 1 Hz fixture> -F aircraft='Cessna 172' localhost:3999/api/flights/import/gpx` returns the design.md §7 success status and a `{ imported, results }` body with one result entry. The report pastes the body.",
+        "Read-back of that import: `GET /api/flights/<new id>` returns a flight whose departure_icao, arrival_icao, duration_sec, distance_nm, max_altitude_ft, point_count and aircraft match, field for field, what `npx ts-node src/inspect-gpx.ts` prints for the same fixture. The report shows both outputs adjacent. Any disagreement is a failure of this task, not a rounding note.",
+        "That flight's `source` reads 'gpx' and its `point_count` equals the number of rows in flight_points for it, both verified by a better-sqlite3 query against the scratch database and pasted in the report.",
+        "Batch and failure behaviour proven in one request: a single multipart POST carrying one good fixture and two different bad-*.gpx fixtures returns one result entry per file with the correct per-file status and each bad file's design.md §3 reject code in its `error` string, and exactly one new flight row exists afterwards. The report shows the response and the `SELECT COUNT(*) FROM flights` before and after.",
+        "No half-written flight: after the batch above, `SELECT f.id, f.end_time, f.point_count, COUNT(p.id) FROM flights f LEFT JOIN flight_points p ON p.flight_id = f.id GROUP BY f.id` shows no flight with a NULL end_time and no flight whose point_count disagrees with its actual row count. The report pastes the query output.",
+        "A non-GPX file (e.g. samples/lnmpln/synthetic/bad-not-xml.lnmpln renamed .gpx, and a valid .lnmpln renamed .gpx) is rejected per-file with a clear reason and no stack trace in the server log, and creates no flight row. The report shows the response and the relevant server log lines.",
+        "The existing SimConnect path still compiles and its behaviour is unchanged: the report quotes the insertFlight call at src/flightManager.ts:240 as it stands after this task and confirms it matches the signature design.md §2 froze.",
+        "`git diff --stat` in the report shows changes confined to the four allowed paths.",
+        "The scratch server is stopped at the end of the task; the report shows the command that stopped it and confirms nothing is listening on 3999."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-07-gpx-import 2 6 7 9",
+        ".claude/tools/ctx.sh frozen 2026-09-07-gpx-import",
+        "src/gpx.ts (produced by T-002 — read its exports before writing the endpoint)",
+        "src/db.ts:37-78, :237-289, :313-348, :371-388, :604-630",
+        "src/server.ts:15-39, :143-190, :426-546, :776-792",
+        "src/types.ts:27-53",
+        "client/src/types.ts:8-35",
+        "src/flightManager.ts:237-268 (the insertFlight call site that must not break)",
+        "samples/gpx/synthetic/ (read-only inputs for verification; this task does not write there)"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-004",
+      "role": "reviewer",
+      "title": "Review phase 1: schema migration, pure transform, import endpoint",
+      "goal": "Re-run the evidence for T-002 and T-003 rather than trusting their reports, and gate phase 2 on the result. The migration runs against the user's real logbook the next time they restart the server, so the migration and the no-half-written-flight guarantee get the most attention. Verify against design.md §2-§7 and §9-§10.",
+      "depends_on": ["T-002", "T-003"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-gpx-import/reviews/phase1.md"
+      ],
+      "acceptance_criteria": [
+        "The review re-runs, itself, and pastes the output of: `npx tsc --noEmit` at the repo root; `cd client && npx tsc`; the full synthetic fixture sweep through `npx ts-node src/inspect-gpx.ts`; and at least one end-to-end import against a scratch server on a port other than 3000 and a copy of the database.",
+        "The migration is re-verified independently on a fresh copy of the backed-up database: table list, flight count and `SELECT source, COUNT(*) ... GROUP BY source` before and after, plus a second run proving idempotence. The review states whether it agrees with T-003's numbers.",
+        "The review states the md5 of /home/guilherme/msfslogger/flights.db at its start and end, and confirms they are identical and that nothing was ever run against port 3000.",
+        "Each acceptance criterion of T-002 and T-003 is listed with a PASS / FAIL / NOT VERIFIABLE verdict and the command that produced it. A criterion the reviewer could not check is marked NOT VERIFIABLE with the reason, never silently passed.",
+        "The review independently checks the three numbers that a wrong constant would silently corrupt: metres-to-feet on a known fixture, the resampled point count against design.md §4 and §10, and duration_sec against the design.md §6 rule on a fixture containing a >60 s gap. Each is recomputed by hand in the review, not read back from the implementation.",
+        "The review confirms src/gpx.ts imports neither ./db nor ./server nor ./airports nor ./flightManager, and that src/geo.ts's helpers were reused rather than recopied.",
+        "The review confirms every design.md §3 reject code has a fixture that produces it, and that no fixture produces a stack trace.",
+        "The review confirms `git diff --stat` for phase 1 is confined to the union of T-002's and T-003's allowed_paths, and that package.json and package-lock.json are unchanged.",
+        "The review confirms design.md §9's answers were actually implemented — in particular what `source` combineFlights() writes, and that no auto-link path runs on import.",
+        "The verdict is `approve` or `request_changes`, stated once, at the top."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh task 2026-09-07-gpx-import T-002 T-003",
+        ".claude/tools/ctx.sh design 2026-09-07-gpx-import 2 3 4 5 6 7 9 10",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "opus"
+    },
+    {
+      "id": "T-005",
+      "role": "dispatcher",
+      "title": "Home-page GPX upload control, provenance badge, README",
+      "goal": "Put the feature in front of the user. Add the upload control to the Home page following the .lnmpln precedent at client/src/pages/TripDetail.tsx:158-202, add the provenance badge in the two places design.md §8 names, and document the feature in README.md. Implement §8 of the design exactly — pull it with `.claude/tools/ctx.sh design 2026-09-07-gpx-import 8`, plus `... 7` for the request and response shapes this client must speak. No server file is touched in this task.",
+      "depends_on": ["T-004"],
+      "allowed_paths": [
+        "client/src/pages/Home.tsx",
+        "client/src/pages/FlightDetail.tsx",
+        "client/src/index.css",
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "`export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; nvm use 20 >/dev/null; cd /home/guilherme/msfslogger/client && npx tsc` exits 0. The client tsconfig sets noUnusedLocals and noUnusedParameters, so this also proves no dead state was left behind.",
+        "`cd /home/guilherme/msfslogger && npm run build` completes and produces both client/dist and dist/*.js. The tree is left in a shippable state — the user's next restart of their own server picks this build up, so the task does not end mid-edit.",
+        "The upload control renders where design.md §8 says, with `accept=\".gpx\"` and `multiple` on the file input and an optional free-text aircraft field, and the input is cleared after each attempt (the `importInputRef.current.value = ''` idiom at client/src/pages/TripDetail.tsx:200) so the same file can be retried.",
+        "The client uses the request/response handling design.md §8 specifies, and the reason is preserved in a comment: a response body that must be rendered on both success and partial failure cannot go through apiFetch's generic `{ error }` path (client/src/pages/TripDetail.tsx:149-157).",
+        "Exercised manually against a scratch server on a port other than 3000 with a copy of the database, driven with curl to stand in for the browser where necessary. The report shows, for a three-file upload of one good and two bad fixtures: the request, the response body, and the exact strings the result list would render for each of the three files. A rejected file's reason is visible to the user, not swallowed.",
+        "After a successful upload the flight list refreshes without a page reload — the report names the function called and shows that the new flight appears in the subsequent GET /api/flights response.",
+        "The provenance badge appears on both the Home flight row and the FlightDetail header for a flight with source 'gpx', uses the class name design.md §8 names, and that class is defined in client/src/index.css alongside the existing .badge-* rules (client/src/index.css:397-431). A flight with source 'simconnect' renders no badge. The report shows the JSX for both call sites and the CSS rule.",
+        "README.md gains a section documenting GPX import — how to upload, what is derived versus what comes from the file, that altitudes are read in metres and stored in feet, that airspeed is ground speed, that the track is resampled (state the interval), and that re-importing the same file creates a second flight. It is placed alongside the existing '## Trip plans (Little Navmap import)' section.",
+        "README.md's '## Project structure' and '## Utility scripts' sections list src/gpx.ts and src/inspect-gpx.ts, matching how src/lnmpln.ts and src/inspect-lnmpln.ts are listed today.",
+        "The report states the md5 of /home/guilherme/msfslogger/flights.db before and after the task and they are identical, and confirms nothing was run against port 3000.",
+        "`git diff --stat` in the report shows changes confined to the four allowed paths.",
+        "The scratch server is stopped at the end of the task."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh design 2026-09-07-gpx-import 7 8",
+        ".claude/tools/ctx.sh frozen 2026-09-07-gpx-import",
+        "client/src/pages/Home.tsx (whole file)",
+        "client/src/pages/TripDetail.tsx:149-202 and :534-563 (upload precedent: handler and markup)",
+        "client/src/pages/FlightDetail.tsx:255-320 (header and metadata area)",
+        "client/src/index.css:397-431 (badge conventions)",
+        "client/src/types.ts:8-35 (Flight, now carrying source)",
+        "README.md:176-220 (the Little Navmap import section this one sits beside)"
+      ],
+      "model_hint": "sonnet"
+    },
+    {
+      "id": "T-006",
+      "role": "reviewer",
+      "title": "Review phase 2: upload UI, badge, documentation, and the end-to-end user story",
+      "goal": "Re-run T-005's evidence and check the whole feature end to end as a user would meet it: upload a .gpx from the page, get a flight, open it, see the track on the map and the altitude chart, edit it, attach it to a trip, export the PDF. Verify against design.md §8 and §9 and against the success criteria in intake.md.",
+      "depends_on": ["T-005"],
+      "allowed_paths": [
+        ".claude/runs/2026-09-07-gpx-import/reviews/phase2.md"
+      ],
+      "acceptance_criteria": [
+        "The review re-runs and pastes: `cd client && npx tsc`, `npm run build`, and a full import against a scratch server on a port other than 3000 with a copy of the database.",
+        "Each intake.md success criterion is checked by name and given a PASS / FAIL / NOT VERIFIABLE verdict with the command or observation behind it — including that an imported flight can be edited, deleted, attached to a trip, exported to PDF and manually linked to a planned leg through the EXISTING endpoints, with no GPX-specific path. The PDF export is actually generated and its byte size and page count reported.",
+        "The review confirms a rejected file's reason reaches the user rather than being swallowed, by showing the response body and the rendering path for it.",
+        "The review confirms the badge appears only for source 'gpx' and that a SimConnect flight is unchanged on both Home and FlightDetail.",
+        "The review checks README.md against what the code actually does — in particular the resampling interval, the metres-to-feet conversion, and the airspeed-is-ground-speed caveat — and reports any statement it could not confirm from the code.",
+        "The review states the md5 of /home/guilherme/msfslogger/flights.db at its start and end, confirms they are identical, and confirms the tree is left in a shippable built state.",
+        "`git diff --stat` for the whole run is confined to the union of every task's allowed_paths plus .claude/runs/2026-09-07-gpx-import/**, and package.json and package-lock.json are unchanged — no new dependency was added.",
+        "The verdict is `approve` or `request_changes`, stated once, at the top."
+      ],
+      "context": [
+        ".claude/tools/ctx.sh task 2026-09-07-gpx-import T-005",
+        ".claude/tools/ctx.sh design 2026-09-07-gpx-import 8 9",
+        ".claude/runs/2026-09-07-gpx-import/intake.md",
+        ".claude/ENVIRONMENT.md"
+      ],
+      "model_hint": "sonnet"
+    }
+  ]
+}

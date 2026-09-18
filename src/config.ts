@@ -19,6 +19,7 @@ export interface AppConfig {
   /** Sliding session lifetime in ms. Frozen constant, not configurable. */
   sessionMaxAgeMs: number;
   ingest: IngestConfig;
+  mcp: McpConfig;
   /** express.json({ limit }) — frozen constant '100kb'. */
   jsonBodyLimit: string;
 }
@@ -46,6 +47,16 @@ export interface IngestConfig {
   allowUnauthenticated: boolean;
 }
 
+/** MCP_TOKEN. `enabled: false` (token null) is the default: the /mcp endpoint
+ *  is then never mounted. */
+export interface McpConfig {
+  /** MCP_TOKEN, used verbatim. null iff unset/empty. */
+  token: string | null;
+  /** true iff token !== null. The one flag the server branches on to decide
+   *  whether to mount the /mcp router at all. */
+  enabled: boolean;
+}
+
 /** Every environment variable this configuration introduces or changes. */
 export const ENV_VARS = [
   'TLS_CERT_FILE',              // new
@@ -56,12 +67,14 @@ export const ENV_VARS = [
   'SESSION_SECRET',             // new, optional
   'ALLOW_UNAUTHENTICATED_INGEST', // new
   'INGEST_TOKEN',               // existing, now required by default
+  'MCP_TOKEN',                  // new, optional — /mcp is unmounted when unset
 ] as const;
 
 // Frozen constants — not configurable, no env var.
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const JSON_BODY_LIMIT = '100kb';
 const INGEST_TOKEN_MIN_LEN = 16;
+const MCP_TOKEN_MIN_LEN = 16;
 const SESSION_SECRET_MIN_LEN = 16;
 const LOOPBACK_HOSTS = ['127.0.0.1', '::1', 'localhost'];
 
@@ -197,6 +210,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     );
   }
 
+  // Step 6.5 — MCP token, optional. Unlike the ingest token, an unset value
+  // is a valid steady state: the /mcp endpoint is then never mounted, so
+  // there is no surface to leave unauthenticated and no reason to be fatal.
+  const rawMcpToken = env.MCP_TOKEN || '';
+  if (!rawMcpToken) {
+    console.log('MCP endpoint disabled (MCP_TOKEN is not set).');
+  } else {
+    if (rawMcpToken.length < MCP_TOKEN_MIN_LEN) {
+      console.warn('MCP_TOKEN is shorter than 16 characters — consider a longer random value.');
+    }
+    if (rawMcpToken === rawToken) {
+      console.warn(
+        'MCP_TOKEN and INGEST_TOKEN are set to the same value — revoking one will not revoke the other. Use two different random values.'
+      );
+    }
+    if (!tlsConfig.enabled && tlsConfig.plaintextOptOut) {
+      console.warn('WARNING: the MCP token crosses the network unencrypted because ALLOW_PLAINTEXT_HTTP is set.');
+    }
+  }
+
+  const mcp: McpConfig = rawMcpToken ? { token: rawMcpToken, enabled: true } : { token: null, enabled: false };
+
   // Step 7 — session secret.
   const rawSessionSecret = env.SESSION_SECRET || '';
   if (rawSessionSecret && rawSessionSecret.length < SESSION_SECRET_MIN_LEN) {
@@ -212,6 +247,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecretFromEnv: rawSessionSecret || null,
     sessionMaxAgeMs: SESSION_MAX_AGE_MS,
     ingest,
+    mcp,
     jsonBodyLimit: JSON_BODY_LIMIT,
   };
 

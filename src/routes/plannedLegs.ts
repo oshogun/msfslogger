@@ -19,6 +19,7 @@ import { fetchSimbriefPlan, SimbriefFetchError, type SimbriefErrorCode } from '.
 import { uploadLnmpln, MAX_LNMPLN_FILES } from './uploads';
 import { insertAcarsMessageOnce } from '../db/acarsMessages';
 import { DISPATCH_RELEASE_LABEL, buildDispatchPayload, buildDispatchReleaseBody, dispatchDedupKey } from '../acars';
+import { importSimbriefLooseLeg } from '../simbriefImport';
 import type { FlightManager } from '../flightManager';
 import type { PlannedLegWithChildren } from '../types';
 
@@ -422,98 +423,15 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
     }
   });
 
-  // A copy of the trip-nested SimBrief import above with the trip lookup
-  // removed. The step order is the contract, exactly as it is there: settings
-  // read, network call, parse, duplicate check, then createPlannedLeg as the
-  // first and only write to planned_legs, then — and only then — the ACARS
-  // dispatch release in its own try/catch.
+  // A thin adapter over src/simbriefImport.ts's importSimbriefLooseLeg(),
+  // which holds the actual settings-read / fetch / parse / duplicate-check /
+  // create / dispatch-release sequence — shared with the import_simbrief_leg
+  // MCP tool so that sequence, its dedup hash and its dedup key exist in
+  // exactly one place.
   router.post('/planned-legs/simbrief', async (req, res) => {
     const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === true;
-
-    const userId = getSetting(SIMBRIEF_USER_ID_SETTING);
-    if (userId === null) {
-      console.error('[SIMBRIEF] import failed: NO_USER_ID (no trip)');
-      res.status(400).json({
-        error: 'No SimBrief User ID is saved. Enter your SimBrief Pilot ID above and save it, then try again.',
-        code: 'NO_USER_ID',
-      });
-      return;
-    }
-
-    let plan: ParsedSimbriefPlan;
-    try {
-      plan = parseSimbriefPlan(await fetchSimbriefPlan(userId));
-    } catch (err) {
-      if (err instanceof SimbriefFetchError) {
-        console.error(`[SIMBRIEF] import failed: ${err.message}`);
-        res.status(SIMBRIEF_FAILURE_STATUS[err.code]).json({ error: err.userMessage, code: err.code });
-        return;
-      }
-      if (err instanceof SimbriefParseError) {
-        console.error(`[SIMBRIEF] import failed: BAD_BODY (${err.code}: ${err.message})`);
-        res.status(502).json({ error: 'SimBrief returned a plan with no usable route.', code: 'BAD_BODY' });
-        return;
-      }
-      console.error(`[SIMBRIEF] import failed: INTERNAL (${String(err)})`);
-      res.status(500).json({ error: String(err) });
-      return;
-    }
-
-    const label = `${plan.departure.ident} → ${plan.destination.ident}${plan.ofp.flightNumber ? ` (${plan.ofp.flightNumber})` : ''}`;
-    const ofpId = plan.ofp.requestId ?? 'unknown';
-    const sha256 = createHash('sha256')
-      .update(`simbrief\n${plan.ofp.requestId ?? ''}\n${plan.ofp.sequenceId ?? ''}\n${plan.ofp.timeGenerated ?? ''}`)
-      .digest('hex');
-
-    if (!allowDuplicates) {
-      const existing = findPlannedLegBySource(null, sha256);
-      if (existing) {
-        console.log(`[SIMBRIEF] import duplicate: no-trip leg ${existing.id} ${plan.departure.ident}->${plan.destination.ident} ofp ${ofpId}`);
-        res.json({
-          imported: [],
-          result: {
-            status: 'duplicate', planned_leg_id: existing.id, label, warnings: [],
-            error: `This SimBrief plan is already imported without a trip as leg ${existing.seq}. Generate a new OFP on simbrief.com, or re-import to add it again.`,
-          },
-        });
-        return;
-      }
-    }
-
-    try {
-      const legId = createPlannedLeg({
-        tripId: null, plan, sourceFilename: `simbrief-${ofpId}.json`, sourceSha256: sha256,
-      });
-      console.log(
-        `[SIMBRIEF] import ok: no-trip leg ${legId} ${plan.departure.ident}->${plan.destination.ident} ` +
-        `${plan.waypoints.length} wpts ${plan.approxDistanceNm.toFixed(1)}nm ofp ${ofpId}`,
-      );
-
-      try {
-        const issuedAt = new Date().toISOString();
-        const payload = buildDispatchPayload(plan);
-        insertAcarsMessageOnce({
-          planned_leg_id: legId,
-          direction: 'uplink',
-          category: 'dispatch',
-          label: DISPATCH_RELEASE_LABEL,
-          body: buildDispatchReleaseBody(payload, issuedAt),
-          payload_json: JSON.stringify(payload),
-          dedup_key: dispatchDedupKey(legId),
-          sent_at: issuedAt,
-        });
-      } catch (err) {
-        console.error(`[SIMBRIEF] dispatch release not filed: leg ${legId} ofp ${ofpId} (${String(err)})`);
-      }
-
-      res.status(201).json({
-        imported: [getPlannedLegById(legId)!],
-        result: { status: 'imported', planned_leg_id: legId, label, warnings: plan.warnings },
-      });
-    } catch (err) {
-      console.error(`[SIMBRIEF] import failed: DB_ERROR (no trip, ofp ${ofpId}, ${String(err)})`);
-      res.status(500).json({ error: String(err), code: 'DB_ERROR' });
-    }
+    const outcome = await importSimbriefLooseLeg({ allowDuplicates });
+    res.status(outcome.status).json(outcome.body);
   });
 
   router.get('/trips/:id/planned-legs', (req, res) => {

@@ -21,7 +21,7 @@ listener — no separate HTTP→HTTPS redirect port.
 
 ## Authentication
 
-Two independent mechanisms, never mixed on the same request (see
+Three independent mechanisms, never mixed on the same request (see
 [api.md § Auth model](api.md#auth-model-in-one-table) for which routes accept
 which):
 
@@ -38,6 +38,20 @@ which):
   explicit route allow-list in `src/auth/ingestScope.ts` — it is not a
   blanket credential for the whole API, and a valid session always takes
   precedence over token evaluation on a shared route.
+- **MCP bearer token** (`Authorization: Bearer <token>`, compared to
+  `MCP_TOKEN`) for an MCP client at `/mcp` only — see
+  [api.md § MCP server](api.md#mcp-server--srcmcp). Built the same way as
+  the ingest token (its own SHA-256 digest, its own `timingSafeEqual`
+  compare) but with **no shared code, digest, or constant** with
+  `INGEST_TOKEN` — deliberately, so that revoking or rotating one credential
+  can never affect the other. `/mcp` is mounted outside `/api` and above
+  `express-session`, so an MCP request never allocates or reads a session,
+  and `requireAuth`/`requireSameOrigin` never see it. Unlike the ingest
+  allow-list, `MCP_SCOPED_ROUTES` gates nothing live at request time (every
+  MCP tool calls an in-process function, never this server's own HTTP
+  surface) — it's kept honest by a startup assertion instead: a tool
+  declaring an unlisted route, or a read/write kind mismatch, fails server
+  construction rather than shipping silently.
 
 **Password storage**: scrypt (`N=16384, r=8, p=1`, 32-byte key, 16-byte
 salt) via Node's built-in `crypto`, chosen specifically to avoid a second
@@ -70,6 +84,7 @@ token directly.
 | Secret | Source | Notes |
 |---|---|---|
 | `INGEST_TOKEN` | operator-set env var | Shared verbatim between server and agent (and any other ingest-scoped client). Rotate by changing it on the server first, then every client — see [operations.md](operations.md#deploy-ordering-server--agent). |
+| `MCP_TOKEN` | operator-set env var, optional | Bearer credential for an MCP client (see [api.md § MCP server](api.md#mcp-server--srcmcp)). Unset = the `/mcp` endpoint isn't mounted at all. Revoke by unsetting or changing it and restarting — no other component needs updating in lockstep, unlike `INGEST_TOKEN`. |
 | Session signing secret | `SESSION_SECRET` env var, or a random 32-byte value generated once and stored in the `app_secret` table | Set `SESSION_SECRET` explicitly if you want it independent of the database (e.g. to invalidate all sessions by rotating it without touching the DB). |
 | Operator password | never stored in plaintext | scrypt hash only, in `auth_user`. Set via `npm run set-password`'s hidden prompt or piped stdin — never as a CLI argument, to avoid it appearing in `ps` output or shell history. |
 | TLS private key | file on disk (`TLS_KEY_FILE`) | Optionally passphrase-protected (`TLS_KEY_PASSPHRASE`). Not read from the database. |

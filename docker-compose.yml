@@ -18,6 +18,7 @@ services:
       # shell or an .env file next to this compose file; nothing is defaulted
       # here and no value is baked into the image.
       - INGEST_TOKEN=${INGEST_TOKEN}
+      - MCP_TOKEN=${MCP_TOKEN}
       - TLS_CERT_FILE=${TLS_CERT_FILE}
       - TLS_KEY_FILE=${TLS_KEY_FILE}
       - ALLOW_PLAINTEXT_HTTP=${ALLOW_PLAINTEXT_HTTP}

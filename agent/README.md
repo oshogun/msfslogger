@@ -8,7 +8,7 @@ This is the supported way to connect a remote server to MSFS. The alternative â€
 
 ## Setup
 
-1. Install [Node.js 20 LTS](https://nodejs.org/) on the Windows machine, if not already installed.
+1. Install [Node.js 24 LTS](https://nodejs.org/) on the Windows machine, if not already installed. (The agent has no native dependencies and its `package.json` declares no `engines` constraint, so this isn't a hard requirement â€” it just matches the server's current baseline.)
 2. Copy this `agent/` folder to the Windows machine (or clone the whole repo there).
 3. Open a terminal (PowerShell or cmd) in the `agent` folder and install dependencies:
    ```powershell

@@ -99,7 +99,7 @@ A simulated ACARS inbox/outbox per flight and per planned leg:
 | Run the frontend component tests | `cd client && npm test` |
 | Run the end-to-end (Playwright) tests | `cd client && npm run test:e2e` |
 
-All `node`/`npm`/`npx` commands assume Node 20 is active (`nvm use`). See
+All `node`/`npm`/`npx` commands assume Node 24 is active (`nvm use`). See
 [development.md](development.md) for the test suite's conventions.
 
 ## Logs
@@ -117,7 +117,7 @@ your process manager's own log capture — see [operations.md](operations.md)).
 |---|---|---|
 | Server exits immediately, `[Config] ...` on stderr | Missing/invalid env var | Read the printed message — it names the exact variable; see [configuration.md](configuration.md) |
 | Server exits, `[Auth] Refusing to start: no operator account exists.` | Never ran `set-password` | `npm run set-password` |
-| `better-sqlite3` fails to load / server won't start at all | Wrong Node version | `nvm use` (must be Node 20) |
+| `better-sqlite3` fails to load / server won't start at all | Wrong Node version | `nvm use` (must be Node 24) |
 | Agent log shows reconnect loop, web UI shows `connected: false` | Wrong `SERVER_URL`/`INGEST_TOKEN`, or agent doesn't trust the server's TLS cert | Check both sides' `INGEST_TOKEN` match exactly; set `NODE_EXTRA_CA_CERTS` on the agent — see [`agent/README.md`](../agent/README.md#https) |
 | `401 Invalid or missing ingest token` from a non-agent client | Token missing/mismatched, or that route isn't ingest-scoped | See the allow-list in [api.md](api.md#auth-model-in-one-table) |
 | `429` on login | Login throttle (10 failures / 15 min / IP) | Wait out the window (resets on server restart — the throttle is in-memory) |

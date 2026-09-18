@@ -20,6 +20,7 @@ read directly by the module they affect, noted below.
 | `INGEST_TOKEN` | **Yes**, unless `ALLOW_UNAUTHENTICATED_INGEST` is set | — | Shared secret required on `x-ingest-token` for `/api/ingest/*` and the ingest-scoped API routes (see [api.md](api.md)). Recommended ≥16 characters (shorter values only warn, don't block startup). Must match exactly on the Windows agent's `INGEST_TOKEN`. |
 | `ALLOW_UNAUTHENTICATED_INGEST` | No | off | Disables the ingest-token check entirely. Development/trusted-LAN only — see [security.md](security.md). If both this and `INGEST_TOKEN` are set, the token wins (with a startup warning). |
 | `SESSION_SECRET` | No | random, persisted in the DB | Signs the session cookie. If unset, a random 32-byte secret is generated once and stored in the `app_secret` table, so sessions survive a restart without one. If set, must be ≥16 characters. |
+| `MCP_TOKEN` | No — the `/mcp` endpoint is simply not mounted when unset | — | Bearer token for the [MCP server](api.md#mcp-server--srcmcp) (`Authorization: Bearer <token>`). Independent of `INGEST_TOKEN` — no shared digest, module, or allow-list — so rotating or unsetting one never affects the other. Recommended ≥16 characters and different from `INGEST_TOKEN` (shorter or matching values only warn, don't block startup). |
 
 Example, generating a strong ingest token:
 
@@ -58,9 +59,9 @@ selecting the SimConnect protocol revision — not an environment variable.
 ## Docker Compose
 
 `docker-compose.yml` passes these through from the shell/`.env` — none are
-baked into the image: `INGEST_TOKEN`, `TLS_CERT_FILE`, `TLS_KEY_FILE`,
-`ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`. See [setup.md](setup.md#docker) and
-[operations.md](operations.md).
+baked into the image: `INGEST_TOKEN`, `MCP_TOKEN`, `TLS_CERT_FILE`,
+`TLS_KEY_FILE`, `ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`. See
+[setup.md](setup.md#docker) and [operations.md](operations.md).
 
 ## Validating your configuration
 

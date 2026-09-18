@@ -6,7 +6,8 @@
 src/                  Express + TypeScript server
   routes/             One file per feature's HTTP routes
   db/                 One file per table; only place raw SQL is allowed to live
-  auth/               Session, ingest-token, password, login-throttle logic
+  auth/               Session, ingest-token, MCP-token, password, login-throttle logic
+  mcp/                Optional MCP server: router, tool registry, the 18 read/write tools
   inspect-*.ts        ts-node CLI inspectors for eyeballing behavior against real data
 client/               React + Vite web app
   src/pages/          One component per route, most with a *.test.tsx beside it
@@ -119,7 +120,7 @@ does start a live server, deliberately isolated from the developer's own:
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and every pull request (no
-branch filter), on Node 20 (from `.nvmrc`), as two jobs:
+branch filter), on Node 24 (from `.nvmrc`), as two jobs:
 
 - **`build-and-test`**: `npm ci` (root and `client/`), `npm run build`,
   `npm run test:types` (root and client), `npm test` (root and client's

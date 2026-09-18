@@ -32,9 +32,9 @@ The production image (see [`Dockerfile`](../Dockerfile)) is a 3-stage Alpine
 build: client build → server build → runtime image with system Chromium
 (for PDF export via Puppeteer) and the native toolchain `better-sqlite3`
 needs at install time. `docker-compose.yml` bind-mounts `flights.db` and
-`flight_plans/` for persistence and passes `INGEST_TOKEN`, `TLS_CERT_FILE`,
-`TLS_KEY_FILE`, `ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET` through from the
-shell/`.env`. Mount `./certs:/app/certs:ro` (commented out by default in the
+`flight_plans/` for persistence and passes `INGEST_TOKEN`, `MCP_TOKEN`,
+`TLS_CERT_FILE`, `TLS_KEY_FILE`, `ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`
+through from the shell/`.env`. Mount `./certs:/app/certs:ro` (commented out by default in the
 compose file) if using TLS in the container.
 
 ## Monitoring

@@ -36,6 +36,7 @@ describe('ENV_VARS', () => {
       'SESSION_SECRET',
       'ALLOW_UNAUTHENTICATED_INGEST',
       'INGEST_TOKEN',
+      'MCP_TOKEN',
     ]);
   });
 });
@@ -242,6 +243,89 @@ describe('warning branches — non-fatal, exact message via console.warn', () =>
   });
 });
 
+describe('MCP_TOKEN — optional, off by default, warns rather than blocks startup', () => {
+  it('unset: mcp.enabled is false, mcp.token is null, and a plain console.log (not a warning) explains why', () => {
+    const config = loadConfig(baseEnv());
+    expect(config.mcp).toEqual({ token: null, enabled: false });
+    expect(vi.mocked(console.log)).toHaveBeenCalledWith('MCP endpoint disabled (MCP_TOKEN is not set).');
+    expect(vi.mocked(console.warn)).not.toHaveBeenCalledWith(expect.stringContaining('MCP_TOKEN'));
+  });
+
+  it('empty string: treated the same as unset', () => {
+    const config = loadConfig(baseEnv({ MCP_TOKEN: '' }));
+    expect(config.mcp).toEqual({ token: null, enabled: false });
+  });
+
+  it('set, 16+ characters: enabled, no warning, does not throw', () => {
+    const token = 'y'.repeat(24);
+    expect(() => loadConfig(baseEnv({ MCP_TOKEN: token }))).not.toThrow();
+    const config = loadConfig(baseEnv({ MCP_TOKEN: token }));
+    expect(config.mcp).toEqual({ token, enabled: true });
+    expect(vi.mocked(console.warn)).not.toHaveBeenCalledWith(expect.stringContaining('MCP_TOKEN'));
+  });
+
+  it('set, shorter than 16 characters: warns, still enables, does not throw', () => {
+    const config = loadConfig(baseEnv({ MCP_TOKEN: 'short-mcp-token' }));
+    expect(config.mcp).toEqual({ token: 'short-mcp-token', enabled: true });
+    expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
+      'MCP_TOKEN is shorter than 16 characters — consider a longer random value.'
+    );
+  });
+
+  it('set equal to INGEST_TOKEN: warns about shared revocation, still enables, does not throw', () => {
+    const shared = 'z'.repeat(24);
+    const config = loadConfig(baseEnv({ INGEST_TOKEN: shared, MCP_TOKEN: shared }));
+    expect(config.mcp).toEqual({ token: shared, enabled: true });
+    expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
+      'MCP_TOKEN and INGEST_TOKEN are set to the same value — revoking one will not revoke the other. Use two different random values.'
+    );
+  });
+
+  it('set, different from INGEST_TOKEN: no shared-value warning', () => {
+    loadConfig(baseEnv({ MCP_TOKEN: 'w'.repeat(24) }));
+    expect(vi.mocked(console.warn)).not.toHaveBeenCalledWith(
+      expect.stringContaining('are set to the same value')
+    );
+  });
+
+  it('set, with ALLOW_PLAINTEXT_HTTP: warns that the token crosses the network unencrypted', () => {
+    loadConfig(baseEnv({ MCP_TOKEN: 'v'.repeat(24) }));
+    expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
+      'WARNING: the MCP token crosses the network unencrypted because ALLOW_PLAINTEXT_HTTP is set.'
+    );
+  });
+
+  it('set, with TLS enabled: no plaintext warning', () => {
+    const config = loadConfig({
+      INGEST_TOKEN: 'x'.repeat(24),
+      MCP_TOKEN: 'u'.repeat(24),
+      BIND_HOST: '127.0.0.1',
+    } as NodeJS.ProcessEnv);
+    expect(config.mcp.enabled).toBe(true);
+    expect(vi.mocked(console.warn)).not.toHaveBeenCalledWith(
+      expect.stringContaining('MCP token crosses the network unencrypted')
+    );
+  });
+
+  it('a bad MCP_TOKEN never pre-empts an existing fatal check — the step-4 ingest message still wins', () => {
+    expect(() => loadConfig({ MCP_TOKEN: 'short', BIND_HOST: '127.0.0.1' } as NodeJS.ProcessEnv)).toThrow(
+      new ConfigError(
+        '[Config] Refusing to start: INGEST_TOKEN is not set.\n' +
+          '[Config] The agent ingest endpoints (/api/ingest/frame, /event, /traffic) would accept flight data from anyone who can reach this server.\n' +
+          '[Config] Set INGEST_TOKEN to a shared secret and set the same value on the agent (agent/README.md), or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).'
+      )
+    );
+  });
+
+  it('does not leak the MCP token value into any warning', () => {
+    const weakToken = 'weak-mcp-9f3a';
+    expect(weakToken.length).toBeLessThan(16);
+    loadConfig(baseEnv({ MCP_TOKEN: weakToken }));
+    const allWarnings = vi.mocked(console.warn).mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(allWarnings).not.toContain(weakToken);
+  });
+});
+
 describe('defaults', () => {
   it('loadConfig({ INGEST_TOKEN, ALLOW_PLAINTEXT_HTTP }) resolves every default', () => {
     const token = 'x'.repeat(24);
@@ -259,6 +343,7 @@ describe('defaults', () => {
     // set. This env has ALLOW_UNAUTHENTICATED_INGEST unset entirely, so
     // parseBooleanEnv(undefined) is false regardless of the token.
     expect(config.ingest.allowUnauthenticated).toBe(false);
+    expect(config.mcp).toEqual({ token: null, enabled: false });
   });
 });
 

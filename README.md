@@ -16,8 +16,7 @@ just enough to get a working install.
 
 ## Prerequisites
 
-- Node.js **20** (pinned by `.nvmrc` — `better-sqlite3` is a native
-  dependency and will not load on newer Node ABIs)
+- Node.js **24** (pinned by `.nvmrc`)
 - npm
 - MSFS 2020/2024 or FSX on Windows, to actually log flights
 - Docker and Docker Compose, if using the container install

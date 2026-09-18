@@ -1,0 +1,343 @@
+{
+  "run_id": "2026-09-18-mcp-server",
+  "goal": "Expose msfslogger's logbook (flights, trips, planned legs, ACARS comms, live status) to a remote Claude client via an MCP server mounted inside the existing Express app, with 14 read tools and 4 additive/reversible write tools, gated by a new MCP_TOKEN credential and route allow-list that is fully independent of INGEST_TOKEN.",
+  "frozen_decisions": [
+    "Add remote claude as a requirement. Running on the same machine as the server is an unlikely use case as the server is meant to run headless in a homelab scenario. (rules out stdio transport entirely)",
+    "Transport is MCP Streamable HTTP, not stdio.",
+    "The MCP endpoint mounts inside the existing src/server.ts Express app, not a standalone process.",
+    "Auth is a new credential (working name MCP_TOKEN) and a new route allow-list (working name MCP_SCOPED_ROUTES), modeled on src/auth/ingestScope.ts, kept entirely separate from INGEST_TOKEN/INGEST_SCOPED_ROUTES \u2014 revoking one must never affect the other.",
+    "Auth mechanism is a static bearer token, not OAuth 2.1.",
+    "get_flight_stats and search_flights are the only two tools with no existing backing route; every other tool in the inventory maps to an existing route in docs/api.md.",
+    "Write tools are limited to: update_flight_notes (notes field only, never aircraft), create_trip, assign_flight_to_trip, import_simbrief_leg. Deletes, combine, PDF, all SayIntentions link/import/clearance/send, and all settings/credential writes are out of scope for v1.",
+    "No IP allow-listing in v1 \u2014 security model is TLS + bearer-token secrecy only, matching INGEST_TOKEN's posture. Revisit only if Designer finds this insufficient.",
+    "All implementation in this run is backend-only (src/**, tests/**) \u2014 no client/** work."
+  ],
+  "sequencing_rationale": [
+    "Design must freeze the auth model, the two new routes, and the MCP tool/transport contract before any code is written: three implementers will build against it cold, and a mismatch discovered mid-implementation (e.g. a tool's schema disagreeing with the route it wraps) is expensive to unwind on a brand-new external contract. Phase 1 is that freeze, gated by its own reviewer before phase 2 starts.",
+    "T-003 (auth scope module) and T-004 (the two new routes) touch disjoint files and have no logical dependency on each other \u2014 neither route needs MCP awareness, and the scope module needs no aggregation logic \u2014 so they run in parallel after the design reviewer, saving wall-clock.",
+    "T-005 (MCP server + read-tool wiring) depends on both: two of the fourteen read tools (search_flights, get_flight_stats) call the routes T-004 builds, and every tool call must pass through the scope gate T-003 builds to reach requireAuth.",
+    "T-006 (write tools) is sequenced after T-005 rather than parallelized with it: it registers into the same McpServer instance T-005 creates, and it is the highest-risk seam in the run (the only mutation surface, and the one place a field-scoping bug \u2014 aircraft leaking through update_flight_notes \u2014 would violate a stated success criterion). It gets its own task and its own fresh look in review rather than being folded into T-005.",
+    "T-007 (integration tests) runs last because its value is proving the read and write tool sets work together against one real MCP client connection over Streamable HTTP \u2014 the tool inventory count, one full read round trip, one full write round trip with field-scoping enforcement, and the auth-rejection path. That is the most direct evidence for success criterion 1 and is only meaningful once both tool sets exist.",
+    "Ship/DevOps is deliberately not scheduled in this plan: intake.md already defers that call until design.md exists and the actual env-var/deployment footprint is concrete. The Orchestrator decides after phase 1's review whether a devops task is warranted (e.g. documenting MCP_TOKEN alongside INGEST_TOKEN, or a reverse-proxy note) \u2014 inventing that task now would be guessing at scope the intake explicitly left open.",
+    "Read tools (14) and write tools (4) were kept in one file each rather than one file per tool: every tool in a group shares the same registration entry point and the same risk profile, so splitting further would buy diagrams, not parallelism (per the 'two edits to the same file are one task' rule, since all 14 read tools land in src/mcp/tools/read.ts regardless of how many are listed)."
+  ],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Design freeze: auth scope, new routes, MCP tool contract",
+      "ships": "No user-visible change yet. What ships is a frozen, reviewed design.md \u2014 exact env vars, route allow-list, the two new route contracts, the MCP transport/mount shape, and the 18-tool (14 read + 4 write) schema table \u2014 that phase 2's four implementer tasks can build against without further architectural decisions.",
+      "tasks": [
+        "T-001",
+        "T-002"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Implement, wire and test the MCP server",
+      "ships": "A remote Claude client can open a Streamable HTTP connection to the running msfslogger server, authenticate with MCP_TOKEN, list 18 tools, read any part of the logbook (flights, trips, planned legs, ACARS threads, live status, ground session, stats, search), and make the four permitted edits \u2014 all without INGEST_TOKEN, the web session, or any existing route's behaviour changing.",
+      "tasks": [
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008"
+      ]
+    },
+    {
+      "phase": 3,
+      "title": "Ship: wire MCP_TOKEN into the Docker deployment path",
+      "tasks": [
+        "T-009",
+        "T-010"
+      ],
+      "ships": "A docker-compose-based homelab deployment (this run's target scenario) can actually set MCP_TOKEN and have it reach the container."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T-001",
+      "role": "designer",
+      "title": "Design the MCP auth scope, the two new routes, and the MCP tool/transport contract",
+      "goal": "Freeze every architectural decision the four implementation tasks in phase 2 need, so none of them has to guess. Read intake.md in full (.claude/runs/2026-09-18-mcp-server/intake.md) plus the codebase facts it names (docs/api.md, docs/data-model.md, src/auth/ingestScope.ts, src/auth/ingestToken.ts, src/config.ts, src/server.ts, src/auth/middleware.ts) before writing design.md.",
+      "depends_on": [],
+      "allowed_paths": [
+        ".claude/runs/2026-09-18-mcp-server/design.md"
+      ],
+      "acceptance_criteria": [
+        "design.md has a numbered section per topic below, so implementation tasks can cite it as `ctx.sh design 2026-09-18-mcp-server <n>`.",
+        "Auth section: names the exact env var (MCP_TOKEN), states whether it is required-with-fatal-refusal-to-start (like INGEST_TOKEN) or optional-with-MCP-disabled-when-unset, states the minimum-length warning policy, and specifies src/auth/mcpToken.ts + src/auth/mcpScope.ts as new files mirroring src/auth/ingestToken.ts + src/auth/ingestScope.ts's shape exactly (digest-once-at-construction, timingSafeEqual, a hardcoded TS route-allow-list constant \u2014 not an env var, matching how INGEST_SCOPED_ROUTES is actually implemented today despite its ALL-CAPS name). States explicitly, with a one-line justification, why this cannot share a digest, a module, or a constant with the ingest token/scope (success criterion 4: revoking one must not affect the other).",
+        "Auth section also states how the new gate composes with requireAuth/requireSameOrigin in src/auth/middleware.ts (extend them to recognize an 'mcp' scope result the way they recognize 'ingest' today, or keep the MCP endpoint's own auth fully separate from /api's requireAuth chain) and justifies the choice.",
+        "Route-allow-list section: lists every method+path pair MCP_SCOPED_ROUTES must cover to serve all 18 tools (14 read + 4 write), cross-referenced against docs/api.md's existing routes, including the two new ones from the next section.",
+        "New-routes section: for GET (path TBD by design, e.g. /api/flights/stats) and GET (path TBD, e.g. /api/flights/search) \u2014 exact path (registered before /flights/:id, same reason /flights/combine is), query parameters, response JSON shape, and which src/db/flights.ts functions compute them (aggregate hours/distance/most-flown aircraft & routes; free-text match over notes/airports). States the routing-order constraint explicitly.",
+        "MCP transport section: states the exact npm package (e.g. @modelcontextprotocol/sdk) and version constraint, Streamable HTTP session mode (stateless vs. stateful \u2014 a homelab single-operator deployment is the deciding fact), the exact mount path(s) in src/server.ts, and how the SDK's request handling coexists with the already-mounted express.json() body parser.",
+        "Tool-implementation section: states explicitly whether each tool handler (a) makes an internal HTTP call back into the same server's existing routes (reusing MCP_SCOPED_ROUTES as a real Express-level gate, mirroring the ingest architecture) or (b) calls the underlying src/db/*.ts / route-handler logic in-process (bypassing HTTP entirely, in which case MCP_SCOPED_ROUTES becomes a documentation/audit list rather than a live gate) \u2014 and justifies the choice given this server has no existing precedent for (a). Whichever is chosen, states how each tool's error path maps to an MCP tool error (isError content vs. a thrown JSON-RPC error).",
+        "Tool inventory table: one row per tool (18 total \u2014 14 read, 4 write) naming its MCP tool name, input schema (fields, types, required/optional), the exact route or function it calls, and the output shape. get_weather's row states explicitly that it calls src/weatherClient.ts's getCachedWeather(icao) directly rather than proxying through POST .../acars-messages/wx, because that route's side effect (writing an ACARS message row) would make a nominally read-only tool mutate the logbook.",
+        "update_flight_notes's row states the exact mechanism that keeps `aircraft` unreachable even though PATCH /api/flights/:id accepts it: the tool's own zod input schema has no `aircraft` field and the handler forwards only `{ notes }` to updateFlight(), never req.body verbatim.",
+        "create_trip, assign_flight_to_trip and import_simbrief_leg's rows each name the exact existing route they call (POST /api/trips, POST /api/trips/:id/flights, POST /api/planned-legs/simbrief) and confirm no new backend logic is needed for them, per intake.md's frozen decision.",
+        "States, in one line, the default taken on the open question in intake.md (TLS + bearer-token secrecy only, no IP allow-list in v1) so it is recorded rather than silently assumed.",
+        "Contains no implementation code beyond schema/type stubs and the route table.",
+        "`ctx.sh map 2026-09-18-mcp-server` (once design.md exists) correctly lists every section added, confirming the numbering is stable for later citation."
+      ],
+      "context": [
+        ".claude/runs/2026-09-18-mcp-server/intake.md (read whole)",
+        "docs/api.md",
+        "docs/data-model.md",
+        "src/auth/ingestScope.ts",
+        "src/auth/ingestToken.ts",
+        "src/auth/middleware.ts",
+        "src/config.ts",
+        "src/server.ts",
+        "src/routes/flights.ts, src/routes/trips.ts, src/routes/plannedLegs.ts, src/routes/acars.ts, src/routes/groundSessions.ts, src/routes/settings.ts",
+        "src/weatherClient.ts (getCachedWeather is the side-effect-free read get_weather should call)",
+        "src/db/flights.ts (existing query shape, for the two new aggregate/search functions)"
+      ]
+    },
+    {
+      "id": "T-002",
+      "role": "reviewer",
+      "title": "Review the frozen design: auth independence, route contracts, tool inventory completeness",
+      "goal": "Verify design.md against intake.md's success criteria and frozen decisions before any implementation task starts. This is the phase-1 gate: phase 2's first tasks depend on this one.",
+      "depends_on": [
+        "T-001"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Confirms design.md's auth section makes MCP_TOKEN/MCP_SCOPED_ROUTES fully independent of INGEST_TOKEN/INGEST_SCOPED_ROUTES at the module level (no shared digest, no shared constant, no shared gate function) \u2014 success criterion 4.",
+        "Confirms the tool inventory table has exactly 18 rows (14 read + 4 write) matching intake.md's named tools, with none of the explicitly excluded actions (deletes, combine, PDF, SayIntentions link/import/clearance/send, settings/credential writes) reachable through any row.",
+        "Confirms update_flight_notes's row states a concrete mechanism (not just an intent) for keeping `aircraft` unreachable.",
+        "Confirms the two new routes are placed before /flights/:id in design.md's routing-order statement, and that their response shapes are concrete enough to code against without further decisions.",
+        "Confirms the MCP transport section names a real npm package and a concrete session-mode decision (stateless vs. stateful), not an open question.",
+        "Flags anything in design.md that re-opens a decision listed in intake.md's frozen decisions or plan.json's frozen_decisions as a blocking finding, not a suggestion.",
+        "Verdict is approve or request_changes with specific section references; request_changes sends the task back to T-001's same designer agent."
+      ],
+      "context": [
+        ".claude/runs/2026-09-18-mcp-server/intake.md",
+        ".claude/runs/2026-09-18-mcp-server/design.md (once produced by T-001)"
+      ]
+    },
+    {
+      "id": "T-003",
+      "role": "backend_sr",
+      "title": "MCP auth: MCP_TOKEN credential and MCP_SCOPED_ROUTES allow-list",
+      "goal": "Implement the auth module frozen in design.md's auth and route-allow-list sections (cite via `ctx.sh design 2026-09-18-mcp-server <n>` once section numbers are known \u2014 design.md does not exist yet at plan time). Mirror src/auth/ingestToken.ts and src/auth/ingestScope.ts in shape, but as fully independent modules per the frozen decision that revoking MCP_TOKEN must never affect INGEST_TOKEN.",
+      "depends_on": [
+        "T-002"
+      ],
+      "allowed_paths": [
+        "src/auth/mcpToken.ts",
+        "src/auth/mcpScope.ts",
+        "src/config.ts",
+        "tests/mcpScope.test.ts",
+        "tests/config.test.ts"
+      ],
+      "acceptance_criteria": [
+        "src/auth/mcpToken.ts exports digest/compare helpers with the same timing-safe, digest-once shape as src/auth/ingestToken.ts.",
+        "src/auth/mcpScope.ts exports the hardcoded MCP_SCOPED_ROUTES allow-list (a TS constant, not an env var \u2014 matching how INGEST_SCOPED_ROUTES is actually implemented) covering exactly the routes design.md's route-allow-list section names, plus a scope-gate creator function and a scope-reader, per whatever composition design.md's auth section froze with requireAuth/requireSameOrigin.",
+        "src/config.ts's loadConfig() parses MCP_TOKEN per the policy design.md froze (required-fatal vs. optional-disabled, min-length warning), exposes it on AppConfig as a field separate from `ingest`, and ENV_VARS gains MCP_TOKEN.",
+        "tests/mcpScope.test.ts (new, modeled on tests/ingestScope.test.ts's direct-fake-request style, no real HTTP socket) covers: valid token accepted only on scoped routes, invalid/absent token rejected, a session cookie still taking precedence, and \u2014 the success-criterion-4 case \u2014 that an MCP_TOKEN-valid header never satisfies an ingest-scoped route and an INGEST_TOKEN-valid header never satisfies an mcp-scoped route. `npm test -- mcpScope` passes.",
+        "tests/config.test.ts gains cases for MCP_TOKEN parsing matching design.md's frozen policy. `npm test -- config` passes.",
+        "`npm run test:types` and `npx tsc --noEmit` pass with no new errors.",
+        "`npm test` (full suite) still passes \u2014 no existing ingest/session test regresses."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-18-mcp-server (auth + route-allow-list sections, once numbered \u2014 run `ctx.sh map 2026-09-18-mcp-server` first to find them)",
+        "src/auth/ingestScope.ts",
+        "src/auth/ingestToken.ts",
+        "src/auth/middleware.ts",
+        "src/config.ts (read in full before editing \u2014 loadConfig()'s ordered-steps style is load-bearing)",
+        "tests/ingestScope.test.ts (test pattern to mirror)",
+        "tests/config.test.ts (existing cases, for style)"
+      ]
+    },
+    {
+      "id": "T-004",
+      "role": "backend_sr",
+      "title": "New routes: flight stats aggregation and free-text flight search",
+      "goal": "Implement the two backend gaps design.md's new-routes section specifies (get_flight_stats, search_flights), as ordinary session/token-gated /api routes \u2014 no MCP awareness belongs in this task; the routes are generic and reusable.",
+      "depends_on": [
+        "T-002"
+      ],
+      "allowed_paths": [
+        "src/db/flights.ts",
+        "src/routes/flights.ts",
+        "tests/db/flights.test.ts"
+      ],
+      "acceptance_criteria": [
+        "The two routes are registered in src/routes/flights.ts at the exact paths design.md's new-routes section freezes, before /flights/:id (same routing-order reasoning as the existing /flights/combine route immediately above it in the file).",
+        "The aggregation query (total hours, total distance, most-flown aircraft, most-flown routes) and the free-text search query (matching notes/airports) are implemented as named functions in src/db/flights.ts, not inlined in the route handler, following the file's existing separation of query logic from route wiring.",
+        "tests/db/flights.test.ts gains unit-test coverage for both new functions against a throwaway in-memory/temp-file sqlite db (the file's existing pattern), including at least one empty-logbook case and one multi-flight case with a clear expected aggregate. `npm test -- db/flights` passes.",
+        "Manual verification against a scratch server (own port, copy of flights.db per .claude/ENVIRONMENT.md) with curl: both new endpoints return 200 with the shapes design.md specifies for a real (copied) logbook, and a request with no session/token still gets the same 401 every other /api/flights route gives today.",
+        "`npm run test:types` and `npx tsc --noEmit` pass.",
+        "`npm test` (full suite) still passes."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-18-mcp-server (new-routes section, once numbered)",
+        "src/routes/flights.ts (read in full \u2014 routing order above /flights/:id is load-bearing, same reasoning as /flights/combine)",
+        "src/db/flights.ts (existing query/helper style to match)",
+        "tests/db/flights.test.ts (existing fixtures/pattern)"
+      ]
+    },
+    {
+      "id": "T-005",
+      "role": "backend_sr",
+      "title": "MCP server module: transport, mount, and the 14 read tools",
+      "goal": "Build the MCP Streamable HTTP server per design.md's transport and tool-implementation sections, mount it inside src/server.ts, and register all 14 read tools per design.md's tool inventory table.",
+      "depends_on": [
+        "T-003",
+        "T-004"
+      ],
+      "allowed_paths": [
+        "src/mcp/**",
+        "src/server.ts",
+        "package.json",
+        "package-lock.json"
+      ],
+      "acceptance_criteria": [
+        "The MCP SDK package design.md names is added to package.json/package-lock.json; `npm install` resolves with no peer-dependency conflicts.",
+        "src/mcp/server.ts implements the transport/session mode and mount shape design.md froze, gated by the MCP_TOKEN scope gate from T-003 (src/auth/mcpScope.ts); it is wired into src/server.ts at the exact mount path design.md names, without changing the order or behaviour of any existing app.use() call.",
+        "src/mcp/tools/read.ts registers exactly the 14 read tools design.md's inventory table lists (list_flights, get_flight, search_flights, get_flight_stats, list_trips, get_trip, get_journey, list_planned_legs, get_planned_leg, get_acars_thread, get_weather, list_canned_messages, get_status, get_ground_session), each with the input/output schema the table specifies; get_weather calls src/weatherClient.ts's getCachedWeather() directly, not the ACARS wx route.",
+        "A request to the MCP endpoint with a missing or invalid MCP_TOKEN is rejected before any tool runs \u2014 verified by curl/an MCP client against a scratch server (own port, copy of flights.db).",
+        "Connecting an MCP client (the SDK's Client + StreamableHTTPClientTransport, or the official MCP inspector) to a scratch server and calling `tools/list` returns exactly these 14 tool names (a 15th+ name only once T-006 lands).",
+        "At least 5 of the 14 read tools, spot-checked against a scratch server with a copied flights.db, return data matching the equivalent REST endpoint's response for the same id/filter (e.g. get_flight's output equals `curl .../api/flights/:id`'s JSON) \u2014 commands and outputs named in the task's report.",
+        "`npm test` (full suite) still passes; a manual session-cookie login and one existing web-UI action still work against the scratch server, confirming the existing auth flow is unaffected.",
+        "`npm run test:types` and `npx tsc --noEmit` pass."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-18-mcp-server (transport, tool-implementation, and tool-inventory sections, once numbered)",
+        "src/server.ts (read in full \u2014 mounting order is load-bearing, per its own comments)",
+        "src/routes/flights.ts, src/routes/trips.ts, src/routes/plannedLegs.ts, src/routes/acars.ts, src/routes/groundSessions.ts, src/routes/settings.ts (the data/logic each read tool wraps)",
+        "src/weatherClient.ts",
+        "src/auth/mcpScope.ts, src/auth/mcpToken.ts (built by T-003 \u2014 read, do not modify)",
+        "the new routes built by T-004 (src/db/flights.ts, src/routes/flights.ts) \u2014 read, do not modify"
+      ]
+    },
+    {
+      "id": "T-006",
+      "role": "backend_sr",
+      "title": "MCP write tools: notes edit, trip creation, flight-trip assignment, SimBrief import",
+      "goal": "Register the 4 write tools per design.md's tool-inventory table, into the McpServer instance T-005 created. This is the highest-risk task in the run: the only mutation surface reachable from a remote client, and the one place a field-scoping mistake (aircraft leaking through update_flight_notes) would violate a stated success criterion.",
+      "depends_on": [
+        "T-005"
+      ],
+      "allowed_paths": [
+        "src/mcp/tools/write.ts",
+        "src/mcp/server.ts",
+        "src/simbriefImport.ts",
+        "src/routes/plannedLegs.ts"
+      ],
+      "acceptance_criteria": [
+        "update_flight_notes's input schema has no `aircraft` field; the handler forwards only `{ notes }` to the underlying update path. A call with an extra `aircraft` key in the tool input leaves the flight's `aircraft` column byte-identical before and after, verified against a scratch db copy with a direct better-sqlite3 read.",
+        "create_trip, assign_flight_to_trip and import_simbrief_leg are registered per design.md's schemas, each calling the exact existing route design.md names (POST /api/trips, POST /api/trips/:id/flights, POST /api/planned-legs/simbrief) with no new backend route or db function added in this task.",
+        "Calling each of the 4 write tools against a scratch server (copy of flights.db) produces the expected row, verified by a direct better-sqlite3 read of the scratch db afterward \u2014 commands and results named in the task's report.",
+        "`tools/list` against the scratch server now returns exactly 18 tools (the 14 from T-005 plus these 4) and no others \u2014 no delete, combine, PDF, SayIntentions or settings/credential tool is reachable.",
+        "`npm run test:types` and `npx tsc --noEmit` pass; `npm test` (full suite) still passes."
+      ],
+      "context": [
+        "ctx.sh design 2026-09-18-mcp-server (tool-inventory section, the 4 write rows, once numbered)",
+        "src/mcp/server.ts, src/mcp/tools/read.ts (built by T-005 \u2014 the registration entry point this task hooks into)",
+        "src/routes/flights.ts (PATCH /flights/:id \u2014 notes+aircraft payload shape), src/routes/trips.ts (POST /trips, POST /trips/:id/flights), src/routes/plannedLegs.ts (POST /planned-legs/simbrief)"
+      ],
+      "amendment": "Widened by Orchestrator after design.md froze: design \u00a76.5 (\"The one extraction: src/simbriefImport.ts\") requires moving POST /api/planned-legs/simbrief's handler body verbatim into a new src/simbriefImport.ts shared by the route and the import_simbrief_leg tool, and states explicitly \"this is the one place where an implementer's allowed_paths must include src/routes/plannedLegs.ts. If a phase-2 task's paths do not, the task is blocked, not worked around.\" plan.json predates design.md and could not have known this. No other field of this task changed."
+    },
+    {
+      "id": "T-007",
+      "role": "backend_sr",
+      "title": "MCP end-to-end integration test suite",
+      "goal": "Write a hermetic Vitest suite that proves the read and write tool sets work together over one real MCP client connection \u2014 the most direct automated evidence for success criterion 1. Model the server/client harness on tests/ingest.test.ts's ephemeral-listener pattern and mock ./db and ./airports per tests/helpers/index.ts's existing convention; touch no live flights.db and no real network beyond loopback.",
+      "depends_on": [
+        "T-006"
+      ],
+      "allowed_paths": [
+        "tests/mcp.test.ts",
+        "tests/mcp/**"
+      ],
+      "acceptance_criteria": [
+        "A new test file spins up the server's MCP mount on an ephemeral port with mocked ./db (and ./airports where needed) and connects with the MCP SDK's Client + StreamableHTTPClientTransport.",
+        "One test asserts `tools/list` returns exactly 18 tools with the names design.md's inventory table lists.",
+        "At least one full read-tool round trip (e.g. list_flights) returns data matching the mocked fixture.",
+        "At least one full write-tool round trip (e.g. update_flight_notes) mutates only the notes field on the mocked flight, and a variant of the same call carrying an extra `aircraft` field in its input either fails schema validation or is silently dropped \u2014 verified by asserting the mocked flight's aircraft is unchanged either way.",
+        "One test asserts a request with a missing or invalid MCP_TOKEN is rejected before any tool executes (no mock db function is called).",
+        "`npx vitest run tests/mcp.test.ts` passes; `npm test` (full suite) passes with no new failures elsewhere; `npm run test:types` passes.",
+        "The task's report states that no live flights.db was opened and no non-loopback socket was created, per the same posture tests/ingest.test.ts already documents."
+      ],
+      "context": [
+        "tests/ingest.test.ts (ephemeral-server/client test harness pattern)",
+        "tests/ingestScope.test.ts (auth-rejection test style)",
+        "tests/helpers/index.ts (mocking conventions \u2014 read before writing new fixtures)",
+        "src/mcp/server.ts, src/mcp/tools/read.ts, src/mcp/tools/write.ts (built by T-005/T-006 \u2014 read, do not modify)",
+        "ctx.sh design 2026-09-18-mcp-server (tool-inventory section, for the exact 18 names)"
+      ]
+    },
+    {
+      "id": "T-008",
+      "role": "reviewer",
+      "title": "Review phase 2: MCP auth, new routes, MCP server, read+write tools, tests",
+      "goal": "Gate the whole implementation phase before merge. Re-run the evidence named in T-003 through T-007's acceptance criteria rather than trusting their reports, per the non-negotiable that the Reviewer never trusts a report.",
+      "depends_on": [
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Re-runs `npm test` (full suite), `npm run test:types`, and `npx tsc --noEmit` against the merged tree and confirms all pass.",
+        "Re-runs `tools/list` against a scratch server and confirms exactly 18 tools, matching design.md's frozen inventory verbatim \u2014 no excluded action (delete, combine, PDF, SayIntentions, settings/credential write) reachable.",
+        "Confirms MCP_TOKEN and INGEST_TOKEN are independently revocable: with a scratch server running, an invalid/absent INGEST_TOKEN still lets a valid MCP_TOKEN request succeed on an MCP-scoped route, and vice versa \u2014 success criterion 4, checked directly rather than taken from T-003's report.",
+        "Confirms update_flight_notes cannot move the `aircraft` field under any input shape it tries, including a payload with `aircraft` nested or aliased in a way the schema might not have anticipated.",
+        "Confirms no task modified or restarted the live server or wrote to the live flights.db \u2014 checks each task's report for the scratch-copy discipline .claude/ENVIRONMENT.md requires, and spot-checks the live file's newest flights.id is unchanged from before the run.",
+        "Confirms existing web-session and ingest-token flows are unaffected: an existing test file that exercised those flows before this run (e.g. tests/ingestScope.test.ts) still passes unmodified in intent, not just in exit code.",
+        "Verdict is approve or request_changes with specific task/file references; request_changes sends the task back to the same implementer agent that produced it, per the loop's 3-round escalation rule."
+      ],
+      "context": [
+        ".claude/runs/2026-09-18-mcp-server/intake.md",
+        "ctx.sh design 2026-09-18-mcp-server (full document, for cross-checking every implementation task's claim)",
+        ".claude/ENVIRONMENT.md (scratch-copy discipline to verify against)"
+      ]
+    },
+    {
+      "id": "T-009",
+      "role": "devops",
+      "title": "Pass MCP_TOKEN through docker-compose.yml",
+      "goal": "Wire the new MCP_TOKEN env var into the Docker Compose deployment path so a homelab operator running via docker-compose (the scenario this whole run was built for) can actually enable the /mcp endpoint. Added by the Orchestrator after phase 2 approval, once the deployment gap was concrete: docker-compose.yml passes through INGEST_TOKEN, TLS_CERT_FILE, TLS_KEY_FILE, ALLOW_PLAINTEXT_HTTP and SESSION_SECRET but has no MCP_TOKEN line, so setting it in a .env file next to the compose file currently has zero effect inside the container.",
+      "depends_on": [
+        "T-008"
+      ],
+      "allowed_paths": [
+        "docker-compose.yml"
+      ],
+      "acceptance_criteria": [
+        "docker-compose.yml gains one `- MCP_TOKEN=${MCP_TOKEN}` line in the environment: block, in the same style/position as the existing optional vars (grouped with the security-settings comment already there).",
+        "No other line in docker-compose.yml changes \u2014 this is a one-line addition, not a reformat.",
+        "Confirms empirically (read src/config.ts's MCP_TOKEN parsing, already built by T-003) that an unset/empty MCP_TOKEN in the container environment is treated identically to today's pre-run behavior (endpoint disabled, no crash, no fatal exit) \u2014 Compose passing an empty string for an unset var must not be mistaken for a set token.",
+        "No Dockerfile change is needed and none is made, since @modelcontextprotocol/sdk and zod are pure-JS deps with no native build step, and /mcp shares the existing exposed port 3000 rather than opening a new one \u2014 states this explicitly in the report rather than silently doing nothing."
+      ],
+      "context": [
+        "docker-compose.yml (read in full \u2014 match existing style exactly)",
+        "src/config.ts lines ~216-231 (MCP_TOKEN parsing: `env.MCP_TOKEN || ''` treats empty string as unset, so Compose's blank-string-when-unset behavior is already safe)",
+        ".claude/runs/2026-09-18-mcp-server/design.md \u00a72.1 (env var policy)"
+      ]
+    },
+    {
+      "id": "T-010",
+      "role": "reviewer",
+      "title": "Review the docker-compose.yml change",
+      "goal": "Gate the Ship-phase change before merge.",
+      "depends_on": [
+        "T-009"
+      ],
+      "allowed_paths": [],
+      "acceptance_criteria": [
+        "Confirms docker-compose.yml's diff is exactly one added line, correctly placed and formatted.",
+        "Confirms the empty-string-when-unset behavior claim against src/config.ts directly rather than trusting the report.",
+        "Verdict is approve or request_changes."
+      ],
+      "context": [
+        "docker-compose.yml",
+        "src/config.ts"
+      ]
+    }
+  ]
+}

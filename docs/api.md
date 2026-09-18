@@ -10,17 +10,21 @@ of truth, generated from `src/server.ts` and `src/routes/*.ts`.
 |---|---|---|
 | **Session** | `msfslogger.sid` cookie, set by `POST /api/auth/login` | The web UI |
 | **Ingest token** | `x-ingest-token` header, compared to `INGEST_TOKEN` | The Windows agent (`/api/ingest/*` only) and a small allow-listed set of other routes (below), e.g. the MCDU app |
+| **MCP bearer token** | `Authorization: Bearer <token>`, compared to `MCP_TOKEN` | An MCP client (e.g. Claude Desktop/Code) at `/mcp` only — see [MCP server](#mcp-server--srcmcp) below |
 | **Public** | none | `/api/auth/*`, the served client, and the SPA catch-all |
 
-Every route below is one of exactly three values: **session** (cookie
-only), **session or token** (either credential works), or **public** (no
-auth at all). "Session or token" is not a default for `/api` — it applies
-*only* to the 19 method+path pairs in the explicit allow-list
-`INGEST_SCOPED_ROUTES` (`src/auth/ingestScope.ts`). Everything else under
-`/api` is session-only: an otherwise-valid ingest token is never read for an
-off-list route, let alone accepted. Full mechanism (CSRF, throttling, token
-scoping) is in [security.md](security.md); this page only documents *which*
-routes accept which credential.
+Every `/api` route below is one of exactly three values: **session**
+(cookie only), **session or token** (either credential works), or
+**public** (no auth at all). "Session or token" is not a default for
+`/api` — it applies *only* to the 19 method+path pairs in the explicit
+allow-list `INGEST_SCOPED_ROUTES` (`src/auth/ingestScope.ts`). Everything
+else under `/api` is session-only: an otherwise-valid ingest token is never
+read for an off-list route, let alone accepted. `/mcp` is a separate,
+top-level endpoint outside `/api` entirely — it is never reachable by
+session or ingest token, and `/api` never accepts an MCP token — see below.
+Full mechanism (CSRF, throttling, token scoping) is in
+[security.md](security.md); this page only documents *which* routes accept
+which credential.
 
 ## `GET /api/status`
 
@@ -41,6 +45,8 @@ while `flightState === 'GROUND'`), `traffic` (only when non-empty).
 |---|---|---|---|
 | GET | `/api/flights` | session | List all flights |
 | POST | `/api/flights/combine` | session | Merge two flights (`{id1, id2}`) → `201 {id}` |
+| GET | `/api/flights/search` | session | Free-text match over a flight's text columns. `q` required (1–200 chars, 1–8 terms), `limit` (1–100, default 25), `offset` (≥0, default 0). `400 INVALID_QUERY`/`TOO_MANY_TERMS`/`INVALID_LIMIT`/`INVALID_OFFSET` |
+| GET | `/api/flights/stats` | session | Aggregates over the whole logbook, optionally bounded by `from`/`to` (`YYYY-MM-DD` or a UTC timestamp; `to` exclusive). Empty logbook/range → zeros and `null`, never `404`. `400 INVALID_RANGE` on a bad date |
 | GET | `/api/flights/:id` | session | Single flight |
 | PATCH | `/api/flights/:id` | session | Edit `aircraft` and/or `notes` |
 | DELETE | `/api/flights/:id` | session | Delete a flight → `{deleted:true}` |
@@ -51,6 +57,12 @@ while `flightState === 'GROUND'`), `traffic` (only when non-empty).
 None of this router's routes are ingest-token-scoped — note this is a
 different router than the flight-scoped ACARS routes below, which share the
 `/api/flights/:id/...` prefix but are allow-listed.
+
+Registration order matters: `/flights/search` and `/flights/stats` are
+registered *before* `/flights/:id`, the same load-bearing reason
+`/flights/combine` already sits there — Express matches literals in
+registration order, so a later-registered literal would otherwise be
+shadowed by the earlier `:id` parameter route.
 
 ## Trips — `src/routes/trips.ts`
 
@@ -194,6 +206,58 @@ session-gated, not behind `requireAuth`). This is the path the Windows agent
 coui://html_ui` (the in-sim MCDU browser) — no other route in the server sets
 CORS headers.
 
+## MCP server — `src/mcp/`
+
+A [Model Context Protocol](https://modelcontextprotocol.io/) endpoint for a
+remote MCP client (e.g. Claude Desktop/Code) to read and make a small set of
+edits to the logbook. Opt-in: mounted only when `MCP_TOKEN` is set (see
+[configuration.md](configuration.md)); unset, `GET /mcp` falls through to
+the SPA catch-all exactly like any other unknown path.
+
+| | |
+|---|---|
+| Path | `POST /mcp` — top-level, outside `/api` entirely |
+| Auth | `Authorization: Bearer <MCP_TOKEN>`, checked before the MCP transport sees the request. Missing/wrong → `401` with `WWW-Authenticate: Bearer realm="msfslogger-mcp"` |
+| Methods | `POST` only — `GET` and `DELETE` (and everything else) answer `405 Allow: POST` |
+| Transport | [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http), stateless — a fresh `McpServer`/transport per request, `enableJsonResponse: true` (plain `application/json`, no SSE stream for a normal call). The client must send `Accept: application/json, text/event-stream`, or the request is rejected |
+| Independent from `INGEST_TOKEN` | Own env var, own digest, own compare function, own allow-list, own gate (`src/auth/mcpToken.ts`, `src/auth/mcpScope.ts`) — no shared code with the ingest-token path. Revoking one has no effect on the other. `/mcp` is mounted above `express-session` and sets no CORS headers, so it never touches a session cookie and a browser cannot reach it cross-origin |
+
+Every tool call runs the same underlying `src/db/*.ts`/`FlightManager`
+functions the corresponding `/api` route uses — never an internal HTTP
+request back into this server — so a tool and its nearest route can't
+disagree about *data*, only about how much of it they return.
+
+### Tool inventory (18)
+
+Read tools return data only; write tools are the only four edits reachable
+through MCP at all — no delete, no combine, no PDF/export, no SayIntentions,
+no settings or credential write is reachable this way.
+
+| Tool | Kind | Purpose | Nearest `/api` route |
+|---|---|---|---|
+| `list_flights` | read | Paginated flight list, optionally by `trip_id` | `GET /api/flights` |
+| `get_flight` | read | Single flight, optional downsampled track (≤200 points) | `GET /api/flights/:id` |
+| `search_flights` | read | Free-text flight search | `GET /api/flights/search` |
+| `get_flight_stats` | read | Logbook aggregates, optional date range | `GET /api/flights/stats` |
+| `list_trips` | read | All trips | `GET /api/trips` |
+| `get_trip` | read | Single trip with its flights and planned legs | `GET /api/trips/:id` |
+| `get_journey` | read | Journey/atlas summary for a trip | `GET /api/trips/:id/journey` |
+| `list_planned_legs` | read | Planned legs, by trip or all, filterable by status | `GET /api/planned-legs` / `GET /api/trips/:id/planned-legs` |
+| `get_planned_leg` | read | Single planned leg with waypoints/alternates | `GET /api/planned-legs/:legId` |
+| `get_acars_thread` | read | ACARS thread for a flight or a planned leg (newest 100) | `GET /api/flights/:id/acars-messages` / the leg-scoped equivalent |
+| `get_weather` | read | Cached METAR/TAF for an ICAO — no route of its own; calls the same cache the ACARS weather-request route reads before it writes anything | — |
+| `list_canned_messages` | read | Canned ACARS downlink templates | `GET /api/acars/canned-messages` |
+| `get_status` | read | Live app/flight/ground-session state — its own flat projection, not `GET /api/status`'s body (that endpoint's serialization contract is frozen separately); omits the AI-traffic array entirely | `GET /api/status` |
+| `get_ground_session` | read | Currently open ground session, if any | `GET /api/ground-sessions/current` |
+| `update_flight_notes` | write | Set a flight's `notes` — cannot touch `aircraft` or any other field, by construction (the tool's input schema has no such key, and the handler never spreads its arguments into the update call) | `PATCH /api/flights/:id` |
+| `create_trip` | write | Create a trip | `POST /api/trips` |
+| `assign_flight_to_trip` | write | Assign a flight to a trip (and refresh its planned-leg link) | `POST /api/trips/:id/flights` |
+| `import_simbrief_leg` | write | Import a SimBrief OFP as a loose planned leg | `POST /api/planned-legs/simbrief` |
+
+Every tool's declared route is checked at server startup against a hardcoded
+allow-list (`MCP_SCOPED_ROUTES`) — a tool with no matching entry, or a
+mismatched read/write kind, fails startup rather than shipping silently.
+
 ## Errors
 
 Errors are JSON: `{"error": "<message>"}`, sometimes with a `code` field for
@@ -211,5 +275,7 @@ SimBrief settings, SayIntentions) exist so a non-browser client
 authenticated only by ingest token — the Windows agent, and the separate
 MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) — can read status,
 exchange ACARS messages, and drive the SayIntentions integration without a
-session login. See [architecture.md](architecture.md) for how these pieces
-fit together.
+session login. An MCP client (above) is a third kind of non-browser
+consumer, authenticated independently by its own bearer token rather than
+the ingest token. See [architecture.md](architecture.md) for how these
+pieces fit together.
