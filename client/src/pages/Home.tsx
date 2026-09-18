@@ -20,6 +20,7 @@ interface Props {
 }
 
 const RECENT_FLIGHTS_LIMIT = 5;
+const GROUND_SECTION_COLLAPSED_KEY = 'msfslogger.groundSectionCollapsed';
 
 /** What the ground card renders, normalised from either the live status poll or the fallback read below. */
 interface GroundCardView {
@@ -66,6 +67,15 @@ export function Home({ status }: Props) {
   const [manualLegTouched, setManualLegTouched] = useState(false);
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const [manualError, setManualError] = useState('');
+
+  // Collapsed by default only if the operator collapsed it in a previous
+  // visit — persisted so the choice survives reloads.
+  const [groundSectionCollapsed, setGroundSectionCollapsed] = useState(
+    () => localStorage.getItem(GROUND_SECTION_COLLAPSED_KEY) === 'true',
+  );
+  useEffect(() => {
+    localStorage.setItem(GROUND_SECTION_COLLAPSED_KEY, String(groundSectionCollapsed));
+  }, [groundSectionCollapsed]);
 
   const loadFlights = useCallback(async () => {
     const [flightsResult, tripsResult, groundResult] = await Promise.allSettled([
@@ -201,85 +211,99 @@ export function Home({ status }: Props) {
 
       <main className="container">
         <div className="landing-section ground-session-section">
-          <div className="landing-section-title">Ground position</div>
-          {groundError && <p className="edit-error">{groundError}</p>}
-          {groundCard ? (
-            <div className="ground-session-card">
-              <span className={`badge ${groundCard.source === 'auto' ? 'badge-planned' : 'badge-skipped'}`}>
-                {groundCard.source === 'auto' ? 'Detected' : 'Manual entry'}
-              </span>
-              <span className="ground-session-airport">
-                {groundCard.airportIcao
-                  ? `${groundCard.airportIcao} — ${groundCard.airportName || 'Unknown airport'}`
-                  : 'Airport not resolved'}
-              </span>
-              <span className="ground-session-stand">{groundCard.parkingPosition || 'Stand not set'}</span>
-              {groundCard.plannedLegId != null && (
-                <Link to={`/planned-leg/${groundCard.plannedLegId}/acars`}>
-                  {groundCard.departureIdent && groundCard.destinationIdent
-                    ? `${groundCard.departureIdent} → ${groundCard.destinationIdent}`
-                    : `Planned leg #${groundCard.plannedLegId}`}
-                </Link>
+          <div className="landing-section-title ground-section-header">
+            <span>Ground position</span>
+            <button
+              type="button"
+              className="ground-section-toggle"
+              aria-expanded={!groundSectionCollapsed}
+              onClick={() => setGroundSectionCollapsed(v => !v)}
+            >
+              {groundSectionCollapsed ? 'Show' : 'Hide'}
+            </button>
+          </div>
+          {!groundSectionCollapsed && (
+            <>
+              {groundError && <p className="edit-error">{groundError}</p>}
+              {groundCard ? (
+                <div className="ground-session-card">
+                  <span className={`badge ${groundCard.source === 'auto' ? 'badge-planned' : 'badge-skipped'}`}>
+                    {groundCard.source === 'auto' ? 'Detected' : 'Manual entry'}
+                  </span>
+                  <span className="ground-session-airport">
+                    {groundCard.airportIcao
+                      ? `${groundCard.airportIcao} — ${groundCard.airportName || 'Unknown airport'}`
+                      : 'Airport not resolved'}
+                  </span>
+                  <span className="ground-session-stand">{groundCard.parkingPosition || 'Stand not set'}</span>
+                  {groundCard.plannedLegId != null && (
+                    <Link to={`/planned-leg/${groundCard.plannedLegId}/acars`}>
+                      {groundCard.departureIdent && groundCard.destinationIdent
+                        ? `${groundCard.departureIdent} → ${groundCard.destinationIdent}`
+                        : `Planned leg #${groundCard.plannedLegId}`}
+                    </Link>
+                  )}
+                  <span className="ground-session-started">Since {formatDate(groundCard.startedAt)}</span>
+                </div>
+              ) : (
+                <p className="flight-plan-status">Not on the ground.</p>
               )}
-              <span className="ground-session-started">Since {formatDate(groundCard.startedAt)}</span>
-            </div>
-          ) : (
-            <p className="flight-plan-status">Not on the ground.</p>
-          )}
 
-          <form className="ground-manual-form edit-form" onSubmit={handleManualEntry}>
-            <div className="section-title">Manual entry (fallback)</div>
-            <p className="flight-plan-status">
-              msfslogger detects your airport and stand automatically. Use this only when detection could not resolve your position.
-            </p>
-            <div className="edit-field">
-              <label htmlFor="ground-manual-icao">ICAO</label>
-              <input
-                id="ground-manual-icao"
-                type="text"
-                maxLength={4}
-                placeholder="ICAO"
-                value={manualIcao}
-                disabled={manualSubmitting}
-                onChange={e => setManualIcao(e.target.value)}
-              />
-            </div>
-            <div className="edit-field">
-              <label htmlFor="ground-manual-stand">Ramp / gate</label>
-              <input
-                id="ground-manual-stand"
-                type="text"
-                maxLength={120}
-                placeholder="Stand, gate or ramp"
-                value={manualStand}
-                disabled={manualSubmitting}
-                onChange={e => { setManualStand(e.target.value); setManualStandTouched(true); }}
-              />
-            </div>
-            <div className="edit-field">
-              <label htmlFor="ground-manual-leg">Planned leg</label>
-              <select
-                id="ground-manual-leg"
-                value={manualLegId}
-                disabled={manualSubmitting}
-                onChange={e => { setManualLegId(e.target.value === '' ? '' : Number(e.target.value)); setManualLegTouched(true); }}
-              >
-                <option value="">None</option>
-                {plannedLegOptions?.map(leg => (
-                  <option key={leg.id} value={leg.id}>
-                    {leg.trip_name ?? 'No trip'} · {leg.departure_ident} → {leg.destination_ident}
-                  </option>
-                ))}
-              </select>
-              {plannedLegOptionsError && <span className="edit-error">{plannedLegOptionsError}</span>}
-            </div>
-            <div className="edit-actions">
-              <button type="submit" className="btn btn-primary" disabled={manualSubmitting || !manualIcao.trim()}>
-                {manualSubmitting ? 'Setting…' : 'Set ground position'}
-              </button>
-              {manualError && <span className="edit-error">{manualError}</span>}
-            </div>
-          </form>
+              <form className="ground-manual-form edit-form" onSubmit={handleManualEntry}>
+                <div className="section-title">Manual entry (fallback)</div>
+                <p className="flight-plan-status">
+                  msfslogger detects your airport and stand automatically. Use this only when detection could not resolve your position.
+                </p>
+                <div className="edit-field">
+                  <label htmlFor="ground-manual-icao">ICAO</label>
+                  <input
+                    id="ground-manual-icao"
+                    type="text"
+                    maxLength={4}
+                    placeholder="ICAO"
+                    value={manualIcao}
+                    disabled={manualSubmitting}
+                    onChange={e => setManualIcao(e.target.value)}
+                  />
+                </div>
+                <div className="edit-field">
+                  <label htmlFor="ground-manual-stand">Ramp / gate</label>
+                  <input
+                    id="ground-manual-stand"
+                    type="text"
+                    maxLength={120}
+                    placeholder="Stand, gate or ramp"
+                    value={manualStand}
+                    disabled={manualSubmitting}
+                    onChange={e => { setManualStand(e.target.value); setManualStandTouched(true); }}
+                  />
+                </div>
+                <div className="edit-field">
+                  <label htmlFor="ground-manual-leg">Planned leg</label>
+                  <select
+                    id="ground-manual-leg"
+                    value={manualLegId}
+                    disabled={manualSubmitting}
+                    onChange={e => { setManualLegId(e.target.value === '' ? '' : Number(e.target.value)); setManualLegTouched(true); }}
+                  >
+                    <option value="">None</option>
+                    {plannedLegOptions?.map(leg => (
+                      <option key={leg.id} value={leg.id}>
+                        {leg.trip_name ?? 'No trip'} · {leg.departure_ident} → {leg.destination_ident}
+                      </option>
+                    ))}
+                  </select>
+                  {plannedLegOptionsError && <span className="edit-error">{plannedLegOptionsError}</span>}
+                </div>
+                <div className="edit-actions">
+                  <button type="submit" className="btn btn-primary" disabled={manualSubmitting || !manualIcao.trim()}>
+                    {manualSubmitting ? 'Setting…' : 'Set ground position'}
+                  </button>
+                  {manualError && <span className="edit-error">{manualError}</span>}
+                </div>
+              </form>
+            </>
+          )}
         </div>
 
         <div className="flights-header"><h2>Flight Log</h2></div>
