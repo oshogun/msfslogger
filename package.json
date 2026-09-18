@@ -32,7 +32,7 @@
     "fast-xml-parser": "^5.11.1",
     "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
-    "puppeteer": "^24.43.1",
+    "puppeteer": "^25.11.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -48,6 +48,6 @@
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,
-    "puppeteer@24.43.1": true
+    "puppeteer@25.11.0": true
   }
 }
