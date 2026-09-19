@@ -24,10 +24,19 @@ export type SessionResponse =
   | { authenticated: false; user: null };
 
 export interface FlightPoint {
+  id: number;
+  flight_id: number;
+  /** ISO 8601 UTC instant. */
+  ts: string;
   lat: number;
   lon: number;
   altitude_ft: number;
-  timestamp: string;
+  airspeed_kts: number;
+  ground_speed_kts: number;
+  heading_deg: number;
+  vertical_speed_fpm: number;
+  /** 0 | 1. SQLite has no boolean. */
+  on_ground: number;
 }
 
 export interface Flight {

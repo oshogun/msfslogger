@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { FlightMap } from '../components/FlightMap';
 import { AltitudeChart } from '../components/AltitudeChart';
+import { ReplayPanel } from '../components/ReplayPanel';
 import { StatsGrid } from '../components/StatsGrid';
 import { plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
 import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
@@ -41,6 +42,7 @@ export function FlightDetail() {
   const [flight, setFlight] = useState<Flight | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
   const [editAircraft, setEditAircraft] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [saveError, setSaveError] = useState('');
@@ -436,6 +438,21 @@ export function FlightDetail() {
           <FlightMap points={flight.points || []} plannedLeg={plannedLeg ?? undefined} />
         </div>
       </div>
+
+      {(flight.points?.length ?? 0) >= 2 && (
+        <div className="replay-section">
+          <div className="section-title">Replay</div>
+          <button
+            className="btn btn-ghost"
+            aria-expanded={replayOpen}
+            aria-controls="replay-panel"
+            onClick={() => setReplayOpen(o => !o)}
+          >
+            {replayOpen ? 'Hide replay' : 'Replay flight'}
+          </button>
+          {replayOpen && <ReplayPanel id="replay-panel" points={flight.points!} />}
+        </div>
+      )}
 
       {(flight.points?.length ?? 0) >= 2 && (
         <div className="chart-section">
