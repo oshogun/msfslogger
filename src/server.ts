@@ -18,6 +18,8 @@ import {
   MAX_FLIGHT_PLAN_BYTES, MAX_LNMPLN_BYTES, MAX_LNMPLN_FILES, SNAPSHOT_MAX_BYTES,
 } from './routes/uploads';
 import { createNavdataSyncRouter } from './routes/navdataSync';
+import { createNavdataRouter } from './routes/navdata';
+import { createRouteGeometryRouter } from './routes/navdataRouteGeometry';
 import { createFlightsRouter } from './routes/flights';
 import { createTripsRouter } from './routes/trips';
 import { createSettingsRouter } from './routes/settings';
@@ -183,6 +185,15 @@ export function createServer(flightManager: FlightManager): express.Express {
   // before the SPA catch-all below, or the catch-all swallows it.
 
   app.use('/api', createPlannedLegsRouter(flightManager));
+
+  // ── Navdata queries and route geometry ─────────────────────────────────────
+  // Behind the session gate: the ingest token is never accepted here. The
+  // status route shares the sidecar state store the sync router writes to.
+  // /planned-legs/:legId/route-geometry has three segments, so none of the
+  // planned-legs handlers above can capture it.
+
+  app.use('/api', createNavdataRouter(sidecarState));
+  app.use('/api', createRouteGeometryRouter());
 
   // ── PDF and KML export ────────────────────────────────────────────────────
   // Mounted before the SPA catch-all so these routes are not swallowed by it.

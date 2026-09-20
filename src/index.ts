@@ -3,6 +3,7 @@ import * as https from 'https';
 import * as fs from 'fs';
 import { loadConfig, ConfigError } from './config';
 import { initDb, closeDb, getAuthUser, sessionSweep } from './db';
+import { openNavdata, closeNavDb } from './navdata/connection';
 import { initAirports } from './airports';
 import { ensureFlightPlansDir } from './flightPlans';
 import { FlightManager } from './flightManager';
@@ -30,6 +31,14 @@ try {
 
 initDb();
 console.log('[DB] Database ready');
+
+// The navdata replica is optional and rebuildable from the sidecar: a missing
+// file leaves a null handle, and a failed open is logged, never fatal.
+try {
+  openNavdata();
+} catch (err) {
+  console.warn(`[Navdata] Could not open the replica: ${(err as Error).message}`);
+}
 
 // The server refuses to start with no operator account — there is no HTTP
 // setup flow.
@@ -93,11 +102,12 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     shuttingDown = true;
     console.log(`\n[Shutdown] ${signal} — closing database...`);
     server.close(() => {
+      closeNavDb();
       closeDb();
       console.log('[Shutdown] Clean.');
       process.exit(0);
     });
     // Don't hang forever on lingering keep-alive connections
-    setTimeout(() => { closeDb(); process.exit(0); }, 3000).unref();
+    setTimeout(() => { closeNavDb(); closeDb(); process.exit(0); }, 3000).unref();
   });
 }
