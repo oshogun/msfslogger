@@ -16,3 +16,6 @@ client/playwright-report/
 client/test-results/
 navdata.db*
 /navdata/
+
+# Run artifacts from the agentic workflow are not source code
+.claude/runs/
