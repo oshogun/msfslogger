@@ -1,5 +1,5 @@
 # Stage 1: Build React client
-FROM node:20-alpine AS client-builder
+FROM node:24-alpine AS client-builder
 WORKDIR /app/client
 COPY client/package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY client/ ./
 RUN npm run build
 
 # Stage 2: Build TypeScript server
-FROM node:20-alpine AS server-builder
+FROM node:24-alpine AS server-builder
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
@@ -18,7 +18,7 @@ COPY src/ ./src/
 RUN npm run build:server
 
 # Stage 3: Production image
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont font-noto
