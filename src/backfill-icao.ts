@@ -1,4 +1,5 @@
-import { initDb, getDb } from './db';
+import type Database from 'better-sqlite3';
+import { initDb } from './db';
 import { initAirports, findNearestAirport } from './airports';
 
 type FlightRow = {
@@ -11,16 +12,20 @@ type FlightRow = {
   arrival_icao: string | null;
 };
 
-export async function main(): Promise<void> {
-  await initAirports();
-  const db = initDb();
-
+/**
+ * Fills missing departure/arrival ICAO codes and names from the nearest
+ * airport. Takes an already-open handle (never opens or replaces the global
+ * one, so it is safe inside the running server) and assumes airports are
+ * loaded. With flightId, only that flight is considered.
+ */
+export function backfillIcao(db: Database.Database, flightId?: number): void {
   const flights = db.prepare(`
     SELECT id, departure_lat, departure_lon, departure_icao, arrival_lat, arrival_lon, arrival_icao
     FROM flights
-    WHERE (departure_lat IS NOT NULL AND (departure_icao IS NULL OR departure_name IS NULL))
-       OR (arrival_lat   IS NOT NULL AND (arrival_icao   IS NULL OR arrival_name   IS NULL))
-  `).all() as FlightRow[];
+    WHERE ((departure_lat IS NOT NULL AND (departure_icao IS NULL OR departure_name IS NULL))
+       OR (arrival_lat   IS NOT NULL AND (arrival_icao   IS NULL OR arrival_name   IS NULL)))
+      AND (? IS NULL OR id = ?)
+  `).all(flightId ?? null, flightId ?? null) as FlightRow[];
 
   if (flights.length === 0) {
     console.log('All flights already have ICAO codes — nothing to do.');
@@ -66,6 +71,11 @@ export async function main(): Promise<void> {
   }
 
   console.log(`Done. Departure identified: ${depFound}/${flights.length}, Arrival: ${arrFound}/${flights.length}`);
+}
+
+export async function main(): Promise<void> {
+  await initAirports();
+  backfillIcao(initDb());
 }
 
 if (require.main === module) {

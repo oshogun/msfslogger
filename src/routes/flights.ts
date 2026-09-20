@@ -4,6 +4,8 @@ import {
   setFlightPlanName, clearFlightPlanName, getFlightStats, searchFlights, countSearchFlights,
 } from '../db/flights';
 import type { FlightStatsFilter, FlightSearchResult } from '../db/flights';
+import { getDb } from '../db';
+import { backfillIcao } from '../backfill-icao';
 import { flightPlanPath, saveFlightPlanFile, deleteFlightPlanFile, isPdfBuffer } from '../flightPlans';
 import { upload } from './uploads';
 import type { FlightManager } from '../flightManager';
@@ -71,6 +73,11 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
       if (newId === null) {
         res.status(500).json({ error: 'Combine failed' });
         return;
+      }
+      try {
+        backfillIcao(getDb(), newId);
+      } catch (err) {
+        console.warn(`ICAO backfill for combined flight ${newId} failed:`, err);
       }
       res.status(201).json({ id: newId });
     } catch (err) {
