@@ -42,9 +42,35 @@ page.
 - **Prefiles** — every planned leg (trip-linked or loose), filterable by
   status/trip/search, with import actions.
 - **Flight detail** — map, altitude chart, stats, notes, attached flight-plan
-  PDF, planned-leg link, PDF/KML export, edit/delete.
+  PDF, planned-leg link, PDF/KML export, edit/delete, and a
+  [replay](#replaying-a-flight) of the recorded track.
 - **Trip detail** — combined map ("Atlas" view), paginated leg table,
   imports, active-trip toggle, flight↔leg linking, PDF/KML export.
+
+## Replaying a flight
+
+Any completed flight with at least two recorded points has a **Replay flight** button on
+its detail page (below the GPS track map; **Hide replay** closes it). It opens a
+separate map that plays the recorded track back with an aircraft marker, a
+scrubber and a live instrument readout. Replay is read-only and works from the
+track already loaded for the page — it adds no API endpoint and writes nothing.
+A flight still in progress has no Replay button; its live position is on Home.
+
+- **Controls** — Play/Pause (Restart once the end is reached), a speed select
+  (1×, 2×, 4×, 8×, 16×, 32×, 64×; default 16×), a scrubber, and a **Follow**
+  checkbox (on by default) that pans the map to keep the aircraft in view.
+- **Readout** — time (UTC), elapsed, altitude, IAS, ground speed, heading,
+  vertical speed, state (*Airborne*, *On ground* or *Recording gap*) and the
+  current point number.
+- **Recording gaps** — where the log has a gap of more than 30 seconds (the sim
+  was paused, or the agent disconnected), replay does not wait it out: the
+  marker holds still for 2 seconds of replay time and the state shows *Recording
+  gap* with the real duration.
+- **Keyboard** — with focus on the replay panel: Space plays/pauses, ←/→ seek
+  5 replay-seconds (30 with Shift), Home/End jump to the start/end. Keys are
+  ignored while a field, the speed select or the scrubber has focus.
+
+Replay is not part of the PDF or KML export.
 
 ## Combining flights
 

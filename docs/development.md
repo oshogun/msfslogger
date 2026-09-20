@@ -12,8 +12,8 @@ src/                  Express + TypeScript server
 client/               React + Vite web app
   src/pages/          One component per route, most with a *.test.tsx beside it
   src/components/     Shared UI, including all Leaflet map components
-  src/hooks/          useSession (auth), useStatus (live polling)
-  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts
+  src/hooks/          useSession (auth), useStatus (live polling), useReplayClock (replay animation loop)
+  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts, replay.ts (replay engine)
   e2e/                Playwright end-to-end specs, run against a scratch instance
 agent/                Standalone Node.js SimConnect agent (runs on Windows, separate from the server's own package.json)
 tests/                Vitest suite — mirrors src/ for unit tests, tests/db/ for the db/ modules
@@ -112,10 +112,11 @@ does start a live server, deliberately isolated from the developer's own:
 - `npm run test:e2e` (from `client/`) runs Playwright against that instance;
   `npm run test:e2e:ui` opens Playwright's interactive UI mode for the same
   suite.
-- Covers the journeys named in `user_stories/frontend_testing.md`:
+- Covers the journeys named in `specs/frontend_testing.md`:
   authentication, core data-visualization/interaction, and error/
   loading-state handling (`client/e2e/specs/auth.spec.ts`,
-  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`).
+  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`), plus the
+  flight replay panel (`flight-replay.spec.ts`).
 
 ## CI
 

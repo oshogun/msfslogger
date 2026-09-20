@@ -81,6 +81,26 @@ the render target for server-side PDF export, and two standalone easter-egg
 pages (`Device`, `Override`). See [usage.md](usage.md) for what each page is
 for.
 
+**Flight replay** is entirely client-side. `FlightDetail` renders a
+`ReplayPanel` (its own Leaflet map, separate from `FlightMap`, which the print
+routes share and which replay does not touch) from the full track that
+`GET /api/flights/:id` already returns. Three pieces, each independently
+testable:
+
+- `client/src/utils/replay.ts` — a pure engine (no React or Leaflet):
+  `buildTimeline` turns the points into a timeline (recording gaps longer than
+  `GAP_THRESHOLD_SEC` = 30 s are collapsed to `COLLAPSED_GAP_SEC` = 2 s of
+  virtual time) and `sample` returns the interpolated position, heading (shortest
+  arc), altitude and speeds at a virtual time. Longitude is interpolated after
+  `unwrapLonChain`, so a track crossing the antimeridian stays continuous.
+- `client/src/hooks/useReplayClock.ts` — one `requestAnimationFrame` loop holding
+  virtual time in a ref (per-frame advance clamped to 0.25 s), with an injectable
+  scheduler for tests.
+- `client/src/components/ReplayPanel.tsx` — moves the aircraft marker directly
+  with `setLatLng` rather than through React state, and writes the readout and
+  scrubber at no more than 10 Hz, so the map does not re-render per frame. It
+  uses Leaflet's SVG renderer (`preferCanvas={false}`) rather than canvas.
+
 ### `agent/` — Windows SimConnect agent
 
 A small standalone Node.js script that runs on the Windows PC with MSFS. It
