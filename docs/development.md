@@ -12,8 +12,8 @@ src/                  Express + TypeScript server
 client/               React + Vite web app
   src/pages/          One component per route, most with a *.test.tsx beside it
   src/components/     Shared UI, including all Leaflet map components
-  src/hooks/          useSession (auth), useStatus (live polling)
-  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts
+  src/hooks/          useSession (auth), useStatus (live polling), useReplayClock (replay animation loop)
+  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts, replay.ts (replay engine)
   e2e/                Playwright end-to-end specs, run against a scratch instance
 agent/                Standalone Node.js SimConnect agent (runs on Windows, separate from the server's own package.json)
 tests/                Vitest suite — mirrors src/ for unit tests, tests/db/ for the db/ modules
