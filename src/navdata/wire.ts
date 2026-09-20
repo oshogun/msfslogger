@@ -1,6 +1,6 @@
 // Wire types shared with the MCDU sidecar. snake_case on sync rows.
 
-export const NAVDATA_SCHEMA_VERSION = 1;
+export const NAVDATA_SCHEMA_VERSION = 2;
 export const NAVDATA_WIRE_VERSION = 1;
 
 export type SnapshotId = string;
@@ -29,7 +29,7 @@ export interface NavRow {
 }
 
 export interface SnapshotHeaderLine {
-  kind: 'header'; v: 1; schemaVersion: 1;
+  kind: 'header'; v: 1; schemaVersion: 2;
   snapshotId: SnapshotId; rev: Rev;
   simId: '2020' | '2024' | 'fsx';
   simAppName: string | null; simAppVersion: string | null;
@@ -44,7 +44,7 @@ export interface SnapshotAck {
   counts: Partial<Record<NavRowType, number>>; appliedAt: number;
 }
 export interface IncrementalBatch {
-  v: 1; schemaVersion: 1; snapshotId: SnapshotId;
+  v: 1; schemaVersion: 2; snapshotId: SnapshotId;
   fromRev: Rev; toRev: Rev; rows: NavRow[]; more: boolean;
 }
 export interface IncrementalAck { ok: true; snapshotId: SnapshotId; rev: Rev; applied: number; }

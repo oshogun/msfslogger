@@ -52,7 +52,7 @@ function writeReplica(file: string, rows: NavRow[], snapshotId: string): void {
   applyNavdataSchema(db);
   db.prepare(
     'INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at)' +
-      " VALUES (1, 1, ?, '2024', 1, 1) ON CONFLICT (id) DO UPDATE SET snapshot_id = excluded.snapshot_id",
+      " VALUES (1, 2, ?, '2024', 1, 1) ON CONFLICT (id) DO UPDATE SET snapshot_id = excluded.snapshot_id",
   ).run(snapshotId);
   if (rows.length > 0) applyNavRows(db, rows);
   db.close();

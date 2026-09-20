@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { NavdataOverlay } from './NavdataControls';
 import type { Status, TrafficObject } from '../types';
 
 // The ✈ glyph itself points east (90°), not north, so headings must be
@@ -123,9 +124,11 @@ function LiveMapController({ status }: { status: Status }) {
 
 interface Props {
   status: Status;
+  /** Adds the navdata toggles and layers. Off by default. */
+  navdata?: boolean;
 }
 
-export function LiveMap({ status }: Props) {
+export function LiveMap({ status, navdata = false }: Props) {
   const frame = status.frame;
   if (!frame) return null;
 
@@ -143,6 +146,7 @@ export function LiveMap({ status }: Props) {
           maxZoom={18}
         />
         <LiveMapController status={status} />
+        {navdata && <NavdataOverlay />}
       </MapContainer>
     </div>
   );

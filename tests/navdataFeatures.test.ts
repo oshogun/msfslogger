@@ -40,7 +40,7 @@ function buildReplica(fill: (db: Database.Database) => void, bulkDone = true): v
   db.pragma('foreign_keys = ON');
   applyNavdataSchema(db);
   insert(db, 'nav_meta', {
-    id: 1, schema_version: 1, snapshot_id: 'epoch-1', rev: 7, sim_id: '2024',
+    id: 1, schema_version: 2, snapshot_id: 'epoch-1', rev: 7, sim_id: '2024',
     bulk_completed_at: bulkDone ? 5 : null, created_at: 1, updated_at: 2,
   });
   fill(db);
@@ -122,16 +122,23 @@ describe('GET /features', () => {
     expect(body.bbox).toEqual([178, 5, -178, 15]);
   });
 
-  it('matches a dateline airway row on latitude alone', async () => {
+  it('matches a dateline airway row only where its wrapped longitude interval reaches the box', async () => {
     buildReplica(db => {
-      // min/max_lon are meaningless on a dateline row: here they say 0..10.
-      insert(db, 'nav_airway_leg', leg('a|x|y', 40, 50, 0, 10, 1));
+      // Crosses the antimeridian from 170E to 170W; min/max_lon are meaningless.
+      insert(db, 'nav_airway_leg', leg('a|x|y', 40, 50, 170, -170, 1));
       insert(db, 'nav_airway_leg', leg('a|x|z', 40, 50, 0, 10, 0));
       insert(db, 'nav_airway_leg', leg('a|x|w', 60, 70, 170, 175, 0));
     });
+    const hit = async (bbox: string) =>
+      (await features(`bbox=${bbox}&zoom=7&kinds=airways`)).airways.filter((a: any) => a.dateline).length;
+    expect(await hit('179,41,180,49')).toBe(1);
+    expect(await hit('-180,41,-179,49')).toBe(1);
+    expect(await hit('175,41,-175,49')).toBe(1);
+    expect(await hit('110,41,120,49')).toBe(0);
+    expect(await hit('-120,41,-110,49')).toBe(0);
+    expect(await hit('179,60,180,70')).toBe(0);
     const body = await features('bbox=179,41,180,49&zoom=7&kinds=airways');
-    expect(body.airways).toHaveLength(1);
-    expect(body.airways[0]).toMatchObject({ dateline: true, from: [40, 0], to: [50, 10] });
+    expect(body.airways[0]).toMatchObject({ dateline: true, from: [40, 170], to: [50, -170] });
   });
 
   it('reports coverage: nothing harvested vs fully harvested', async () => {
@@ -242,7 +249,7 @@ describe('GET /status', () => {
     });
     let body = (await (await get('/api/navdata/status')).json()) as any;
     expect(body).toMatchObject({
-      present: true, schemaVersion: 1, snapshotId: 'epoch-1', rev: 7, simId: '2024', sidecar: null, lastRowsAt: null,
+      present: true, schemaVersion: 2, snapshotId: 'epoch-1', rev: 7, simId: '2024', sidecar: null, lastRowsAt: null,
       counts: { airports: 2, airportsWithDetail: 1, navaids: 0, absent: 0 },
     });
     state.markRowsApplied(1234);

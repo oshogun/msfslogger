@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from
 import L from 'leaflet';
 import type { JourneyLeg, JourneyAirport } from '../types';
 import { unwrapLonChains } from '../utils/geo';
+import { NavdataOverlay } from './NavdataControls';
 
 /**
  * Legs are tinted along a hue ramp from the first flight to the most recent, so
@@ -70,9 +71,11 @@ interface Props {
   airports: JourneyAirport[];
   highlightId: number | null;
   onHighlight: (id: number | null) => void;
+  /** Adds the navdata toggles and layers. Off by default. */
+  navdata?: boolean;
 }
 
-export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) {
+export function JourneyMap({ legs, airports, highlightId, onHighlight, navdata = false }: Props) {
   if (legs.length === 0) {
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No flights recorded yet.</p>;
   }
@@ -128,6 +131,7 @@ export function JourneyMap({ legs, airports, highlightId, onHighlight }: Props) 
         </CircleMarker>
       ))}
 
+      {navdata && <NavdataOverlay />}
       <FitAll legs={legs} />
     </MapContainer>
   );

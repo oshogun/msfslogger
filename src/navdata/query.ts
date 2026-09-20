@@ -216,17 +216,21 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
     }),
   );
 
-  // A dateline row's min_lon/max_lon mean nothing, so it matches on latitude alone.
+  // A dateline row's min_lon/max_lon mean nothing. Such a leg crosses the
+  // antimeridian, so it covers [max(from,to), 180] and [-180, min(from,to)];
+  // it matches a longitude range only when that range reaches either part.
   const airways = fetch(
     'airways',
     () => {
       const overlap = ranges.map(() => '(max_lon >= ? AND min_lon <= ?)').join(' OR ');
+      const wrapped = ranges.map(() => '(? >= MAX(from_lon, to_lon) OR ? <= MIN(from_lon, to_lon))').join(' OR ');
       return nav!.prepare(
         `SELECT airway, from_lat, from_lon, to_lat, to_lon, from_ident, to_ident, dateline
            FROM nav_airway_leg
-          WHERE max_lat >= ? AND min_lat <= ? AND (dateline = 1 OR ${overlap})
+          WHERE max_lat >= ? AND min_lat <= ?
+            AND ((dateline = 0 AND (${overlap})) OR (dateline = 1 AND (${wrapped})))
           ORDER BY leg_key ASC LIMIT ?`,
-      ).all(s, n, ...ranges.flat(), limit + 1) as Record<string, any>[];
+      ).all(s, n, ...ranges.flat(), ...ranges.map(([w, e]) => [e, w]).flat(), limit + 1) as Record<string, any>[];
     },
     (r): FeatureAirwayLeg => ({
       airway: r.airway, from: [r.from_lat, r.from_lon], to: [r.to_lat, r.to_lon],

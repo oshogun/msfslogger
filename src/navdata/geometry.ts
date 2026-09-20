@@ -3,9 +3,9 @@
 
 export type HeadingReference = 'unknown' | 'true' | 'magnetic';
 
-// PROVISIONAL: SimConnect does not document whether a runway heading is true
-// or magnetic, and the value has not been measured yet. Flip this one
-// constant (and the sign in runwayTrueBearing if 'magnetic') once it is.
+// Measured against live runways: the stored heading is a true bearing, and
+// it describes the primary end. The constant stays so a test can flip it
+// (and the sign in runwayTrueBearing if 'magnetic').
 export const RUNWAY_HEADING_REFERENCE: HeadingReference = 'true';
 
 const EARTH_RADIUS_M = 6371008.8;
@@ -56,8 +56,14 @@ export function runwayTrueBearing(
 
 /**
  * Landing threshold of the runway end the plan names. The stored position is
- * the runway centre, so the threshold is half the length back along the axis.
- * `bearingEnd` is the direction of landing/take-off on that end.
+ * the runway centre, so the pavement end is half the length along the axis,
+ * and the landing threshold is that point moved inboard by the end's
+ * displaced-threshold length (null or 0 means none). `primaryBearing` is the
+ * primary end's landing direction; the secondary end uses it plus 180.
+ * `bearingEnd` is the direction of landing/take-off on the named end.
+ *
+ * PROVISIONAL: which stored displacement belongs to which end (primary_* to
+ * the primary end) rests on a single non-zero real-world sample.
  */
 export function runwayThreshold(
   centreLat: number,
@@ -65,13 +71,13 @@ export function runwayThreshold(
   primaryBearing: number,
   lengthM: number,
   end: 'primary' | 'secondary',
+  displacedM: number | null = null,
 ): { lat: number; lon: number; bearingEnd: number } {
-  if (end === 'primary') {
-    const t = dest(centreLat, centreLon, primaryBearing + 180, lengthM / 2);
-    return { ...t, bearingEnd: norm360(primaryBearing) };
-  }
-  const t = dest(centreLat, centreLon, primaryBearing, lengthM / 2);
-  return { ...t, bearingEnd: norm360(primaryBearing + 180) };
+  const inboard = typeof displacedM === 'number' && Number.isFinite(displacedM) && displacedM > 0 ? displacedM : 0;
+  const bearingEnd = norm360(end === 'primary' ? primaryBearing : primaryBearing + 180);
+  const pavementEnd = dest(centreLat, centreLon, bearingEnd + 180, lengthM / 2);
+  const t = inboard === 0 ? pavementEnd : dest(pavementEnd.lat, pavementEnd.lon, bearingEnd, inboard);
+  return { ...t, bearingEnd };
 }
 
 // PROVISIONAL: the sign convention of a custom approach's lateral offset is

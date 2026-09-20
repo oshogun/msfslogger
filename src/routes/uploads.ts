@@ -48,13 +48,25 @@ export const uploadLnmpln = multer({
 // Disk storage, unlike the two above: a snapshot is far larger than a PDF, is
 // consumed as a stream, and holding 64 MiB per request in memory is not a cost
 // this server should pay. The route deletes the temp file when it is done.
-// Created once per process with owner-only permissions, so the upload location
-// is neither predictable nor readable by other local users.
-export const snapshotUploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msfslogger-navdata-'));
-fs.chmodSync(snapshotUploadDir, 0o700);
+// The directory is created on the first upload, not at import, with
+// owner-only permissions, so the upload location is neither predictable nor
+// readable by other local users and a process that never receives a snapshot
+// leaves nothing behind.
+let snapshotDir: string | null = null;
+export function snapshotUploadDir(): string | null {
+  return snapshotDir;
+}
+function ensureSnapshotUploadDir(): string {
+  if (!snapshotDir) {
+    snapshotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msfslogger-navdata-'));
+    fs.chmodSync(snapshotDir, 0o700);
+  }
+  return snapshotDir;
+}
 process.on('exit', () => {
+  if (!snapshotDir) return;
   try {
-    fs.rmdirSync(snapshotUploadDir);
+    fs.rmdirSync(snapshotDir);
   } catch {
     // Non-empty or already gone: nothing worth failing an exit over.
   }
@@ -62,7 +74,13 @@ process.on('exit', () => {
 export const SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
 export const uploadNavdataSnapshot = multer({
   storage: multer.diskStorage({
-    destination: snapshotUploadDir,
+    destination: (_req, _file, cb) => {
+      try {
+        cb(null, ensureSnapshotUploadDir());
+      } catch (err) {
+        cb(err as Error, '');
+      }
+    },
   }),
   limits: { fileSize: SNAPSHOT_MAX_BYTES, files: 1, fields: 0, parts: 1 },
 });

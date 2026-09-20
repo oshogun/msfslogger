@@ -8,10 +8,19 @@ import type Database from 'better-sqlite3';
 
 export const NAVDATA_DDL = `-- msfslogger navdata schema — paste of the MCDU repo's authoritative copy.
 -- Comments condensed by the server session; DDL is as received (parts 1-3).
--- Peer canonical file SHA-256 (of THEIR file, not this condensed copy): dcff188b9b394720fbb2f6b0667e099fbccf6ef3ebe8efbdeea5344e3df43e40
+-- Peer canonical file SHA-256 (of THEIR file, not this condensed copy): 3edefee0f1a0288070df14503d6a7f73de55f6816a078e3c986d876252474abe
 -- Units: metres, degrees, whole hertz, epoch ms. lon in [-180,180].
 -- Local-only data (Navigraph-derived): never committed, never in an image, never a fixture.
--- NAVDATA_SCHEMA_VERSION = 1. Requires SQLite >= 3.37 (STRICT).
+-- NAVDATA_SCHEMA_VERSION = 2. Requires SQLite >= 3.37 (STRICT).
+--
+-- A PEER WHOSE VERSION DIFFERS IS REFUSED, NOT RECONCILED. A v2 sender against
+-- a v1 replica, or the reverse, is answered NAVDATA_SCHEMA_UNSUPPORTED and the
+-- exchange stops; neither side may guess at a missing or surplus column. A LOCAL
+-- file of the wrong version is a different matter: it is a rebuildable cache, so
+-- it is renamed aside and recreated rather than refused forever.
+--
+-- v2 (2026-09-20): nav_runway gains primary_threshold_m / secondary_threshold_m.
+-- v1: initial.
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -205,6 +214,19 @@ CREATE TABLE IF NOT EXISTS nav_runway (
   heading_deg             REAL,
   length_m                REAL,
   width_m                 REAL,
+  -- Displaced threshold, in metres from the pavement end, per end. NULL and 0
+  -- both mean not displaced. MEASURED: non-zero in the wild (PANC 15/33 is
+  -- 62.77 and 206.35), and length_m INCLUDES the displaced portions -- PANC
+  -- 15/33 reports 3464.5 m with 3195.4 m usable. An instrument final is
+  -- referenced to the LANDING threshold, so a final projected from the pavement
+  -- end starts ~200 m off on such a runway. Derivation:
+  --   pavement end      = lat/lon (the CENTRE) +/- length_m/2 along the bearing
+  --   landing threshold = that point moved INBOARD by the matching value here
+  -- primary_* pairs with the primary end, i.e. the heading_deg direction.
+  -- PROVISIONAL: that pairing is confirmed by arithmetic on ONE runway
+  -- (PANC 15/33, the only non-zero sample) plus the member naming.
+  primary_threshold_m     REAL,
+  secondary_threshold_m   REAL,
   pattern_altitude_m      REAL,
   slope_deg               REAL,
   true_slope_deg          REAL,

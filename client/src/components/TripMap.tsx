@@ -2,6 +2,7 @@ import { useEffect, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
+import { NavdataOverlay } from './NavdataControls';
 import type { Flight, PlannedLegWithChildren } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChains } from '../utils/geo';
@@ -91,9 +92,11 @@ interface Props {
   preferCanvas?: boolean;
   /** Print pages hide the zoom buttons — they are meaningless on paper. */
   zoomControl?: boolean;
+  /** Adds the navdata toggles and layers. Off by default; the print pages leave it off. */
+  navdata?: boolean;
 }
 
-export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = true, zoomControl = true }: Props) {
+export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = true, zoomControl = true, navdata = false }: Props) {
   const hasPoints = flights.some(f => f.points && f.points.length > 0);
   const hasPlannedWaypoints = plannedLegs.some(l => l.waypoints && l.waypoints.length > 0);
   if (!hasPoints && !hasPlannedWaypoints) {
@@ -178,6 +181,7 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         );
       })}
       <BoundsController flights={flights} plannedLegs={plannedLegs} />
+      {navdata && <NavdataOverlay />}
       <MapReadySignal onReady={onReady} />
     </MapContainer>
   );

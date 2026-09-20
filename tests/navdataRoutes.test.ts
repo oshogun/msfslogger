@@ -27,7 +27,7 @@ let state: SidecarStateStore;
 
 function header(snapshotId: string, extra: Record<string, unknown> = {}) {
   return {
-    kind: 'header', v: 1, schemaVersion: 1, snapshotId, rev: 5, simId: '2024',
+    kind: 'header', v: 1, schemaVersion: 2, snapshotId, rev: 5, simId: '2024',
     simAppName: 'Test Sim', simAppVersion: '1.0', sidecarVersion: '0.0.1-test',
     createdAt: 1_700_000_000_000, counts: {}, ...extra,
   };
@@ -65,8 +65,10 @@ const postJson = (p: string, body: unknown, token: string | null = TOKEN) =>
 const airports = (): string[] =>
   (getNavDb()!.prepare('SELECT ident FROM nav_airport ORDER BY ident').all() as { ident: string }[]).map(r => r.ident);
 
-const uploadTemps = (): string[] =>
-  fs.existsSync(snapshotUploadDir) ? fs.readdirSync(snapshotUploadDir) : [];
+const uploadTemps = (): string[] => {
+  const d = snapshotUploadDir();
+  return d && fs.existsSync(d) ? fs.readdirSync(d) : [];
+};
 
 beforeEach(async () => {
   scratch = createScratchDb();
@@ -133,7 +135,7 @@ describe('POST /snapshot', () => {
 
 describe('POST /rows', () => {
   const batch = (snapshotId: string, rows: unknown[], toRev = 6) =>
-    ({ v: 1, schemaVersion: 1, snapshotId, fromRev: 5, toRev, rows, more: false });
+    ({ v: 1, schemaVersion: 2, snapshotId, fromRev: 5, toRev, rows, more: false });
 
   it('answers 409 NAVDATA_SNAPSHOT_MISMATCH with no replica', async () => {
     const res = await postJson('/api/navdata/rows', batch('s1', []));
@@ -207,7 +209,7 @@ describe('GET /demand and POST /state', () => {
 describe('batches during a snapshot import', () => {
   it('are refused for the whole import, and accepted once the swap has landed', async () => {
     await postSnapshot(snapshotFile('s1'));
-    const batch = { v: 1, schemaVersion: 1, snapshotId: 's1', fromRev: 5, toRev: 6, rows: [], more: false };
+    const batch = { v: 1, schemaVersion: 2, snapshotId: 's1', fromRev: 5, toRev: 6, rows: [], more: false };
 
     // Hold a snapshot upload open by sending only part of the multipart body.
     const boundary = 'testboundary';

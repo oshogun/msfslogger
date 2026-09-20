@@ -23,7 +23,7 @@ function build(file: string, snapshotId: string): void {
   db.pragma('journal_mode = WAL');
   applyNavdataSchema(db);
   db.prepare(
-    "INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at) VALUES (1, 1, ?, '2024', 1, 1)",
+    "INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at) VALUES (1, 2, ?, '2024', 1, 1)",
   ).run(snapshotId);
   db.close();
 }
@@ -134,7 +134,7 @@ describe('navdata connection', () => {
     scratch();
     build(resolveNavdataPath(), 'epoch-1');
     const db = new Database(resolveNavdataPath());
-    db.exec('UPDATE nav_meta SET schema_version = 99');
+    db.exec('UPDATE nav_meta SET schema_version = 1');
     db.close();
     openNavdata();
     expect(getNavDb()).toBeNull();

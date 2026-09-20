@@ -25,12 +25,14 @@ function airport(db: Database.Database, ident: string, detail = 'detail', magvar
 function runway(
   db: Database.Database, ap: string, lat: number, lon: number, heading: number, lengthM: number,
   primary: [number, number], secondary: [number, number],
+  thresholds: [number | null, number | null] = [null, null],
 ): void {
   db.prepare(
     `INSERT INTO nav_runway (rwy_key, airport_ident, lat, lon, heading_deg, length_m,
-       primary_number, primary_designator, secondary_number, secondary_designator, rev)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-  ).run(`${ap}|${primary[0]}|${primary[1]}`, ap, lat, lon, heading, lengthM, ...primary, ...secondary);
+       primary_number, primary_designator, secondary_number, secondary_designator,
+       primary_threshold_m, secondary_threshold_m, rev)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+  ).run(`${ap}|${primary[0]}|${primary[1]}`, ap, lat, lon, heading, lengthM, ...primary, ...secondary, ...thresholds);
 }
 
 interface L {
@@ -462,6 +464,40 @@ describe('synthetic custom procedures', () => {
     expect(off.approach).toEqual(base.approach);
     expect(off.approach.synthetic).toBe(true);
     expect(off.unresolved).toEqual([]);
+  });
+
+  it('draws the reciprocal of the heading for a runway whose primary end is the higher number', () => {
+    const db = fresh();
+    airport(db, 'TSTB');
+    // 19/01 pair: the stored heading (180) belongs to the primary end, 19.
+    runway(db, 'TSTB', centre.lat, centre.lon, 180, 3000, [19, 0], [1, 0]);
+    const bearing = (rwy: string): number => {
+      const [start, thr] = buildRouteGeometry(approach(rwy), db).approach.points;
+      return bearingDeg(start.lat, start.lon, thr.lat, thr.lon);
+    };
+    expect(bearing('19')).toBeCloseTo(180, 0);
+    expect(bearing('01')).toBeCloseTo(0, 0);
+  });
+
+  it('moves the landing threshold inboard by the matching displaced length, per end', () => {
+    const plain = fresh();
+    airport(plain, 'TSTB');
+    runway(plain, 'TSTB', centre.lat, centre.lon, 100, 3000, [10, 0], [28, 0]);
+    const displaced = fresh();
+    airport(displaced, 'TSTB');
+    runway(displaced, 'TSTB', centre.lat, centre.lon, 100, 3000, [10, 0], [28, 0], [60, 200]);
+    for (const [rwy, metres] of [['10', 60], ['28', 200]] as const) {
+      const a = buildRouteGeometry(approach(rwy), plain).approach.points;
+      const b = buildRouteGeometry(approach(rwy), displaced).approach.points;
+      expect(nm(a[1], b[1]) * 1852).toBeCloseTo(metres, 0);
+      expect(nm(a[0], b[0]) * 1852).toBeCloseTo(metres, 0);
+      // inboard: closer to the runway centre than the pavement end
+      expect(nm(b[1], centre)).toBeLessThan(nm(a[1], centre));
+    }
+    const zero = fresh();
+    airport(zero, 'TSTB');
+    runway(zero, 'TSTB', centre.lat, centre.lon, 100, 3000, [10, 0], [28, 0], [0, 0]);
+    expect(buildRouteGeometry(approach('10'), zero).approach).toEqual(buildRouteGeometry(approach('10'), plain).approach);
   });
 
   it('follows an injected heading reference', () => {

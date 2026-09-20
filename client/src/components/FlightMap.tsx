@@ -2,6 +2,7 @@ import { useEffect, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
+import { NavdataOverlay } from './NavdataControls';
 import type { FlightPoint, PlannedLegWithChildren } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChain } from '../utils/geo';
@@ -78,9 +79,11 @@ interface Props {
   preferCanvas?: boolean;
   /** Print pages hide the zoom buttons — they are meaningless on paper. */
   zoomControl?: boolean;
+  /** Adds the navdata toggles and layers. Off by default; the print pages leave it off. */
+  navdata?: boolean;
 }
 
-export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zoomControl = true }: Props) {
+export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zoomControl = true, navdata = false }: Props) {
   const sortedWaypoints = plannedLeg ? plannedLeg.waypoints.slice().sort((a, b) => a.seq - b.seq) : [];
   if (points.length === 0 && sortedWaypoints.length === 0) {
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No GPS points recorded.</p>;
@@ -150,6 +153,7 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
         </>
       )}
       <BoundsController latlngs={latlngs} plannedLatlngs={plannedChain} />
+      {navdata && <NavdataOverlay />}
       <MapReadySignal onReady={onReady} />
     </MapContainer>
   );

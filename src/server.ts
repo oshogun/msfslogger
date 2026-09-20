@@ -37,7 +37,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // Middleware order is behaviour, and this order is frozen. Anything
   // registered after app.use('/api', requireAuth) below is gated by default,
   // including routes added later.
-  // A navdata batch is up to 4 MiB, well past the global limit. Path-scoped and
+  // A navdata batch is several MiB, well past the global limit. Path-scoped and
   // registered first so it parses that one path before the global parser sees
   // it (which then skips an already-parsed body); every other path keeps the
   // global limit.
@@ -239,7 +239,7 @@ export function createServer(flightManager: FlightManager): express.Express {
     }
     if (err && typeof err === 'object' && (err as { type?: string }).type === 'entity.too.large' &&
         req.path === '/api/navdata/rows') {
-      res.status(413).json({ ok: false, code: 'NAVDATA_TOO_LARGE', message: 'Batch exceeds 4 MiB' });
+      res.status(413).json({ ok: false, code: 'NAVDATA_TOO_LARGE', message: `Batch exceeds ${NAVDATA_BATCH_MAX_BYTES.replace(/mb$/i, ' MiB')}` });
       return;
     }
     if (err instanceof SyntaxError && 'body' in err &&

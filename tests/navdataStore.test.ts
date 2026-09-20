@@ -91,7 +91,7 @@ function writeSnapshot(parts: SnapshotParts = {}): string {
   const header = {
     kind: 'header',
     v: 1,
-    schemaVersion: parts.schemaVersion ?? 1,
+    schemaVersion: parts.schemaVersion ?? 2,
     snapshotId: parts.snapshotId ?? 'snapshot-1',
     rev: parts.rev ?? 7,
     simId: '2024',
@@ -290,7 +290,7 @@ describe('merge rules for airport, navaid and waypoint', () => {
   });
 });
 
-describe('the other tables: last wins, by key', () => {
+describe('the same merge rules on every other table', () => {
   it('dedupes an airway leg reported from either end', () => {
     const db = scratchReplica();
     const a = wptKey('ZZAAA', 'ZZ', 31, 41);
@@ -323,23 +323,108 @@ describe('the other tables: last wins, by key', () => {
     })).applied).toBe(0);
   });
 
-  it('overwrites runway and coverage-cell rows instead of merging them', () => {
+  it('stores displaced-threshold columns exactly and keeps NULL distinct from 0', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', { ident: 'ZZAA' }));
+    const q = 'SELECT primary_threshold_m p, secondary_threshold_m s FROM nav_runway';
+    const base = { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA' };
+
+    apply(db, row('runway', { ...base, primary_threshold_m: 62.77, secondary_threshold_m: 206.35 }));
+    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+
+    // A zero is a value and replaces what is stored; an omitted key is not a
+    // value at all, so the other end keeps its displacement.
+    apply(db, row('runway', { ...base, primary_threshold_m: 0, rev: 2 }));
+    expect(one(db, q)).toEqual({ p: 0, s: 206.35 });
+
+    apply(db, row('runway', { ...base, primary_threshold_m: 62.77, rev: 3 }));
+    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+
+    // A row that mentions neither end changes nothing at all, rev included.
+    expect(apply(db, row('runway', { ...base, rev: 4 })).applied).toBe(0);
+    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+    expect(one(db, 'SELECT rev FROM nav_runway')).toEqual({ rev: 3 });
+  });
+
+  it('keeps a column the next runway or frequency row leaves out', () => {
     const db = scratchReplica();
     apply(db, row('airport', { ident: 'ZZAA' }));
     apply(db, row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2000, width_m: 45 }));
-    // A column the second report leaves out is cleared, not kept: these rows
-    // do not merge.
     apply(db, row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2500, rev: 2 }));
-    expect(one(db, 'SELECT length_m, width_m FROM nav_runway')).toEqual({ length_m: 2500, width_m: null });
+    expect(one(db, 'SELECT length_m, width_m FROM nav_runway')).toEqual({ length_m: 2500, width_m: 45 });
 
+    apply(db, row('frequency', {
+      freq_key: 'ZZAA|1|118000000', airport_ident: 'ZZAA', freq_type: 1,
+      frequency_hz: 118_000_000, name: 'ZZAA TOWER',
+    }));
+    apply(db, row('frequency', {
+      freq_key: 'ZZAA|1|118000000', airport_ident: 'ZZAA', frequency_hz: 118_000_000, rev: 2,
+    }));
+    expect(one(db, 'SELECT freq_type, name FROM nav_airport_frequency')).toEqual({
+      freq_type: 1, name: 'ZZAA TOWER',
+    });
+  });
+
+  it('keeps a column the next procedure, transition or leg row leaves out', () => {
+    const db = scratchReplica();
+    const proc = 'ZZAA|SID|ZZONE1||||';
+    const trans = `${proc}|common|`;
+    apply(db,
+      row('airport', { ident: 'ZZAA' }),
+      row('procedure', { proc_key: proc, airport_ident: 'ZZAA', kind: 'SID', name: 'ZZONE1', faf_ident: 'ZZFAF', n_transitions: 2 }),
+      row('procedure_transition', { trans_key: trans, proc_key: proc, role: 'common', name: '', n_legs: 3, iaf_ident: 'ZZIAF' }),
+      row('procedure_leg', { trans_key: trans, seq: 0, leg_type: 18, fix_ident: 'ZZFIX', fix_lat: 30.1, fix_lon: 40.1, altitude1_m: 900 }),
+    );
+
+    apply(db,
+      row('procedure', { proc_key: proc, airport_ident: 'ZZAA', kind: 'SID', name: 'ZZONE1', n_transitions: 3, rev: 2 }),
+      row('procedure_transition', { trans_key: trans, proc_key: proc, role: 'common', name: '', n_legs: 4, rev: 2 }),
+      row('procedure_leg', { trans_key: trans, seq: 0, leg_type: 18, fix_lat: 30.2, rev: 2 }),
+    );
+
+    expect(one(db, 'SELECT faf_ident, n_transitions FROM nav_procedure')).toEqual({
+      faf_ident: 'ZZFAF', n_transitions: 3,
+    });
+    expect(one(db, 'SELECT iaf_ident, n_legs FROM nav_procedure_transition')).toEqual({
+      iaf_ident: 'ZZIAF', n_legs: 4,
+    });
+    expect(one(db, 'SELECT fix_ident, fix_lat, fix_lon, altitude1_m FROM nav_procedure_leg')).toEqual({
+      fix_ident: 'ZZFIX', fix_lat: 30.2, fix_lon: 40.1, altitude1_m: 900,
+    });
+  });
+
+  it('keeps a column the next airway-leg or coverage-cell row leaves out', () => {
+    const db = scratchReplica();
+    const a = wptKey('ZZAAA', 'ZZ', 31, 41);
+    const b = wptKey('ZZBBB', 'ZZ', 32, 42);
+    apply(db, row('airway_leg', {
+      leg_key: legKey('ZZ1', a, b), airway: 'ZZ1', airway_type: 2, dateline: 0,
+      from_key: a, to_key: b,
+      from_ident: 'ZZAAA', from_region: 'ZZ', from_lat: 31, from_lon: 41,
+      to_ident: 'ZZBBB', to_region: 'ZZ', to_lat: 32, to_lon: 42,
+      min_lat: 31, max_lat: 32, min_lon: 41, max_lon: 42,
+    }));
+    apply(db, row('airway_leg', { leg_key: legKey('ZZ1', a, b), airway: 'ZZ1', max_lat: 33, rev: 2 }));
+    expect(one(db, 'SELECT airway_type, from_ident, max_lat FROM nav_airway_leg')).toEqual({
+      airway_type: 2, from_ident: 'ZZAAA', max_lat: 33,
+    });
+
+    // The sidecar's own running totals arrive on every report, so they still
+    // land exactly as sent — including a genuine zero.
     apply(db, row('coverage_cell', { kind: 'W', cell_id: 1234, harvested_at: 500, harvest_count: 4, row_count: 9 }));
     apply(db, row('coverage_cell', { kind: 'W', cell_id: 1234, harvested_at: 600, harvest_count: 1, row_count: 0, rev: 2 }));
     expect(one(db, 'SELECT harvested_at, harvest_count, row_count FROM nav_coverage_cell')).toEqual({
       harvested_at: 600, harvest_count: 1, row_count: 0,
     });
+
+    // A report that omits them leaves the stored totals alone.
+    expect(apply(db, row('coverage_cell', { kind: 'W', cell_id: 1234, rev: 3 })).applied).toBe(0);
+    expect(one(db, 'SELECT harvested_at, harvest_count, row_count FROM nav_coverage_cell')).toEqual({
+      harvested_at: 600, harvest_count: 1, row_count: 0,
+    });
   });
 
-  it('never moves nav_absent.first_seen_at forward, and takes the rest last-wins', () => {
+  it('never moves nav_absent.first_seen_at forward, and keeps what a report omits', () => {
     const db = scratchReplica();
     const absent = (over: Row): NavRow =>
       row('absent', { kind: 'W', ident: 'ZZGONE', region: 'ZZ', reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000, attempts: 1, ...over });
@@ -350,8 +435,17 @@ describe('the other tables: last wins, by key', () => {
       first_seen_at: 1_000, last_checked_at: 5_000, attempts: 3, reason: 'exception',
     });
 
-    apply(db, absent({ first_seen_at: 200, last_checked_at: 6_000, rev: 3 }));
+    apply(db, absent({ first_seen_at: 200, last_checked_at: 6_000, attempts: 4, rev: 3 }));
     expect(one(db, 'SELECT first_seen_at FROM nav_absent')).toEqual({ first_seen_at: 200 });
+
+    // A report with no first_seen_at of its own leaves the stored one, and the
+    // attempts count it also omits.
+    apply(db, row('absent', {
+      kind: 'W', ident: 'ZZGONE', region: 'ZZ', reason: 'silent', last_checked_at: 7_000, rev: 4,
+    }));
+    expect(one(db, 'SELECT first_seen_at, attempts, last_checked_at FROM nav_absent')).toEqual({
+      first_seen_at: 200, attempts: 4, last_checked_at: 7_000,
+    });
   });
 
   it("marks an airport absent only when the airport already has a row", () => {
@@ -456,8 +550,8 @@ describe('snapshot import', () => {
     openNavdata();
     await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1' }));
 
-    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-9', schemaVersion: 2 })))
-      .rejects.toMatchObject({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', status: 409, serverSchemaVersion: 1 });
+    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-9', schemaVersion: 1 })))
+      .rejects.toMatchObject({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', status: 409, serverSchemaVersion: 2 });
 
     expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
   });
@@ -467,7 +561,7 @@ describe('snapshot import', () => {
     const stale = new Database(resolveNavdataPath());
     applyNavdataSchema(stale);
     stale.prepare(
-      "INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at) VALUES (1, 99, 'old', '2024', 1, 1)",
+      "INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at) VALUES (1, 1, 'old', '2024', 1, 1)",
     ).run();
     stale.close();
     openNavdata();
@@ -475,7 +569,7 @@ describe('snapshot import', () => {
 
     await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-fresh' }));
 
-    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-fresh', schema_version: 1 });
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-fresh', schema_version: 2 });
   });
 
   it('refuses a stream with no footer and cleans the incoming file up', async () => {
@@ -483,7 +577,7 @@ describe('snapshot import', () => {
     openNavdata();
     const file = path.join(tempDir(), 'truncated.ndjson.gz');
     const header = JSON.stringify({
-      kind: 'header', v: 1, schemaVersion: 1, snapshotId: 'snapshot-3', rev: 1,
+      kind: 'header', v: 1, schemaVersion: 2, snapshotId: 'snapshot-3', rev: 1,
       simId: '2024', simAppName: null, simAppVersion: null, sidecarVersion: 't', createdAt: 1, counts: {},
     });
     fs.writeFileSync(file, zlib.gzipSync(`${header}\n${JSON.stringify(row('airport', { ident: 'ZZAA' }))}\n`));
@@ -497,7 +591,7 @@ describe('snapshot import', () => {
 
 describe('incremental batches', () => {
   const batch = (over: Record<string, unknown> = {}) => ({
-    v: 1 as const, schemaVersion: 1 as const, snapshotId: 'snapshot-1',
+    v: 1 as const, schemaVersion: 2 as const, snapshotId: 'snapshot-1',
     fromRev: 7, toRev: 8, rows: [] as NavRow[], more: false, ...over,
   });
 
@@ -551,8 +645,8 @@ describe('incremental batches', () => {
     openNavdata();
     await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7 }));
 
-    expect(() => applyIncrementalBatch(batch({ schemaVersion: 2 }) as never))
-      .toThrow(expect.objectContaining({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', serverSchemaVersion: 1 }));
+    expect(() => applyIncrementalBatch(batch({ schemaVersion: 1 }) as never))
+      .toThrow(expect.objectContaining({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', serverSchemaVersion: 2 }));
     const many = Array.from({ length: 2001 }, (_, i) => row('airport', { ident: `ZZ${i}` }));
     expect(() => applyIncrementalBatch(batch({ rows: many })))
       .toThrow(expect.objectContaining({ code: 'NAVDATA_BAD_BATCH' }));

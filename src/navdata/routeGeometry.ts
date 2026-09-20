@@ -72,6 +72,7 @@ interface RunwayRow {
   rwy_key: string; lat: number | null; lon: number | null; heading_deg: number | null; length_m: number | null;
   primary_number: number | null; primary_designator: number | null;
   secondary_number: number | null; secondary_designator: number | null;
+  primary_threshold_m: number | null; secondary_threshold_m: number | null;
 }
 
 // ── Chain builder ────────────────────────────────────────────────────────────
@@ -338,7 +339,7 @@ function pickRunwayRow(
   const rows = db
     .prepare(
       `SELECT rwy_key, lat, lon, heading_deg, length_m, primary_number, primary_designator,
-              secondary_number, secondary_designator
+              secondary_number, secondary_designator, primary_threshold_m, secondary_threshold_m
          FROM nav_runway WHERE airport_ident = ? ORDER BY rwy_key`,
     )
     .all(airport) as RunwayRow[];
@@ -407,7 +408,9 @@ function buildSynthetic(
   }
   const { row, end, magvar } = found;
   const primaryBearing = runwayTrueBearing(row.heading_deg as number, magvar, reference);
-  const thr = runwayThreshold(row.lat as number, row.lon as number, primaryBearing, row.length_m as number, end);
+  const thr = runwayThreshold(row.lat as number, row.lon as number, primaryBearing, row.length_m as number, end,
+    end === 'primary' ? row.primary_threshold_m : row.secondary_threshold_m,
+  );
   const metres = distanceNm * NM_M;
 
   if (kind === 'approach') {

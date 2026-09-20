@@ -1,10 +1,14 @@
 // ── Applying sidecar rows to the replica ──────────────────────────────────────
 //
-// Every write into navdata.db goes through here. Three tables (airport,
-// navaid, waypoint) merge — their position and their detail arrive from
-// different calls, in either order, and neither may erase the other. The other
-// eight are last-wins by key, with one exception: nav_absent.first_seen_at only
-// ever moves backwards.
+// Every write into navdata.db goes through here, and every table merges by the
+// same rules: a row is found by its key alone, and a column the sidecar did not
+// send keeps whatever is stored. Any nav_* row can be assembled from more than
+// one message — a runway's geometry and its ILS idents, an airport's position
+// and its detail — arriving in either order, so no message may erase what
+// another one filled in. NULL means "this fetch had no value"; 0 means the
+// simulator reported zero, and the two are never conflated.
+//
+// One exception: nav_absent.first_seen_at only ever moves backwards.
 //
 // Writes use INSERT ... ON CONFLICT DO UPDATE, never INSERT OR REPLACE:
 // REPLACE deletes the conflicting row first, which fires ON DELETE CASCADE and
@@ -98,10 +102,7 @@ const KEY_COLUMNS: Record<NavRowType, readonly string[]> = {
   absent: ['kind', 'ident', 'region'],
 };
 
-/** The three tables whose rows merge instead of overwriting. */
-const MERGED_ROW_TYPES: ReadonlySet<NavRowType> = new Set<NavRowType>(['airport', 'navaid', 'waypoint']);
-
-/** Overwritten or kept as a unit, by source precedence. */
+/** Overwritten or kept as a unit, by source precedence, on the tables that carry them. */
 const POSITION_COLUMNS = ['lat', 'lon', 'alt_m', 'position_source', 'position_fetched_at'] as const;
 const POSITION_RANK: Record<string, number> = { facility: 3, list: 2, minimal: 1, route: 1 };
 
@@ -259,12 +260,7 @@ const quoteList = (cols: readonly string[]): string => cols.join(', ');
 function conflictUpdate(table: string, keyCols: readonly string[], cols: readonly string[]): string {
   const updatable = cols.filter(c => !keyCols.includes(c));
   if (updatable.length === 0) return `ON CONFLICT (${quoteList(keyCols)}) DO NOTHING`;
-  const assignments = updatable.map(c =>
-    table === 'nav_absent' && c === 'first_seen_at'
-      ? // The column means what its name says; a later report never moves it forward.
-        `first_seen_at = MIN(excluded.first_seen_at, ${table}.first_seen_at)`
-      : `${c} = excluded.${c}`,
-  );
+  const assignments = updatable.map(c => `${c} = excluded.${c}`);
   const changed = updatable.map(c => `${table}.${c} IS NOT excluded.${c}`).join(' OR ');
   return `ON CONFLICT (${quoteList(keyCols)}) DO UPDATE SET ${assignments.join(', ')} WHERE ${changed}`;
 }
@@ -306,11 +302,15 @@ function withoutUnbackedPositionSource(values: Record<string, NavValue>): Record
 }
 
 /**
- * M1-M3: identity columns stay, a present value is never overwritten with
- * null, and the position moves as a unit by source precedence. A lower-ranked
- * source only fills positions that are still missing — but a stored row with
- * no position source at all takes any incoming position, since there is
- * nothing there to demote.
+ * The one merge policy, used by every table: identity columns stay as stored,
+ * a column the row omits (or sends as null) keeps its stored value, and a
+ * position moves as a unit by source precedence on the tables that record one.
+ * A lower-ranked source only fills positions that are still missing — but a
+ * stored row with no position source at all takes any incoming position, since
+ * there is nothing there to demote.
+ *
+ * first_seen_at is the single column that is neither kept nor replaced: it
+ * means what its name says, so it takes the earlier of the two.
  */
 function mergeValues(
   table: string,
@@ -330,6 +330,11 @@ function mergeValues(
     const incomingValue = Object.prototype.hasOwnProperty.call(incoming, name) ? incoming[name] : null;
     if (keyCols.includes(name)) {
       merged[name] = storedValue;
+    } else if (table === 'nav_absent' && name === 'first_seen_at') {
+      merged[name] =
+        typeof storedValue === 'number' && typeof incomingValue === 'number'
+          ? Math.min(storedValue, incomingValue)
+          : incomingValue !== null ? incomingValue : storedValue;
     } else if (fillPositionOnly && positionCols.has(name)) {
       merged[name] = storedValue !== null ? storedValue : incomingValue;
     } else {
@@ -348,6 +353,7 @@ function differs(table: string, merged: Record<string, NavValue>, stored: Record
   return false;
 }
 
+/** Reads the stored row, merges in code, and writes only when something changed. */
 function applyMerged(db: Database.Database, row: ValidRow): boolean {
   const keyCols = KEY_COLUMNS[row.type];
   const keys = keyCols.map(c => keyValue(row, c));
@@ -365,19 +371,6 @@ function applyMerged(db: Database.Database, row: ValidRow): boolean {
   return upsert(db, row.table, keyCols, merged);
 }
 
-/** Every column of the table: what the row carries, else the column's own DDL default. */
-function fullRow(row: ValidRow): Record<string, NavValue> {
-  const values: Record<string, NavValue> = {};
-  for (const col of columnsOf(row.table)) {
-    if (Object.prototype.hasOwnProperty.call(row.values, col.name)) {
-      values[col.name] = row.values[col.name];
-    } else {
-      values[col.name] = col.defaultValue !== undefined ? col.defaultValue : null;
-    }
-  }
-  return values;
-}
-
 /** An airport known to be missing from the simulator is recorded on its own row when it has one. */
 function markAirportAbsent(db: Database.Database, ident: NavValue, rev: NavValue): void {
   db.prepare(
@@ -391,14 +384,7 @@ export function applyNavRow(db: Database.Database, row: NavRow, index = 0): bool
   const keyCols = KEY_COLUMNS[valid.type];
   for (const c of keyCols) keyValue(valid, c);
 
-  let wrote: boolean;
-  if (MERGED_ROW_TYPES.has(valid.type)) {
-    wrote = applyMerged(db, valid);
-  } else {
-    // Last wins, whole row: a column the sidecar left out is not a column to
-    // keep, it is a column that column now has no value for.
-    wrote = upsert(db, valid.table, keyCols, fullRow(valid));
-  }
+  const wrote = applyMerged(db, valid);
   if (valid.type === 'absent' && valid.values.kind === 'A') {
     markAirportAbsent(db, keyValue(valid, 'ident'), valid.values.rev ?? 0);
   }
