@@ -47,6 +47,13 @@ page.
 - **Trip detail** — combined map ("Atlas" view), paginated leg table,
   imports, active-trip toggle, flight↔leg linking, PDF/KML export.
 
+## Navdata on the maps
+
+When the MCDU client has synced navdata, the maps gain a **Navdata** panel and
+expanded planned routes; without it nothing changes. See [navdata.md](navdata.md)
+for what each layer shows, the coverage notes, *Fetch detail*, and the dashed
+*computed straight-in / computed departure* lines drawn for custom procedures.
+
 ## Replaying a flight
 
 Any completed flight with at least two recorded points has a **Replay flight** button on

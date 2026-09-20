@@ -49,6 +49,7 @@ Express + TypeScript, single process, single SQLite database
   (`/mcp`, its own bearer-token credential, off unless `MCP_TOKEN` is set)
   exposing the logbook as 18 tools to a remote MCP client such as Claude
   Desktop/Code. See [api.md § MCP server](api.md#mcp-server--srcmcp).
+- Keep a replica of MSFS navigation data pushed by the MCDU client (`src/navdata/`, a separate SQLite file) and answer map queries and route-expansion requests from it. See [navdata.md](navdata.md).
 - Generate PDF (via a self-navigated headless Chromium instance) and KML
   exports.
 - Integrate with three external HTTP services: SimBrief (OFP import),

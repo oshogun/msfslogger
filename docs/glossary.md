@@ -28,3 +28,6 @@ identifiers (table names, route names, variable names).
 | **Operator** | The single administrative user of a self-hosted msfslogger instance. There is exactly one account (`auth_user`, `id = 1`); this project has no multi-user/multi-tenant model. |
 | **Combine (flights)** | Merging two `flights` rows into one, used when a pause/reconnect caused one real flight to be logged as two. See `combineFlights()` in [data-model.md](data-model.md). |
 | **Backfill** | An operator-run maintenance script (`npm run backfill-icao`, `npm run backfill-durations`) that recomputes derived columns on existing rows after a behavior change. See [operations.md](operations.md). |
+| **Navdata** | MSFS navigation data (airports, navaids, fixes, airways, runways, procedures) extracted by the MCDU client and replicated here. See [navdata.md](navdata.md). |
+| **Replica / epoch (`snapshotId`)** | `navdata.db` is a rebuildable copy of the sidecar's store; an epoch is one bulk extraction, and a snapshot of a new epoch replaces the replica wholesale. |
+| **Computed straight-in / departure** | The dashed line drawn for a Little Navmap *custom* approach or departure, computed from the runway rather than read from a simulator procedure. |

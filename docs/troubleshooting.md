@@ -30,7 +30,7 @@ broken.
 **`flights.db` ends up as a directory instead of a file.**
 Docker creates the bind-mount target if it doesn't exist, and creates a
 directory when the source path doesn't already exist as a file. Always
-`touch flights.db` (and `mkdir -p flight_plans`) before the first `docker
+`touch flights.db` (and `mkdir -p flight_plans navdata`) before the first `docker
 compose up`.
 
 ## Agent / connectivity
@@ -100,6 +100,36 @@ detail page if the automatic match didn't fire, or wasn't what you wanted.
 `NO_DISPATCH_DATA` / `NO_FLIGHT_PLAN` means no SimBrief OFP has been
 imported for that leg yet — those two ACARS features are generated from
 on-file dispatch data, not invented from nothing.
+
+## Navdata
+
+**No Navdata panel on the maps.** The server has no replica (`GET /api/navdata/status`
+returns `present: false`): the MCDU client has not uploaded a snapshot, or the
+file is unreadable. Check the server log for `[Navdata]` lines and confirm
+`NAVDATA_DB_PATH` points into a writable directory. In Docker, the
+`./navdata` **directory** must exist and be mounted (a file bind-mount cannot be
+swapped).
+
+**The sidecar keeps getting `409 NAVDATA_SNAPSHOT_MISMATCH`.** The server holds a
+different epoch (or none, for example after deleting `navdata.db`): the sidecar
+resends a full snapshot. If it loops, check `/api/navdata/status` for
+`snapshotId`.
+
+**`409 NAVDATA_SCHEMA_UNSUPPORTED`.** The two repositories are on different
+navdata schema versions; update whichever is older. Also raised when a replica's
+columns do not match the schema.
+
+**`503 NAVDATA_BUSY`.** A snapshot is being imported or swapped; retry after the
+`Retry-After` interval. Incremental rows are refused for the whole import.
+
+**`400 NAVDATA_BAD_BATCH`.** Malformed batch, unknown column, or a child row
+whose parent (e.g. a runway's airport) is not in the replica; the batch is rolled
+back.
+
+**A planned route is not expanded, or shows "custom procedure … not a simulator
+procedure".** Custom departures/approaches are drawn from the runway once
+airport detail has been fetched — use *Fetch detail*. Procedures and airways
+appear only once the sidecar has fetched them for that airport or fix.
 
 ## Where else to look
 

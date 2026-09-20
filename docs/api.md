@@ -258,6 +258,32 @@ Every tool's declared route is checked at server startup against a hardcoded
 allow-list (`MCP_SCOPED_ROUTES`) — a tool with no matching entry, or a
 mismatched read/write kind, fails startup rather than shipping silently.
 
+## Navdata — `src/routes/navdataSync.ts`, `src/routes/navdata.ts`, `src/routes/navdataRouteGeometry.ts`
+
+Full behaviour, error codes and merge rules: [navdata.md](navdata.md).
+
+**Sidecar endpoints — ingest token only** (`x-ingest-token`, checked per route,
+mounted above the session middleware; a session cookie is rejected; none of them
+is in `INGEST_SCOPED_ROUTES`):
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/navdata/snapshot` | ingest token | Multipart, one part `navdataSnapshot`, gzipped NDJSON, ≤ 64 MiB. Replaces the replica atomically. |
+| POST | `/api/navdata/rows` | ingest token | JSON incremental batch, ≤ 2000 rows / 4 MiB (exempt from the 100 kB JSON limit). |
+| GET | `/api/navdata/demand` | ingest token | What the sidecar should fetch next (≤ 50 per poll). |
+| POST | `/api/navdata/state` | ingest token | Sidecar health report; always `204`. |
+
+**Query endpoints — session only** (an ingest token is rejected; with no replica
+they answer empty with `200`):
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/navdata/status` | session | Whether a replica exists (`present`), its epoch/counts, sidecar state |
+| GET | `/api/navdata/features` | session | Map features in a bbox at a zoom, with coverage metadata |
+| GET | `/api/navdata/airports/:ident` | session | Airport detail; `404` only if not in the index |
+| POST | `/api/navdata/request` | session + same-origin | Queue a "fetch detail" request (stored in `flights.db`) |
+| GET | `/api/planned-legs/:legId/route-geometry` | session | A planned leg expanded into SID/enroute/STAR/approach chains |
+
 ## Errors
 
 Errors are JSON: `{"error": "<message>"}`, sometimes with a `code` field for

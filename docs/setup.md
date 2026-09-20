@@ -98,7 +98,7 @@ creates a *directory* named `flights.db` instead of using it as a file:
 
 ```bash
 touch flights.db
-mkdir -p flight_plans
+mkdir -p flight_plans navdata
 export INGEST_TOKEN="$(openssl rand -hex 24)"
 export ALLOW_PLAINTEXT_HTTP=1   # trusted LAN only; prefer TLS in production
 docker compose build

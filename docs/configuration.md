@@ -33,6 +33,7 @@ export INGEST_TOKEN="$(openssl rand -hex 24)"
 | Variable | Default | Description |
 |---|---|---|
 | `FLIGHTS_DB_PATH` | `./flights.db` (relative to CWD) | SQLite database file path. |
+| `NAVDATA_DB_PATH` | `./navdata.db` (relative to CWD) | Path of the navdata replica ([navdata.md](navdata.md)). A separate SQLite file from `flights.db`; safe to delete (the MCDU sidecar re-sends it). Its directory must be writable, because a snapshot is staged beside it and swapped in by rename — in Docker, mount the *directory*, not the file. |
 | `EXPORT_BASE_URL` | `http(s)://127.0.0.1:${PORT}` (scheme follows TLS config) | Base URL the headless PDF renderer (Puppeteer) navigates to internally. Override only for advanced/dev setups (e.g. pointing exports at a Vite dev server). |
 | `TRAFFIC_ENABLED` | on | Server-side opt-out for AI-traffic ingestion. `0`/`false`/`off`/`no` disables; anything else (including unset) leaves it on. **Independent of the agent's own `TRAFFIC_ENABLED`** — both sides must be configured, setting one doesn't imply the other. |
 | `POSITION_REPORT_INTERVAL_MIN` | `10` | Minutes between automatic ACARS position reports while flying a linked leg. `0` disables. Values between 0 and 0.5 are clamped to 0.5 (30s); unparseable or negative values fall back to the default. |
@@ -60,7 +61,8 @@ selecting the SimConnect protocol revision — not an environment variable.
 
 `docker-compose.yml` passes these through from the shell/`.env` — none are
 baked into the image: `INGEST_TOKEN`, `MCP_TOKEN`, `TLS_CERT_FILE`,
-`TLS_KEY_FILE`, `ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`. See
+`TLS_KEY_FILE`, `ALLOW_PLAINTEXT_HTTP`, `SESSION_SECRET`. Compose also sets `NAVDATA_DB_PATH=/app/navdata/navdata.db` and
+mounts `./navdata:/app/navdata`. See
 [setup.md](setup.md#docker) and [operations.md](operations.md).
 
 ## Validating your configuration

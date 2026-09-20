@@ -103,6 +103,20 @@ file-level encryption built in — rely on filesystem/disk-level protection
 (permissions, disk encryption) if that matters for your deployment, and keep
 backups (`npm run backup`) under the same protection as the live file.
 
+## Navdata sync endpoints
+
+`/api/navdata/snapshot`, `/rows`, `/demand` and `/state` authenticate by
+`INGEST_TOKEN` only and are mounted above the session middleware, so they never
+allocate a session row; a session cookie is rejected on them, and the ingest token
+is still rejected on every session route (the scope allow-list is unchanged).
+Two properties worth knowing: the 4 MiB JSON parser for `/api/navdata/rows` runs
+*before* the token check, so an unauthenticated caller can make the server parse
+up to 4 MiB (every other path rejects at 100 kB); and snapshot uploads are staged
+in a per-process temporary directory created with mode `0700` and deleted after
+import. The replica may contain Navigraph-derived data: it is git-ignored and
+docker-ignored and must never be committed or baked into an image. See
+[navdata.md](navdata.md).
+
 ## Uploads
 
 File uploads (`multer`) are size- and count-capped per route (attached

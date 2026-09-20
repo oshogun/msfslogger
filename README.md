@@ -97,7 +97,7 @@ startup automation.
 ## Docker
 
 An alternative to the source install above. Create the bind-mount targets
-first (`touch flights.db`, `mkdir -p flight_plans`), or Compose creates a
+first (`touch flights.db`, `mkdir -p flight_plans navdata`), or Compose creates a
 directory named `flights.db` instead of using it as a file. Full steps,
 including creating the operator account inside the container:
 [`docs/setup.md#docker`](docs/setup.md#docker).
@@ -125,6 +125,7 @@ main file. Full backup/restore guidance:
 ## Documentation
 
 - [Documentation home](docs/index.md)
+- [Navdata on the maps](docs/navdata.md)
 - [Architecture](docs/architecture.md)
 - [Setup](docs/setup.md)
 - [Configuration](docs/configuration.md)

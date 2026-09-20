@@ -118,6 +118,12 @@ does start a live server, deliberately isolated from the developer's own:
   `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`), plus the
   flight replay panel (`flight-replay.spec.ts`).
 
+Navdata tests (`tests/navdata*.test.ts`, client `Navdata*`/`RouteGeometry*`
+tests) use **synthetic idents and coordinates only** — never real navdata, which
+is licensed content (see [navdata.md](navdata.md#data-provenance-and-licensing)).
+They build scratch databases in a temp directory and never touch `flights.db` or
+the live server.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and every pull request (no

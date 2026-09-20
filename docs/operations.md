@@ -111,6 +111,7 @@ redeploy-ordering question before it's a debugging one.
 | Path | Contents |
 |---|---|
 | `flights.db` (+ `-wal`/`-shm` while running) | All application data — see [data-model.md](data-model.md) |
+| `navdata.db` (+ `-wal`/`-shm`; in Docker under the `./navdata` directory) | Replica of the MCDU client's navdata. Rebuildable: not part of `npm run backup`, and safe to delete — see [navdata.md](navdata.md) |
 | `flight_plans/` | Attached PDF flight plans (uploaded per-flight) |
 | `certs/` | TLS certificate/key, if you keep them in-repo (gitignored by default) |
 | `backups/<timestamp>/` | Output of `npm run backup` |

@@ -190,6 +190,18 @@ operator-editable settings (currently the SimBrief pilot ID, under key
 `simbrief_user_id`). Both are `name` (TEXT PK) / `value` (TEXT NOT NULL) plus
 a timestamp.
 
+### `navdata_requests`
+
+Manual "fetch detail" requests from the map (`POST /api/navdata/request`),
+remembered until the sidecar's next demand poll. Lives in `flights.db`, not in
+`navdata.db`, so replacing the replica cannot wipe a pending request. Rows
+expire after 7 days (`NAVDATA_REQUEST_TTL_MS`) and are deleted once the replica
+holds the answer. Added additively with `CREATE TABLE IF NOT EXISTS`; access is
+in `src/db/navdataRequests.ts`.
+
+The navdata replica itself is a separate SQLite file with its own 13-table schema
+(`nav_*`); see [navdata.md](navdata.md). It is never part of `flights.db`.
+
 ## CRUD modules
 
 Each table has a matching module under `src/db/` exposing typed functions —
