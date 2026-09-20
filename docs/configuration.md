@@ -69,7 +69,7 @@ There's no `config check` command — configuration is validated implicitly by
 starting the server:
 
 ```bash
-export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use
 npm start
 ```
 
