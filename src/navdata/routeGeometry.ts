@@ -397,8 +397,12 @@ function buildSynthetic(
     return null;
   }
   const found = pickRunwayRow(db, airport, rwy);
-  if (!found || typeof distanceNm !== 'number' || !Number.isFinite(distanceNm) || distanceNm < 0) {
+  if (!found) {
     addUnresolved(acc, kind, name, 'custom procedure, no runway');
+    return null;
+  }
+  if (typeof distanceNm !== 'number' || !Number.isFinite(distanceNm) || distanceNm <= 0) {
+    addUnresolved(acc, kind, name, 'custom procedure, invalid distance');
     return null;
   }
   const { row, end, magvar } = found;
@@ -478,6 +482,21 @@ export function buildRouteGeometry(
   };
 }
 
+/**
+ * SimBrief writes the via-airway verbatim: 'DCT' for a direct segment, and the
+ * SID or STAR name on the waypoints that belong to that procedure. Neither is
+ * an airway to expand or to report; the procedure chains already draw their
+ * points and a direct segment is just the line between the two. The match is
+ * scoped to this plan's own procedure names, never a guess that a value looks
+ * like a procedure.
+ */
+function isNonAirway(leg: PlannedLegWithChildren, airway: string): boolean {
+  const a = norm(airway);
+  if (a === '' || a === 'DCT') return true;
+  return [leg.sid_name, leg.sid_transition, leg.star_name, leg.star_transition]
+    .some((name) => name != null && norm(name) !== '' && norm(name) === a);
+}
+
 function buildEnroute(
   db: Database.Database,
   leg: PlannedLegWithChildren,
@@ -488,13 +507,15 @@ function buildEnroute(
   const b = new ChainBuilder('enroute', acc);
   let near = { lat: leg.departure_lat, lon: leg.departure_lon };
   let prevKey: string | null = null;
+  let prevIsAirport = false;
   let prevResolved = false;
 
   for (const wp of wps) {
     let key: string | null = null;
     let resolved = false;
-    const isAirport = wp.type === 'AIRPORT';
-    if (!isAirport) {
+    // Airports and user-defined points are not navdata: nothing to look up.
+    const skipLookup = wp.type === 'AIRPORT' || wp.type === 'USER';
+    if (!skipLookup) {
       const chosen = pickNearest(lookupCandidates(db, wp), near);
       if (chosen) {
         key = chosen.key;
@@ -502,12 +523,13 @@ function buildEnroute(
         if (haversineNm(wp.lat, wp.lon, chosen.lat, chosen.lon) > PLANNED_POSITION_TOLERANCE_M / NM_M) {
           addUnresolved(acc, 'waypoint', wp.ident, 'position disagrees with cache');
         }
-      } else if (wp.type !== 'USER') {
+      } else {
         addUnresolved(acc, 'waypoint', wp.ident, 'ident not in cache');
       }
     }
 
-    if (wp.airway && b.last && validCoordinate(wp.lat, wp.lon)) {
+    // Airways neither start nor end at an airport, so a value there is noise.
+    if (wp.airway && wp.type !== 'AIRPORT' && !prevIsAirport && !isNonAirway(leg, wp.airway) && b.last && validCoordinate(wp.lat, wp.lon)) {
       const via = prevResolved && resolved && prevKey && key && prevKey !== key
         ? expandAirway(db, wp.airway, prevKey, key)
         : null;
@@ -526,6 +548,7 @@ function buildEnroute(
     if (validCoordinate(wp.lat, wp.lon)) near = { lat: wp.lat, lon: wp.lon };
     prevKey = key;
     prevResolved = resolved;
+    prevIsAirport = wp.type === 'AIRPORT';
   }
   chains.enroute = b.finish('planned');
 }

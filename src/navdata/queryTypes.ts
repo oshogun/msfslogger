@@ -107,6 +107,8 @@ export type UnresolvedReason =
   /** A custom SID/approach whose runway row is missing or unusable .
    *  A custom procedure is NEVER 'procedure not in cache'. */
   | 'custom procedure, no runway'
+  /** A custom procedure whose runway resolved but whose distance is missing or not a positive number. */
+  | 'custom procedure, invalid distance'
   | 'unparseable runway';
 
 export interface RouteGeometryResponse {

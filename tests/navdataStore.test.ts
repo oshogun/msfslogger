@@ -120,6 +120,25 @@ afterEach(() => {
   else process.env.NAVDATA_DB_PATH = savedEnv;
 });
 
+describe('constraint violations', () => {
+  it('a snapshot whose last rows violate a foreign key is a 400 bad batch and swaps nothing', async () => {
+    const dir = tempDir();
+    process.env.NAVDATA_DB_PATH = path.join(dir, 'navdata.db');
+    openNavdata();
+    const file = writeSnapshot({
+      rows: [
+        row('airport', { ident: 'ZZAA', name: 'Zulu Alpha Field' }),
+        row('runway', { rwy_key: 'NOSUCH|9|0', airport_ident: 'NOSUCH', heading_deg: 90, length_m: 2000 }),
+      ],
+    });
+    await expect(importNavdataSnapshot(file)).rejects.toMatchObject({
+      name: 'NavdataStoreError', code: 'NAVDATA_BAD_BATCH', status: 400,
+    });
+    expect(getNavDb()).toBeNull();
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
+
 describe('merge rules for airport, navaid and waypoint', () => {
   it('merges detail then position without losing either', () => {
     const db = scratchReplica();

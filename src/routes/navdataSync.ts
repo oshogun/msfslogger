@@ -51,36 +51,38 @@ export function createNavdataSyncRouter(
     res.status(401).json({ error: 'Invalid or missing ingest token' });
   };
 
-  const refuseWhileSwapping = (_req: Request, res: Response, next: NextFunction): void => {
+  // A batch applied to the outgoing replica while a snapshot is importing would
+  // be lost when the swap lands, after the sidecar may already have counted it
+  // as delivered. So the whole import, from the first byte of the upload to the
+  // end of the swap, holds the replica against batches and other snapshots.
+  const beginImport = (_req: Request, res: Response, next: NextFunction): void => {
     if (isNavdataBusy() || importing) {
       busy(res, 2, 'navdata replica is being replaced');
       return;
     }
+    importing = true;
+    // The upload can fail before the handler runs (size limit, bad multipart);
+    // the handler owns the release once it has started.
+    res.once('close', () => {
+      if (!res.locals.importHandlerStarted) importing = false;
+    });
     next();
   };
 
   router.post(
     '/snapshot',
     requireToken,
-    refuseWhileSwapping,
+    beginImport,
     uploadNavdataSnapshot.single('navdataSnapshot'),
     async (req, res) => {
+      res.locals.importHandlerStarted = true;
       const file = req.file;
       try {
         if (!file) {
           res.status(400).json({ ok: false, code: 'NAVDATA_BAD_BATCH', message: 'No navdataSnapshot file in the upload' });
           return;
         }
-        if (importing || isNavdataBusy()) {
-          busy(res, 2, 'navdata replica is being replaced');
-          return;
-        }
-        importing = true;
-        try {
-          res.json(await importNavdataSnapshot(file.path));
-        } finally {
-          importing = false;
-        }
+        res.json(await importNavdataSnapshot(file.path));
       } catch (err) {
         if (err instanceof NavdataStoreError) {
           storeError(res, err);
@@ -91,13 +93,14 @@ export function createNavdataSyncRouter(
           res.status(500).json({ error: 'Snapshot import failed' });
         }
       } finally {
+        importing = false;
         if (file) fs.rm(file.path, { force: true }, () => undefined);
       }
     },
   );
 
   router.post('/rows', requireToken, (req, res) => {
-    if (isNavdataBusy()) {
+    if (isNavdataBusy() || importing) {
       busy(res, 2, 'navdata replica is being replaced');
       return;
     }

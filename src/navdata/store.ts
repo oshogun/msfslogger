@@ -32,6 +32,9 @@ import { getNavDb } from './connection';
 /** Rows accepted in one incremental batch. */
 export const NAVDATA_MAX_BATCH_ROWS = 2000;
 
+/** Largest JSON body accepted on the incremental rows route. */
+export const NAVDATA_BATCH_MAX_BYTES = '4mb';
+
 export type NavValue = string | number | null;
 
 /** Carries what the sync routes have to answer with, so the HTTP layer maps rather than decides. */
@@ -428,16 +431,28 @@ export function applyNavRows(db: Database.Database, rows: NavRow[], opts: { sort
     : rows;
 
   const result: ApplyResult = { applied: 0, counts: {} };
+  let current: NavRow | undefined;
   const run = db.transaction(() => {
     for (let i = 0; i < ordered.length; i += 1) {
       const row = ordered[i];
+      current = row;
       if (applyNavRow(db, row, i)) {
         result.applied += 1;
         result.counts[row.t] = (result.counts[row.t] ?? 0) + 1;
       }
     }
   });
-  run();
+  try {
+    run();
+  } catch (err) {
+    // A row the schema refuses (a child of a missing parent, say) is the
+    // sender's fault, not the server's; the transaction has already rolled back.
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) {
+      throw badBatch(`a ${current?.t ?? 'row'} row violates a constraint (${code}); the batch was not applied`);
+    }
+    throw err;
+  }
   return result;
 }
 

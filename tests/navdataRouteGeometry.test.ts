@@ -196,6 +196,20 @@ describe('enroute waypoints and airways', () => {
     expect(r.unresolved).toEqual([{ kind: 'waypoint', name: 'LOST', reason: 'ident not in cache' }]);
   });
 
+  it('never looks a USER waypoint up, even when the cache holds a far-away namesake', () => {
+    const db = fresh();
+    waypoint(db, 'MYPT', 'AA', 40, 80);
+    const r = buildRouteGeometry(planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'MYPT', 10, 20.5, { type: 'USER' }),
+        wpt(3, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    expect(r.unresolved).toEqual([]);
+    expect(r.enroute.points[1]).toMatchObject({ ident: 'MYPT', lat: 10, lon: 20.5 });
+  });
+
   it('uses nearest-neighbour when the region is unknown, ties to the smaller key, and flags a disagreement', () => {
     const db = fresh();
     waypoint(db, 'DUPE', 'AA', 10, 40);   // far
@@ -232,6 +246,70 @@ describe('enroute waypoints and airways', () => {
       ],
     });
   }
+
+  it('treats DCT and the SID/STAR name as direct segments, not airways', () => {
+    const db = fresh();
+    waypoint(db, 'AAAAA', 'ZZ', 10.1, 21);
+    waypoint(db, 'BBBBB', 'ZZ', 10.2, 21);
+    waypoint(db, 'CCCCC', 'ZZ', 10.3, 21);
+    const r = buildRouteGeometry(planned({
+      sid_name: 'TSTS1', star_name: 'TSTR2',
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'AAAAA', 10.1, 21, { region: 'ZZ', airway: ' tsts1 ' }),
+        wpt(3, 'BBBBB', 10.2, 21, { region: 'ZZ', airway: 'dct' }),
+        wpt(4, 'CCCCC', 10.3, 21, { region: 'ZZ', airway: 'TSTR2' }),
+        wpt(5, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    // The SID/STAR chains report their own missing detail; only the airway view matters here.
+    expect(r.unresolved.filter((u) => u.kind === 'airway')).toEqual([]);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'AAAAA', 'BBBBB', 'CCCCC', 'TSTB']);
+  });
+
+  it('ignores an airway value at an airport endpoint, treats blank like NULL, and honours transition names', () => {
+    const db = fresh();
+    waypoint(db, 'AAAAA', 'ZZ', 10.1, 21);
+    waypoint(db, 'BBBBB', 'ZZ', 10.2, 21);
+    const r = buildRouteGeometry(planned({
+      sid_transition: 'TSTT1',
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT', airway: 'STRAY1' }),
+        wpt(2, 'AAAAA', 10.1, 21, { region: 'ZZ', airway: 'STRAY2' }),
+        wpt(3, 'BBBBB', 10.2, 21, { region: 'ZZ', airway: '' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT', airway: 'ONAGA' }),
+      ],
+    }), db);
+    expect(r.unresolved.filter((u) => u.kind === 'airway')).toEqual([]);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'AAAAA', 'BBBBB', 'TSTB']);
+
+    const t = buildRouteGeometry(planned({
+      sid_transition: 'TSTT1',
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'AAAAA', 10.1, 21, { region: 'ZZ' }),
+        wpt(3, 'BBBBB', 10.2, 21, { region: 'ZZ', airway: 'tstt1' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    expect(t.unresolved.filter((u) => u.kind === 'airway')).toEqual([]);
+  });
+
+  it('still reports a genuinely unknown airway name', () => {
+    const db = fresh();
+    waypoint(db, 'AAAAA', 'ZZ', 10.1, 21);
+    waypoint(db, 'BBBBB', 'ZZ', 10.2, 21);
+    const r = buildRouteGeometry(planned({
+      sid_name: 'TSTS1',
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'AAAAA', 10.1, 21, { region: 'ZZ' }),
+        wpt(3, 'BBBBB', 10.2, 21, { region: 'ZZ', airway: 'Q999' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    expect(r.unresolved.filter((u) => u.kind === 'airway')).toEqual([{ kind: 'airway', name: 'Q999', reason: 'no path found' }]);
+  });
 
   it('expands an airway through the ascending-key neighbour', () => {
     const db = fresh();
@@ -360,6 +438,15 @@ describe('synthetic custom procedures', () => {
     const noDetail = buildRouteGeometry(approach('10'), fresh());
     expect(noDetail.unresolved).toEqual([{ kind: 'approach', name: 'TSTBCUS', reason: 'custom procedure, no runway' }]);
     expect(noDetail.unresolved.some((u) => u.reason === 'procedure not in cache')).toBe(false);
+  });
+
+  it('reports an invalid custom distance apart from a missing runway', () => {
+    const db = setup();
+    for (const bad of [null, 0, -2, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const r = buildRouteGeometry(approach('10', { approach_custom_distance_nm: bad as number | null }), db);
+      expect(r.approach.points).toEqual([]);
+      expect(r.unresolved).toEqual([{ kind: 'approach', name: 'TSTBCUS', reason: 'custom procedure, invalid distance' }]);
+    }
   });
 
   it('reports an unparseable runway on a custom procedure', () => {

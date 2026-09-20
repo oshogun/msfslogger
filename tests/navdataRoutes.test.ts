@@ -2,6 +2,7 @@
 // and a scratch replica directory. Synthetic idents only.
 
 import express from 'express';
+import http from 'http';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
@@ -10,6 +11,7 @@ import zlib from 'zlib';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNavdataSyncRouter } from '../src/routes/navdataSync';
+import { snapshotUploadDir } from '../src/routes/uploads';
 import { SidecarStateStore } from '../src/navdata/sidecarState';
 import { closeNavDb, getNavDb, openNavdata, resolveNavdataPath } from '../src/navdata/connection';
 import { createScratchDb, destroyScratchDb, type ScratchDb } from './helpers/db';
@@ -63,10 +65,8 @@ const postJson = (p: string, body: unknown, token: string | null = TOKEN) =>
 const airports = (): string[] =>
   (getNavDb()!.prepare('SELECT ident FROM nav_airport ORDER BY ident').all() as { ident: string }[]).map(r => r.ident);
 
-const uploadTemps = (): string[] => {
-  const d = path.join(os.tmpdir(), 'msfslogger-navdata-uploads');
-  return fs.existsSync(d) ? fs.readdirSync(d) : [];
-};
+const uploadTemps = (): string[] =>
+  fs.existsSync(snapshotUploadDir) ? fs.readdirSync(snapshotUploadDir) : [];
 
 beforeEach(async () => {
   scratch = createScratchDb();
@@ -152,6 +152,20 @@ describe('POST /rows', () => {
     expect(state.lastRowsAt()).not.toBeNull();
   });
 
+  it('answers a constraint-violating row with 400 and rolls the whole batch back', async () => {
+    await postSnapshot(snapshotFile('s1'));
+    const res = await postJson('/api/navdata/rows', batch('s1', [
+      { t: 'airport', r: { ident: 'ZZAC', name: 'Zulu Charlie', lat: 12, lon: 22, position_source: 'list', rev: 6 } },
+      { t: 'runway', r: { rwy_key: 'NOSUCH|9|0', airport_ident: 'NOSUCH', heading_deg: 90, length_m: 2000, rev: 6 } },
+    ]));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { code: string; message: string };
+    expect(body.code).toBe('NAVDATA_BAD_BATCH');
+    expect(body.message).toContain('runway');
+    expect(airports()).not.toContain('ZZAC');
+    expect(state.lastRowsAt()).toBeNull();
+  });
+
   it('does not mark the rows time when the batch is refused', async () => {
     await postSnapshot(snapshotFile('s1'));
     expect((await postJson('/api/navdata/rows', batch('other', []))).status).toBe(409);
@@ -187,6 +201,59 @@ describe('GET /demand and POST /state', () => {
     const res = await postJson('/api/navdata/state', { v: 1, state: 'nav.weird' });
     expect(res.status).toBe(400);
     expect(state.read()).toBeNull();
+  });
+});
+
+describe('batches during a snapshot import', () => {
+  it('are refused for the whole import, and accepted once the swap has landed', async () => {
+    await postSnapshot(snapshotFile('s1'));
+    const batch = { v: 1, schemaVersion: 1, snapshotId: 's1', fromRev: 5, toRev: 6, rows: [], more: false };
+
+    // Hold a snapshot upload open by sending only part of the multipart body.
+    const boundary = 'testboundary';
+    const gz = fs.readFileSync(snapshotFile('s2'));
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="navdataSnapshot"; filename="s2.gz"\r\n` +
+      'Content-Type: application/gzip\r\n\r\n',
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const url = new URL(base);
+    const req = http.request({
+      host: url.hostname, port: url.port, path: '/api/navdata/snapshot', method: 'POST',
+      headers: {
+        'x-ingest-token': TOKEN,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': head.length + gz.length + tail.length,
+      },
+    });
+    const done = new Promise<number>((resolve, reject) => {
+      req.on('response', r => { r.resume(); resolve(r.statusCode ?? 0); });
+      req.on('error', reject);
+    });
+    req.write(head);
+    req.write(gz.subarray(0, 10));
+    await new Promise(r => setTimeout(r, 100));
+
+    const mid = await postJson('/api/navdata/rows', batch);
+    expect(mid.status).toBe(503);
+    expect(mid.headers.get('retry-after')).toBe('2');
+    expect(await mid.json()).toMatchObject({ ok: false, code: 'NAVDATA_BUSY' });
+    expect(state.lastRowsAt()).toBeNull();
+
+    req.write(gz.subarray(10));
+    req.end(tail);
+    expect(await done).toBe(200);
+
+    const after = await postJson('/api/navdata/rows', { ...batch, snapshotId: 's2' });
+    expect(after.status).toBe(200);
+  });
+
+  it('release the hold when the upload itself is refused', async () => {
+    const bad = await fetch(`${base}/api/navdata/snapshot`, {
+      method: 'POST', headers: { 'x-ingest-token': TOKEN }, body: new FormData(),
+    });
+    expect(bad.status).toBe(400);
+    expect((await postSnapshot(snapshotFile('s1'))).status).toBe(200);
   });
 });
 

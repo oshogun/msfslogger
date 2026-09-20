@@ -5,6 +5,7 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 import type { FlightManager } from './flightManager';
 import { createIngestRouter } from './ingest';
+import { NAVDATA_BATCH_MAX_BYTES } from './navdata/store';
 import { SidecarStateStore } from './navdata/sidecarState';
 import { TrafficStore } from './trafficStore';
 import { getConfig } from './config';
@@ -38,7 +39,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // registered first so it parses that one path before the global parser sees
   // it (which then skips an already-parsed body); every other path keeps the
   // global limit.
-  app.use('/api/navdata/rows', express.json({ limit: '4mb' }));
+  app.use('/api/navdata/rows', express.json({ limit: NAVDATA_BATCH_MAX_BYTES }));
   app.use(express.json({ limit: config.jsonBodyLimit }));
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
