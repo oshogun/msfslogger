@@ -61,16 +61,22 @@ describe('FlightDetail', () => {
       on_ground: 0,
     }));
 
-    function load(pts: FlightPoint[]) {
+    function load(pts: FlightPoint[], end_time: string | null = flightFixture.end_time) {
       mockFetchRoutes({
         '/api/auth/session': SESSION_ROUTE,
-        '/api/flights/1': [200, { ...flightFixture, points: pts, point_count: pts.length }],
+        '/api/flights/1': [200, { ...flightFixture, end_time, points: pts, point_count: pts.length }],
       });
       renderWithProviders(<FlightDetail />, ROUTE_OPTS);
     }
 
     it('offers no Replay button for a flight with fewer than two points', async () => {
       load([points[0]]);
+      await screen.findByRole('heading', { name: /Flight #1/ });
+      expect(screen.queryByRole('button', { name: 'Replay flight' })).not.toBeInTheDocument();
+    });
+
+    it('offers no Replay button for a flight still in progress', async () => {
+      load(points, null);
       await screen.findByRole('heading', { name: /Flight #1/ });
       expect(screen.queryByRole('button', { name: 'Replay flight' })).not.toBeInTheDocument();
     });
