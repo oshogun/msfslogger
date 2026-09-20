@@ -112,10 +112,11 @@ does start a live server, deliberately isolated from the developer's own:
 - `npm run test:e2e` (from `client/`) runs Playwright against that instance;
   `npm run test:e2e:ui` opens Playwright's interactive UI mode for the same
   suite.
-- Covers the journeys named in `user_stories/frontend_testing.md`:
+- Covers the journeys named in `specs/frontend_testing.md`:
   authentication, core data-visualization/interaction, and error/
   loading-state handling (`client/e2e/specs/auth.spec.ts`,
-  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`).
+  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`), plus the
+  flight replay panel (`flight-replay.spec.ts`).
 
 ## CI
 
