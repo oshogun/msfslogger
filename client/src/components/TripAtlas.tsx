@@ -84,6 +84,7 @@ export function TripAtlas({ journey }: Props) {
             airports={journey.airports}
             highlightId={highlightId}
             onHighlight={setHighlightId}
+            navdata
           />
         </div>
       </div>

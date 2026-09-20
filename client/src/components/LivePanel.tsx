@@ -62,7 +62,7 @@ export function LivePanel({ status }: Props) {
             </>
           )}
         </div>
-        <LiveMap status={status} />
+        <LiveMap status={status} navdata />
       </div>
     </div>
   );

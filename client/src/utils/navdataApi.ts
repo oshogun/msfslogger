@@ -1,6 +1,7 @@
-import { apiFetch, UnauthorizedError } from './api';
+import { apiFetch } from './api';
 import type {
   FeaturesResponse,
+  RouteGeometryResponse,
   NavdataRequestBody,
   NavdataRequestResponse,
   NavdataStatusResponse,
@@ -58,16 +59,21 @@ export async function fetchNavdataFeatures(
     zoom: String(Math.round(zoom)),
     kinds: kinds.join(','),
   });
-  const res = await fetch(`/api/navdata/features?${params}`, { signal });
+  const url = `/api/navdata/features?${params}`;
+  const res = await fetch(url, { signal });
   if (res.status === 503) {
     const retry = Number(res.headers.get('Retry-After'));
     throw new NavdataBusyError(Number.isFinite(retry) && retry > 0 ? retry : 2);
   }
   if (!res.ok) {
+    if (res.status === 401) {
+      // The session handler lives in api.ts and is only reachable through
+      // apiFetch, so the 401 is replayed through it: it notifies the handler
+      // and throws UnauthorizedError like every other request.
+      return apiFetch<FeaturesResponse>(url, { signal });
+    }
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    const message = (body as { error?: string }).error || res.statusText;
-    if (res.status === 401) throw new UnauthorizedError(message);
-    throw new Error(message);
+    throw new Error((body as { error?: string }).error || res.statusText);
   }
   return res.json() as Promise<FeaturesResponse>;
 }
@@ -78,4 +84,8 @@ export async function requestNavdata(body: NavdataRequestBody): Promise<NavdataR
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+export async function fetchRouteGeometry(legId: number, signal?: AbortSignal): Promise<RouteGeometryResponse> {
+  return apiFetch<RouteGeometryResponse>(`/api/planned-legs/${legId}/route-geometry`, { signal });
 }

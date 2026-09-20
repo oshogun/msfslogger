@@ -1,9 +1,16 @@
-import { useEffect, Fragment } from 'react';
+import { useEffect, useRef, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
 import { NavdataOverlay } from './NavdataControls';
-import type { FlightPoint, PlannedLegWithChildren } from '../types';
+import {
+  FetchDetailPrompt,
+  RouteGeometryLayer,
+  detailTargets,
+  geometryHasChains,
+  procedureNote,
+} from './RouteGeometryLayer';
+import type { FlightPoint, PlannedLegWithChildren, RouteGeometryResponse } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChain } from '../utils/geo';
 
@@ -27,18 +34,6 @@ const mkWaypointIcon = () =>
     iconAnchor: [4, 4],
     html: `<div style="width:8px;height:8px;border-radius:50%;background:${PLANNED_ROUTE_COLOR};border:1px solid #fff;box-shadow:0 0 3px #000;opacity:0.9"></div>`,
   });
-
-function procedureNote(leg: PlannedLegWithChildren): string | null {
-  const parts: string[] = [];
-  if (leg.sid_name) parts.push(`SID ${leg.sid_name}`);
-  if (leg.star_name) parts.push(`STAR ${leg.star_name}`);
-  if (leg.approach_name) parts.push(`APP ${leg.approach_name}`);
-  if (parts.length === 0) return null;
-  // Makes the gap at the ends read as missing procedure data, not a drawing
-  // bug — the planned route is expected to diverge from the flown track
-  // here, and that divergence is never "fixed" by this component.
-  return `${parts.join(' · ')} (planned route excludes SID/STAR/approach legs)`;
-}
 
 function BoundsController({
   latlngs,
@@ -81,9 +76,25 @@ interface Props {
   zoomControl?: boolean;
   /** Adds the navdata toggles and layers. Off by default; the print pages leave it off. */
   navdata?: boolean;
+  /**
+   * The server's expansion of `plannedLeg` into SID / airway / STAR / approach
+   * chains. Omitted, null or empty: the planned route is drawn exactly as it
+   * always was. Never passed by the print pages.
+   */
+  routeGeometry?: RouteGeometryResponse | null;
+  /** True while `routeGeometry` is still being fetched; holds back `onReady`. */
+  routeGeometryLoading?: boolean;
 }
 
-export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zoomControl = true, navdata = false }: Props) {
+export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zoomControl = true, navdata = false, routeGeometry = null, routeGeometryLoading = false }: Props) {
+  const geometry = plannedLeg && routeGeometry && routeGeometry.legId === plannedLeg.id ? routeGeometry : null;
+  const drawnGeometry = geometry && geometryHasChains(geometry) ? geometry : null;
+  const trackRef = useRef<L.Polyline>(null);
+  // Geometry arrives after the track was drawn; keep the flown track on top.
+  useEffect(() => {
+    if (drawnGeometry) trackRef.current?.bringToFront();
+  }, [drawnGeometry]);
+
   const sortedWaypoints = plannedLeg ? plannedLeg.waypoints.slice().sort((a, b) => a.seq - b.seq) : [];
   if (points.length === 0 && sortedWaypoints.length === 0) {
     return <p style={{ padding: '2rem', color: '#4b5563' }}>No GPS points recorded.</p>;
@@ -94,7 +105,10 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
   const plannedChain = unwrapLonChain(rawPlannedChain);
   const center = latlngs[0] ?? plannedChain[0] ?? ([0, 0] as [number, number]);
 
-  const note = plannedLeg ? procedureNote(plannedLeg) : null;
+  const geometryAnchor = plannedChain[0] ?? null;
+  // The expanded enroute chain carries the plan's own waypoints; without it the plain planned polyline stays.
+  const replacesPlanned = drawnGeometry !== null && drawnGeometry.enroute.points.length > 0;
+  const note = plannedLeg ? procedureNote(plannedLeg, geometry) : null;
   const plannedLabel = plannedLeg
     ? `Planned route: ${plannedLeg.departure_ident} → ${plannedLeg.destination_ident}` +
       ` · approx. ${formatDistance(plannedLeg.approx_distance_nm)} nm`
@@ -120,7 +134,7 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
         at the ends of an IFR leg with procedures is the file drawn
         faithfully, not a bug.
       */}
-      {plannedLeg && plannedChain.length > 0 && (
+      {plannedLeg && plannedChain.length > 0 && !replacesPlanned && (
         <Fragment>
           <Polyline
             positions={plannedChain}
@@ -141,9 +155,19 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
           ))}
         </Fragment>
       )}
+      {plannedLeg && drawnGeometry && (
+        <RouteGeometryLayer
+          legId={plannedLeg.id}
+          legSeq={plannedLeg.seq}
+          geometry={drawnGeometry}
+          label={plannedLabel}
+          note={note}
+          anchor={geometryAnchor}
+        />
+      )}
       {latlngs.length > 0 && (
         <>
-          <Polyline positions={latlngs} pathOptions={{ color: '#60a5fa', weight: 2.5, opacity: 0.9 }} />
+          <Polyline ref={trackRef} positions={latlngs} pathOptions={{ color: '#60a5fa', weight: 2.5, opacity: 0.9 }} />
           <Marker position={latlngs[0]} icon={mkIcon('#34d399')}>
             <Tooltip>Departure</Tooltip>
           </Marker>
@@ -154,7 +178,8 @@ export function FlightMap({ points, plannedLeg, onReady, preferCanvas = true, zo
       )}
       <BoundsController latlngs={latlngs} plannedLatlngs={plannedChain} />
       {navdata && <NavdataOverlay />}
-      <MapReadySignal onReady={onReady} />
+      <FetchDetailPrompt targets={detailTargets(geometry)} />
+      <MapReadySignal onReady={onReady} pending={routeGeometryLoading} />
     </MapContainer>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { FlightMap } from '../components/FlightMap';
+import { useRouteGeometry } from '../components/RouteGeometryLayer';
 import { AltitudeChart } from '../components/AltitudeChart';
 import { ReplayPanel } from '../components/ReplayPanel';
 import { StatsGrid } from '../components/StatsGrid';
@@ -57,6 +58,7 @@ export function FlightDetail() {
 
   // ── Planned-leg link ──────────────────────────────────────────────────
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
+  const routeGeometry = useRouteGeometry(plannedLeg ? [plannedLeg.id] : []);
   const [plannedTripName, setPlannedTripName] = useState<string | null>(null);
   const [plannedLegLoading, setPlannedLegLoading] = useState(false);
   const [plannedLegError, setPlannedLegError] = useState('');
@@ -435,7 +437,13 @@ export function FlightDetail() {
       <div className="map-section">
         <div className="section-title">GPS Track</div>
         <div id="map">
-          <FlightMap points={flight.points || []} plannedLeg={plannedLeg ?? undefined} />
+          <FlightMap
+            points={flight.points || []}
+            plannedLeg={plannedLeg ?? undefined}
+            navdata
+            routeGeometry={plannedLeg ? routeGeometry.geometries[plannedLeg.id] ?? null : null}
+            routeGeometryLoading={routeGeometry.loading}
+          />
         </div>
       </div>
 

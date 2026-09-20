@@ -1,6 +1,7 @@
 import { Fragment, useRef, useState, useEffect } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { TripMap } from '../components/TripMap';
+import { useRouteGeometry } from '../components/RouteGeometryLayer';
 import { TripAtlas } from '../components/TripAtlas';
 import { StatsGrid } from '../components/StatsGrid';
 import { interleaveTripRows, GhostLegRow, plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
@@ -35,6 +36,7 @@ export function TripDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [trip, setTrip] = useState<Trip | null>(null);
+  const routeGeometry = useRouteGeometry(trip ? trip.planned_legs.map(l => l.id) : []);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState('');
@@ -659,7 +661,13 @@ export function TripDetail() {
       <div className="map-section">
         <div className="section-title">Combined Route</div>
         <div id="map">
-          <TripMap flights={trip.flights} plannedLegs={trip.planned_legs} />
+          <TripMap
+            flights={trip.flights}
+            plannedLegs={trip.planned_legs}
+            navdata
+            routeGeometries={routeGeometry.geometries}
+            routeGeometryLoading={routeGeometry.loading}
+          />
         </div>
       </div>
 

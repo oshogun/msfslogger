@@ -1,9 +1,17 @@
-import { useEffect, Fragment } from 'react';
+import { useEffect, useRef, Fragment } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { MapReadySignal } from './MapReadySignal';
 import { NavdataOverlay } from './NavdataControls';
-import type { Flight, PlannedLegWithChildren } from '../types';
+import {
+  FetchDetailPrompt,
+  RouteGeometryLayer,
+  detailTargets,
+  geometryHasChains,
+  procedureNote,
+  type DetailTarget,
+} from './RouteGeometryLayer';
+import type { Flight, PlannedLegWithChildren, RouteGeometryResponse } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChains } from '../utils/geo';
 
@@ -52,17 +60,6 @@ function flightChains(flights: Flight[]): [number, number][][] {
   return unwrapLonChains(raw);
 }
 
-function procedureNote(leg: PlannedLegWithChildren): string | null {
-  const parts: string[] = [];
-  if (leg.sid_name) parts.push(`SID ${leg.sid_name}`);
-  if (leg.star_name) parts.push(`STAR ${leg.star_name}`);
-  if (leg.approach_name) parts.push(`APP ${leg.approach_name}`);
-  if (parts.length === 0) return null;
-  // Makes the gap at the ends read as missing procedure data, not a drawing
-  // bug.
-  return `${parts.join(' · ')} (planned route excludes SID/STAR/approach legs)`;
-}
-
 function BoundsController({ flights, plannedLegs }: { flights: Flight[]; plannedLegs: PlannedLegWithChildren[] }) {
   const map = useMap();
   useEffect(() => {
@@ -94,9 +91,24 @@ interface Props {
   zoomControl?: boolean;
   /** Adds the navdata toggles and layers. Off by default; the print pages leave it off. */
   navdata?: boolean;
+  /**
+   * Route geometry per planned leg id, from GET /api/planned-legs/:id/route-geometry.
+   * A leg with no entry, or an empty one, is drawn exactly as it always was.
+   */
+  routeGeometries?: Record<number, RouteGeometryResponse>;
+  /** True while `routeGeometries` is still being fetched; holds back `onReady`. */
+  routeGeometryLoading?: boolean;
 }
 
-export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = true, zoomControl = true, navdata = false }: Props) {
+export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = true, zoomControl = true, navdata = false, routeGeometries, routeGeometryLoading = false }: Props) {
+  const trackRefs = useRef<(L.Polyline | null)[]>([]);
+  // Geometry arrives after the tracks were drawn; keep the flown tracks on top.
+  useEffect(() => {
+    if (!routeGeometries) return;
+    if (!Object.values(routeGeometries).some(g => geometryHasChains(g))) return;
+    trackRefs.current.forEach(t => t?.bringToFront());
+  }, [routeGeometries]);
+
   const hasPoints = flights.some(f => f.points && f.points.length > 0);
   const hasPlannedWaypoints = plannedLegs.some(l => l.waypoints && l.waypoints.length > 0);
   if (!hasPoints && !hasPlannedWaypoints) {
@@ -113,6 +125,7 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
 
   const plannedChains = plannedLegChains(plannedLegs);
   const flightChainsArr = flightChains(flights);
+  const detailByIdent = new Map<string, DetailTarget>();
 
   return (
     <MapContainer
@@ -138,26 +151,45 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         const sortedWaypoints = leg.waypoints.slice().sort((a, b) => a.seq - b.seq);
         if (sortedWaypoints.length === 0) return null;
         const chain = plannedChains[legIdx];
-        const note = procedureNote(leg);
+        const answer = routeGeometries?.[leg.id];
+        const geometry = answer && answer.legId === leg.id ? answer : null;
+        const drawnGeometry = geometry && geometryHasChains(geometry) ? geometry : null;
+        const replacesPlanned = drawnGeometry !== null && drawnGeometry.enroute.points.length > 0;
+        for (const t of detailTargets(geometry)) detailByIdent.set(t.ident, t);
+        const note = procedureNote(leg, geometry);
         const label =
           `Leg ${leg.seq} (planned) — ${leg.departure_ident} → ${leg.destination_ident}` +
           ` · approx. ${formatDistance(leg.approx_distance_nm)} nm`;
         return (
           <Fragment key={`planned-${leg.id}`}>
-            <Polyline
-              positions={chain}
-              pathOptions={{ color: PLANNED_ROUTE_COLOR, weight: 2, opacity: 0.9, dashArray: '6 6' }}
-            >
-              <Tooltip sticky>
-                {label}
-                {note && <><br />{note}</>}
-              </Tooltip>
-            </Polyline>
-            {sortedWaypoints.map((w, i) => (
-              <Marker key={`${leg.id}-${w.seq}`} position={chain[i]} icon={mkWaypointIcon()}>
-                <Tooltip>{`Leg ${leg.seq} · ${w.ident}`}</Tooltip>
-              </Marker>
-            ))}
+            {!replacesPlanned && (
+              <>
+                <Polyline
+                  positions={chain}
+                  pathOptions={{ color: PLANNED_ROUTE_COLOR, weight: 2, opacity: 0.9, dashArray: '6 6' }}
+                >
+                  <Tooltip sticky>
+                    {label}
+                    {note && <><br />{note}</>}
+                  </Tooltip>
+                </Polyline>
+                {sortedWaypoints.map((w, i) => (
+                  <Marker key={`${leg.id}-${w.seq}`} position={chain[i]} icon={mkWaypointIcon()}>
+                    <Tooltip>{`Leg ${leg.seq} · ${w.ident}`}</Tooltip>
+                  </Marker>
+                ))}
+              </>
+            )}
+            {drawnGeometry && (
+              <RouteGeometryLayer
+                legId={leg.id}
+                legSeq={leg.seq}
+                geometry={drawnGeometry}
+                label={label}
+                note={note}
+                anchor={chain[0]}
+              />
+            )}
           </Fragment>
         );
       })}
@@ -168,7 +200,7 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
         const latlngs = flightChainsArr[i];
         return (
           <Fragment key={f.id}>
-            <Polyline positions={latlngs} pathOptions={{ color, weight: 2.5, opacity: 0.9 }}>
+            <Polyline ref={el => { trackRefs.current[i] = el; }} positions={latlngs} pathOptions={{ color, weight: 2.5, opacity: 0.9 }}>
               <Tooltip sticky>{`Leg ${i + 1}${f.aircraft ? ' — ' + f.aircraft : ''}`}</Tooltip>
             </Polyline>
             <Marker position={latlngs[0]} icon={mkIcon('#34d399')}>
@@ -182,7 +214,8 @@ export function TripMap({ flights, plannedLegs = [], onReady, preferCanvas = tru
       })}
       <BoundsController flights={flights} plannedLegs={plannedLegs} />
       {navdata && <NavdataOverlay />}
-      <MapReadySignal onReady={onReady} />
+      <FetchDetailPrompt targets={[...detailByIdent.values()]} />
+      <MapReadySignal onReady={onReady} pending={routeGeometryLoading} />
     </MapContainer>
   );
 }

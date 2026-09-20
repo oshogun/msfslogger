@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 
@@ -8,6 +8,12 @@ const HARD_TIMEOUT_MS = 8000;
 
 interface Props {
   onReady?: () => void;
+  /**
+   * True while something the map still has to draw is being fetched. Idle
+   * ticks do not count while it is set, so `onReady` cannot fire early. The
+   * hard timeout still applies.
+   */
+  pending?: boolean;
 }
 
 /**
@@ -22,8 +28,10 @@ interface Props {
  *
  * The hard timeout guarantees an export can never hang on a stalled OSM tile.
  */
-export function MapReadySignal({ onReady }: Props) {
+export function MapReadySignal({ onReady, pending = false }: Props) {
   const map = useMap();
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
 
   useEffect(() => {
     if (!onReady) return;
@@ -46,7 +54,7 @@ export function MapReadySignal({ onReady }: Props) {
         }
       });
 
-      idleTicks = loading ? 0 : idleTicks + 1;
+      idleTicks = loading || pendingRef.current ? 0 : idleTicks + 1;
       if (idleTicks >= IDLE_TICKS_REQUIRED) finish();
     }, POLL_MS);
 
