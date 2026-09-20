@@ -29,7 +29,7 @@ your work.
 ## Typical scope
 
 - **Clean build from a clean checkout** — `npm ci` then `npm run build` under
-  Node 20, exit 0, no TypeScript errors, `client/dist` and `dist/*.js` produced.
+  Node 24, exit 0, no TypeScript errors, `client/dist` and `dist/*.js` produced.
   Re-run it at the end, after any late edits.
 - **Migration rehearsal** — apply the schema change to a scratch copy that
   carries realistic rows, confirm it is idempotent on a second run, confirm old
@@ -45,6 +45,10 @@ your work.
 
 ## Rules
 
+- **Work only in the run's clone.** Your envelope names a tree path under a temporary
+  run directory (`$RUN_DIR/tree`); every edit, install, build and test happens
+  there, never under `/home/guilherme/msfslogger`. No clone path in the envelope
+  → return `blocked`.
 - **Secrets are never committed, echoed, or written into artifacts.** A task that
   needs a credential is `blocked` and escalated to the user.
 - **Destructive operations are escalated, not performed.** Dropping data,

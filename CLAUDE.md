@@ -18,7 +18,7 @@ back. The sub-agents in `.claude/agents/` (`planner`, `designer`, `backend_jr`,
 the user: they return the response envelope to you, and you validate, merge,
 and decide the next step.
 
-Standing environment facts every agent needs — Node 20 via nvm, no `sqlite3`
+Standing environment facts every agent needs — Node 24 via nvm, no `sqlite3`
 CLI, the live database, the user's running server — are in
 **[.claude/ENVIRONMENT.md](.claude/ENVIRONMENT.md)**. Read it before running
 anything.
@@ -69,7 +69,8 @@ Actions fail.
    schema change, a new endpoint, a shared type. Freeze it before any code is
    written. A run that only wires up existing contracts skips this step, and the
    skip is recorded in `intake.md`.
-4. **Implement** — delegate to `backend_jr`, `backend_sr`, `frontend_jr`, or
+4. **Implement** — create the run's fresh clone of `main` in a temp directory
+   first (see Non-negotiables), then delegate to `backend_jr`, `backend_sr`, `frontend_jr`, or
    `frontend_sr` per task (domain from `allowed_paths`, seniority from
    complexity), batched. Consecutive tasks on the same owner, the same
    implementer role, and dependency chain go to one implementer agent; two
@@ -117,6 +118,11 @@ bigger model.
 
 ### Non-negotiables
 
+- **All implementation happens in a fresh clone of `main` in a temporary run
+  directory — never in the live repo.** Details and the exact commands are in
+  `.claude/agents.md` § Rules. Run artifacts under `.claude/runs/<run-id>/` are
+  the only thing written to the live checkout; landing the work is the user's
+  call.
 - **Never touch the user's running server or live `flights.db`.** It serves
   their real logbook on port 3000. Scratch copies, other ports.
 - **You never merge unreviewed work**, and you do not review your own — the

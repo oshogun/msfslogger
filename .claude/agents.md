@@ -153,8 +153,10 @@ For tier-3 work only — see Cost discipline rule 6.
 2. **Plan** — delegate to Planner; store `plan.json`.
 3. **Design** — delegate to Designer *if the run introduces a contract*; freeze
    before code is written.
-4. **Implement** — delegate to the implementer agents (`backend_jr`,
-   `backend_sr`, `frontend_jr`, `frontend_sr`), batched per rule 2.
+4. **Implement** — first create the run's fresh clone of `main` in a temporary
+   directory (Rules § "All implementation happens in a fresh clone"), then
+   delegate to the implementer agents (`backend_jr`, `backend_sr`, `frontend_jr`,
+   `frontend_sr`), batched per rule 2. Nothing is written to the live repo.
 5. **Review** — every implementer and DevOps result goes to Reviewer before
    merge, at phase granularity. `request_changes` sends the task back to the
    same implementer agent (max 3 rounds, then escalate to the user).
@@ -185,6 +187,42 @@ For tier-3 work only — see Cost discipline rule 6.
     tier-3 runs where the design or the review is deciding something with
     real downstream cost.
 - Agents only read/write inside their `allowed_paths`.
+- **All implementation happens in a fresh clone, never in the live repo.** At
+  the start of the Implement step the Orchestrator creates the run's working
+  tree, once per run, and every implementer, DevOps and Reviewer command runs
+  there:
+
+  ```
+  RUN_DIR=$(mktemp -d /tmp/msfslogger-run-<run-id>-XXXX)   # or the session scratchpad
+  git clone --local --branch main /home/guilherme/msfslogger "$RUN_DIR/tree"
+  git -C "$RUN_DIR/tree" switch -c run/<run-id>
+  ```
+
+  - The clone is of **committed `main`** — uncommitted or untracked files in
+    the live checkout (`.claude/runs/**`, `start.sh`, `flights.db`,
+    `node_modules`) are deliberately absent. Install dependencies inside the
+    clone (`npm ci` in root and `client/`); never symlink the live
+    `node_modules` or point anything at the live `flights.db`.
+  - `allowed_paths` are relative to `$RUN_DIR/tree`. The envelope names the
+    absolute tree path; an agent that finds itself editing under
+    `/home/guilherme/msfslogger` (outside `.claude/runs/<run-id>/`) has made
+    the exact mistake this rule exists to stop, and returns `blocked`.
+  - Reading the live repo is fine (`ctx.sh` against the run's plan/design,
+    which are untracked and so not in the clone). Writing to it is not — with
+    one exception: run artifacts under `.claude/runs/<run-id>/` (intake, plan,
+    design, reviews, reports) live in the live repo, are written there by the
+    Orchestrator/Planner/Designer/Reviewer, and are not implementation.
+  - The Orchestrator commits on the `run/<run-id>` branch **in the clone** (the
+    only commits in the run). Landing the work in the live repo is the user's
+    call: the Orchestrator reports the clone path and the branch, and offers the
+    exact `git fetch <clone> run/<run-id>` / `git merge` (or `format-patch`)
+    command for the user to run. It does not merge into the live checkout
+    itself.
+  - The clone is throwaway. Scratch servers and builds inside it still use
+    another port and a copy of the database; `npm run build` there is safe
+    (it emits into the clone's `dist/`), which supersedes the
+    "build in a scratch copy of the tree" step per run. Delete `$RUN_DIR` only
+    after the user has taken the branch, or say where it was left.
 - No agent may skip Review; Orchestrator never merges unreviewed work.
 - Any agent may return `blocked` with a concrete question instead of guessing.
 - Orchestrator escalates to the user on: ambiguous requirements, destructive

@@ -6,6 +6,16 @@ first; the Orchestrator does not repeat it in the request envelope.
 Originally written during the run `2026-09-04-lnmpln-trip-planner`, promoted here
 because none of it is specific to that feature.
 
+## Implementation runs in a fresh clone, not this checkout
+
+Implementers, DevOps and Reviewer work in `$RUN_DIR/tree`, a `git clone --local
+--branch main` of this repo made by the Orchestrator in a temporary directory
+(policy: `.claude/agents.md` § Rules). The envelope gives the absolute path.
+Do not edit, build, test, `npm install` or run `git` write commands in
+`/home/guilherme/msfslogger`; reading it is fine. The clone has no `flights.db`,
+no `node_modules`, no `start.sh` — install deps in the clone and use a scratch
+database there.
+
 ## The user's server is running. Leave it alone.
 
 `node dist/index.js` serves the app on port `3000` against the live
@@ -46,10 +56,10 @@ afterward, which leaves the server down with no way back in for the agent.
   — do not reconstruct the launch command by hand from a filtered `/proc/<pid>/environ`
   grep; use the script, or ask the user to.
 
-## Use Node 20. The default `node` on this machine is wrong.
+## Use Node 24. The default `node` on this machine is wrong.
 
     $ node -v
-    v26.3.1          # default — WRONG, .nvmrc pins 20
+    v26.3.1          # default — WRONG, .nvmrc pins 24
 
 `better-sqlite3` is a native addon with no prebuilt binary for Node 26's ABI, so
 `require('better-sqlite3')` throws and the server will not start under the
@@ -58,18 +68,18 @@ something to "fix" by rebuilding or upgrading the dependency.
 
 Prefix every command that runs node, npm, npx or the server with:
 
-    export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+    export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 24
 
-Verified under Node 20.20.2: `better-sqlite3` loads and opens a database, `tsc`
+Verified under Node 24.21.0: `better-sqlite3` loads and opens a database, `tsc`
 5.9.3 runs. `nvm use` does not persist between Bash calls — shell state is not
 carried over — so repeat it in the same command as the work.
 
 ## There is no `sqlite3` CLI on this machine
 
 Do not install it and do not treat its absence as a blocker. Run the query
-through `better-sqlite3` under Node 20, which is what the app itself uses:
+through `better-sqlite3` under Node 24, which is what the app itself uses:
 
-    export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20 >/dev/null
+    export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 24 >/dev/null
     node -e "
       const D=require('better-sqlite3');
       const db=new D('flights.db', { readonly: true });

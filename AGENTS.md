@@ -7,7 +7,7 @@ when reading those files.
 ## Start here
 
 Every agent reads [.claude/ENVIRONMENT.md](.claude/ENVIRONMENT.md) before running
-commands. Use Node 20 via nvm for every Node/npm/npx command. Protect the user's
+commands. Use Node 24 via nvm for every Node/npm/npx command. Protect the user's
 server on port 3000 and live `flights.db`; verification that writes uses a
 scratch database and another port. Preserve unrelated working-tree changes.
 Read `README.md` before changing behavior it documents.

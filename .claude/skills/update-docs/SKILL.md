@@ -150,7 +150,7 @@ done
 ```
 
 ```bash
-export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use
 npx tsc --noEmit && npm run test:types && npm test
 ```
 

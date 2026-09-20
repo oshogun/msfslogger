@@ -1,0 +1,154 @@
+{
+  "note": "Excerpts from the operator flights.db, read-only, 2026-09-19. Used as fixtures-by-example for the replay engine; not a wire format.",
+  "flight_56_gap_excerpt": {
+    "flight_id": 56,
+    "description": "the one 36 s recording gap in the largest real flight (2242 points); indexes 1021 -> 1022",
+    "points": [
+      {
+        "id": 43842,
+        "flight_id": 56,
+        "ts": "2026-09-07T15:11:34.445Z",
+        "lat": 56.249664,
+        "lon": -128.097034,
+        "altitude_ft": 12033.3,
+        "airspeed_kts": 133.3,
+        "ground_speed_kts": 159.9,
+        "heading_deg": 306.6,
+        "vertical_speed_fpm": -1.9,
+        "on_ground": 0
+      },
+      {
+        "id": 43843,
+        "flight_id": 56,
+        "ts": "2026-09-07T15:11:40.444Z",
+        "lat": 56.252267,
+        "lon": -128.103493,
+        "altitude_ft": 12032.2,
+        "airspeed_kts": 133,
+        "ground_speed_kts": 159.8,
+        "heading_deg": 306.7,
+        "vertical_speed_fpm": -20.4,
+        "on_ground": 0
+      },
+      {
+        "id": 43844,
+        "flight_id": 56,
+        "ts": "2026-09-07T15:11:46.453Z",
+        "lat": 56.254866,
+        "lon": -128.109942,
+        "altitude_ft": 12032,
+        "airspeed_kts": 132.9,
+        "ground_speed_kts": 159.6,
+        "heading_deg": 306.5,
+        "vertical_speed_fpm": -6,
+        "on_ground": 0
+      },
+      {
+        "id": 43845,
+        "flight_id": 56,
+        "ts": "2026-09-07T15:12:22.465Z",
+        "lat": 56.255063,
+        "lon": -128.110433,
+        "altitude_ft": 12031.9,
+        "airspeed_kts": 132.9,
+        "ground_speed_kts": 159.6,
+        "heading_deg": 306.5,
+        "vertical_speed_fpm": -5.7,
+        "on_ground": 0
+      },
+      {
+        "id": 43846,
+        "flight_id": 56,
+        "ts": "2026-09-07T15:12:28.437Z",
+        "lat": 56.257645,
+        "lon": -128.116872,
+        "altitude_ft": 12032,
+        "airspeed_kts": 133,
+        "ground_speed_kts": 159.6,
+        "heading_deg": 306.6,
+        "vertical_speed_fpm": -28.1,
+        "on_ground": 0
+      }
+    ]
+  },
+  "flight_75_antimeridian_excerpt": {
+    "flight_id": 75,
+    "description": "the raw lon jump across 180 deg; unwrapLonChain must make this continuous",
+    "points": [
+      {
+        "id": 56954,
+        "flight_id": 75,
+        "ts": "2026-09-12T19:19:23.296Z",
+        "lat": 52.331281,
+        "lon": -179.991806,
+        "altitude_ft": 11853,
+        "airspeed_kts": 169.7,
+        "ground_speed_kts": 196.3,
+        "heading_deg": 274.6,
+        "vertical_speed_fpm": -0.6,
+        "on_ground": 0
+      },
+      {
+        "id": 56955,
+        "flight_id": 75,
+        "ts": "2026-09-12T19:19:28.297Z",
+        "lat": 52.331851,
+        "lon": -179.999173,
+        "altitude_ft": 11852.6,
+        "airspeed_kts": 169.7,
+        "ground_speed_kts": 196.3,
+        "heading_deg": 274.5,
+        "vertical_speed_fpm": -11.1,
+        "on_ground": 0
+      },
+      {
+        "id": 56956,
+        "flight_id": 75,
+        "ts": "2026-09-12T19:19:34.306Z",
+        "lat": 52.332528,
+        "lon": 179.991978,
+        "altitude_ft": 11852.7,
+        "airspeed_kts": 169.7,
+        "ground_speed_kts": 196.2,
+        "heading_deg": 274.5,
+        "vertical_speed_fpm": -0.4,
+        "on_ground": 0
+      },
+      {
+        "id": 56957,
+        "flight_id": 75,
+        "ts": "2026-09-12T19:19:39.310Z",
+        "lat": 52.333096,
+        "lon": 179.984615,
+        "altitude_ft": 11852.6,
+        "airspeed_kts": 169.5,
+        "ground_speed_kts": 196.2,
+        "heading_deg": 274.6,
+        "vertical_speed_fpm": -0.4,
+        "on_ground": 0
+      },
+      {
+        "id": 56958,
+        "flight_id": 75,
+        "ts": "2026-09-12T19:19:45.295Z",
+        "lat": 52.33378,
+        "lon": 179.9758,
+        "altitude_ft": 11852.6,
+        "airspeed_kts": 169.6,
+        "ground_speed_kts": 196.2,
+        "heading_deg": 274.7,
+        "vertical_speed_fpm": 0,
+        "on_ground": 0
+      }
+    ]
+  },
+  "measured": {
+    "largest_flight": {
+      "id": 56,
+      "point_count": 2242,
+      "json_bytes": 672443
+    },
+    "total_points_in_db": 58046,
+    "flights": 62
+  }
+}

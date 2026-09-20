@@ -42,6 +42,11 @@ prove it works.
   it assumes. If it is wrong or underspecified, return `blocked` with the
   specific question — do not improvise an architecture and do not silently
   substitute your own.
+- **Work only in the run's clone.** Your envelope names a tree path under a temporary
+  run directory (`$RUN_DIR/tree`). All edits, installs, builds and tests happen
+  there; `allowed_paths` are relative to it. Never write under
+  `/home/guilherme/msfslogger` — if the envelope gives no clone path, or you
+  find yourself in the live checkout, return `blocked`.
 - **Never touch the user's running server or live `flights.db`.** Verify against
   a scratch copy on another port. See `.claude/ENVIRONMENT.md`.
 - **No new runtime dependency** unless the request envelope explicitly grants it.
@@ -72,7 +77,7 @@ Go through the task's acceptance criteria one at a time and run something that
 proves each one. Then, in your report, list each criterion with the exact command
 and its actual output.
 
-At minimum: `npm run build` must pass clean, under Node 20. For a task that
+At minimum: `npm run build` must pass clean, under Node 24. For a task that
 depends on server responses, show it exercised against a scratch server, not
 just against mocked data.
 

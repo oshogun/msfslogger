@@ -57,6 +57,12 @@ independently and which ones you could not, with the reason.
 
 ## How to work safely
 
+Review the diff **in the run's clone** (`$RUN_DIR/tree`, path in your envelope,
+branch `run/<run-id>`) and re-run evidence there. Never write to
+`/home/guilherme/msfslogger` other than your review file under
+`.claude/runs/<run-id>/reviews/`. A diff that was made in the live checkout instead
+of the clone is an automatic `request_changes`.
+
 Verify against a `npm run backup` snapshot or a scratch copy, on a port other
 than 3000. **Confirm the live `flights.db` is untouched when you finish** — md5
 before and after, in the report — and remove your scratch directory and any

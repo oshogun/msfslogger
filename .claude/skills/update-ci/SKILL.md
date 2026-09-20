@@ -60,9 +60,9 @@ this is the condensed version:
   running either directly in this checkout, even "just to check the workflow
   step works," is a live action against the running server. Verify build
   steps in a scratch clone only.
-- **Node 20 via nvm for every command** — this machine's default `node` is a
+- **Node 24 (the `.nvmrc` pin) via nvm for every command** — this machine's default `node` is a
   later major with no prebuilt `better-sqlite3` binary for its ABI:
-  `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20` prefixed on
+  `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use` (reads `.nvmrc`) prefixed on
   everything, in the same command (shell state doesn't persist across Bash
   calls). `actions/setup-node@v4` with `node-version-file: .nvmrc` already
   does this correctly inside the workflow — the guard is only for your local
@@ -78,13 +78,13 @@ this is the condensed version:
 Same shape regardless of tier — scale the depth to the change's size.
 
 ```bash
-# from the real checkout, copy the tracked+untracked-but-not-ignored tree
-# (matches what a fresh CI checkout + your not-yet-committed changes look like)
-SCRATCH=$(mktemp -d)
-git ls-files --cached --others --exclude-standard | tar -cf - -T - | tar -C "$SCRATCH" -xf -
-cd "$SCRATCH"
+# All CI work happens in a fresh clone of main, never in the live checkout
+# (.claude/agents.md § Rules): edit the workflow and verify it there.
+RUN_DIR=$(mktemp -d /tmp/msfslogger-run-<run-id>-XXXX)
+git clone --local --branch main /home/guilherme/msfslogger "$RUN_DIR/tree"
+cd "$RUN_DIR/tree" && git switch -c run/<run-id>
 
-export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 20
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use
 npm ci
 (cd client && npm ci)
 # then run, in order, exactly the commands the new/changed workflow step(s) run
@@ -97,7 +97,7 @@ by a human locally and by a CI job — look at it and
 `.claude/runs/2026-09-17-frontend-integration-tests/design.md` §4 before
 inventing a new pattern.
 
-Confirm afterward: the real checkout's `client/dist/index.html` and
+Confirm afterward: the live checkout's `client/dist/index.html` and
 `flights.db` md5s are unchanged (`.claude/ENVIRONMENT.md` has the caveat that
 WAL checkpointing can change `flights.db`'s bytes on its own — compare
 structure/content if the md5 moved, don't assume contamination from that
