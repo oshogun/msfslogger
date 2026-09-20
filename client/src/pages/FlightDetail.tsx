@@ -439,7 +439,7 @@ export function FlightDetail() {
         </div>
       </div>
 
-      {(flight.points?.length ?? 0) >= 2 && (
+      {flight.end_time !== null && (flight.points?.length ?? 0) >= 2 && (
         <div className="replay-section">
           <div className="section-title">Replay</div>
           <button
