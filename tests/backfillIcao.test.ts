@@ -4,7 +4,7 @@
 // download the airport dataset over the network.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createScratchDb, destroyScratchDb, seedFlight, useScratchDbEnv, type ScratchDb } from './helpers/db';
+import { createScratchDb, destroyScratchDb, seedFlight, seedPoints, useScratchDbEnv, type ScratchDb } from './helpers/db';
 import { airportsMock, KSBA, KMRY } from './helpers';
 
 vi.mock('../src/airports', async () => (await import('./helpers')).airportsMock);
@@ -124,5 +124,56 @@ describe('src/backfill-icao.ts', () => {
     await mod.main();
 
     expect(airportsMock.findNearestAirport).not.toHaveBeenCalled();
+  });
+
+  it('backfillIcao(db, id) fills only that flight and leaves other incomplete flights alone', async () => {
+    const blank = { departure_icao: null, departure_name: null, arrival_icao: null, arrival_name: null };
+    const a = seedFlight(scratch.db, blank);
+    const b = seedFlight(scratch.db, blank);
+    airportsMock.findNearestAirport.mockReturnValue({ icao: 'KSBA', name: 'Santa Barbara Muni' });
+
+    const mod = await import('../src/backfill-icao');
+    mod.backfillIcao(scratch.db, a);
+
+    expect(readRow(a)).toEqual({ departure_icao: 'KSBA', departure_name: 'Santa Barbara Muni', arrival_icao: 'KSBA', arrival_name: 'Santa Barbara Muni' });
+    expect(readRow(b)).toEqual(blank);
+  });
+
+  it('POST /flights/combine fills ICAO and names on the combined flight', async () => {
+    const blank = { departure_icao: null, departure_name: null, arrival_icao: null, arrival_name: null };
+    const a = seedFlight(scratch.db, { ...blank, start_time: '2026-09-09T12:00:00.000Z', end_time: '2026-09-09T12:30:00.000Z', arrival_lat: KMRY.lat, arrival_lon: KMRY.lon });
+    const b = seedFlight(scratch.db, { ...blank, start_time: '2026-09-09T13:00:00.000Z', end_time: '2026-09-09T13:30:00.000Z' });
+    seedPoints(scratch.db, a, [{ ts: '2026-09-09T12:00:00.000Z' }, { ts: '2026-09-09T12:30:00.000Z' }]);
+    seedPoints(scratch.db, b, [{ ts: '2026-09-09T13:00:00.000Z' }, { ts: '2026-09-09T13:30:00.000Z' }]);
+    airportsMock.findNearestAirport.mockImplementation((lat: number) =>
+      lat === KSBA.lat ? { icao: 'KSBA', name: 'Santa Barbara Muni' } : { icao: 'KMRY', name: 'Monterey Rgnl' });
+
+    // vi.resetModules() in beforeEach gave this test a fresh '../src/db' with no
+    // handle, so the route's getDb() needs the module registry's own connection.
+    const dbMod = await import('../src/db');
+    dbMod.initDb(scratch.file);
+
+    const { default: express } = await import('express');
+    const { createFlightsRouter } = await import('../src/routes/flights');
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createFlightsRouter({ appState: { currentFlightId: null } } as never));
+    const server = await new Promise<import('http').Server>(r => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    try {
+      const { port } = server.address() as import('net').AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${port}/api/flights/combine`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id1: a, id2: b }),
+      });
+      expect(res.status).toBe(201);
+      const { id } = await res.json() as { id: number };
+      const row = readRow(id);
+      expect(row.departure_icao).toBe('KSBA');
+      expect(row.departure_name).toBe('Santa Barbara Muni');
+      expect(row.arrival_icao).toBe('KMRY');
+      expect(row.arrival_name).toBe('Monterey Rgnl');
+    } finally {
+      await new Promise(r => server.close(r));
+      dbMod.closeDb();
+    }
   });
 });
