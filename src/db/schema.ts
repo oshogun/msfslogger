@@ -637,6 +637,23 @@ export function applySchema(db: Database.Database): void {
   // call, never before it (see the function's own comment for why).
   migratePlannedLegsTripIdNullable(db);
 
+  // User intent for the navdata replica: a facility a manual request asked
+  // for, kept until the replica can answer it or expires_at passes. Holds no
+  // navdata content. region is nullable, so the unique index does not stop
+  // two NULL-region duplicates; the writer upserts explicitly.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS navdata_requests (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind         TEXT NOT NULL CHECK (kind IN ('A','W')),
+      ident        TEXT NOT NULL,
+      region       TEXT,
+      requested_at TEXT NOT NULL,
+      expires_at   TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_navdata_requests_key
+      ON navdata_requests (kind, ident, region);
+  `);
+
   // Unconditional and idempotent: an index can be missing even when its column
   // exists. Both are partial UNIQUE indexes and are load-bearing — they turn a
   // convention into a database guarantee. A SQLITE_CONSTRAINT from either means

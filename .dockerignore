@@ -7,3 +7,8 @@ flights.db-shm
 flights.db-wal
 flight_plans
 .git
+navdata.db
+navdata.db-shm
+navdata.db-wal
+navdata.db.incoming-*
+navdata/
