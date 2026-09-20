@@ -13,15 +13,15 @@ it. With no replica, everything else works exactly as before.
   checkboxes: airports, navaids, waypoints, airways, runways). The panel only
   appears once the server has a replica, and every checkbox starts off — nothing
   is fetched until you turn one on. Layers draw *beneath* the flown track.
-- **Zoom gates.** A layer below its zoom is greyed with the reason and is not
-  fetched: airports 6, airways 7, navaids 8, waypoints 9, runways 12.
+- **Zoom gates.** A layer below its zoom is greyed with the reason and returns no
+  features (the server lists it under `gated`): airports 6, airways 7, navaids 8, waypoints 9, runways 12.
 - **Coverage notes.** Airports are complete worldwide. Navaids and fixes are
   only known where the simulator has been asked, so the panel says *"Not fetched
   here yet"* (never looked) versus *"None here"* (looked, found nothing), and
   *"Partly fetched here (n%)"* in between. Too many results say *"zoom in for
   more"*.
 - **Fetch detail.** An airport known only by position shows a *Fetch detail*
-  button; it asks the sidecar to fetch runways and procedures the next time it
+  button (for up to the five nearest such airports, while the Airports layer is on); it asks the sidecar to fetch runways and procedures the next time it
   polls. Only offered for real airport idents.
 - **Expanded planned routes.** For a plan with a SID/STAR/approach or airways,
   the planned line is replaced by the expanded chains when the replica can
@@ -95,19 +95,19 @@ store, and a browser session cookie is rejected here. They are **not** in
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/navdata/snapshot` | Multipart upload, one part named `navdataSnapshot`: a gzipped NDJSON file (header line, `{"t":"<table>","r":{…}}` row lines in parent-before-child order, footer line with row counts). Max 64 MiB compressed. Streamed into a temporary file beside `navdata.db`, verified (schema version, per-table counts against the footer, column check), then swapped in atomically. Answers a `SnapshotAck` with the per-table counts actually written. |
+| POST | `/api/navdata/snapshot` | Multipart upload, one part named `navdataSnapshot`: a gzipped NDJSON file (header line, `{"t":"<table>","r":{…}}` row lines in parent-before-child order, footer line with row counts). Max 64 MiB compressed. The upload is spooled to a per-process private temporary directory, then streamed into a temporary replica file beside `navdata.db`, verified (schema version, per-table counts against the footer, column check), then swapped in atomically. Answers a `SnapshotAck` with the per-table counts actually written. |
 | POST | `/api/navdata/rows` | JSON `IncrementalBatch` (`snapshotId`, `fromRev`, `toRev`, `rows`, `more`). At most 2000 rows and 4 MiB per batch. This one path is exempt from the global 100 kB JSON limit (a path-scoped `express.json({ limit: '4mb' })` sits above the global parser; every other path still rejects at 100 kB). The whole batch is one transaction. |
 | GET | `/api/navdata/demand` | What the sidecar should fetch: `airports` (idents wanted in full detail) and `waypoints` (fixes wanted with their airway routes), at most 50 entries per poll (`cap`, echoed), `more: true` when truncated. Derived from manual requests, then active-trip legs, then planned legs, minus what the replica already holds. `USER`-type waypoints are never demanded. |
-| POST | `/api/navdata/state` | Sidecar health (`nav.off`/`nav.unavailable`/`nav.bulk`/`nav.ready`/`nav.error`). Always `204`. Kept in memory only; `/status` reports it as `sidecar: null` when the newest report is older than 15 minutes. |
+| POST | `/api/navdata/state` | Sidecar health (`nav.off`/`nav.unavailable`/`nav.bulk`/`nav.ready`/`nav.error`). `204` on success (`400 NAVDATA_BAD_BATCH` if the body is not a state report; a failure while storing it is swallowed into `204`, since the sidecar never retries). Kept in memory only; `/status` reports it as `sidecar: null` when the newest report is older than 15 minutes. |
 
-Error bodies are `{ "ok": false, "code", "message" }`:
+Error bodies are `{ "ok": false, "code", "message" }` (a bad or missing token is the ingest router's usual `401 { "error": … }`):
 
 | HTTP | Code | Meaning |
 |---|---|---|
 | 409 | `NAVDATA_SNAPSHOT_MISMATCH` | Batch epoch differs from the replica's (or no replica). Carries `serverSnapshotId` (null if none) and `serverRev`. Send a snapshot. |
 | 409 | `NAVDATA_SCHEMA_UNSUPPORTED` | Schema version differs. Carries `serverSchemaVersion`. Also used for a replica whose columns do not match the schema. Retrying cannot help. |
-| 400 | `NAVDATA_BAD_BATCH` | Malformed input, unknown row type/column, or a row that violates a constraint (for example a runway whose airport row does not exist). The whole batch is rolled back. |
-| 413 | `NAVDATA_TOO_LARGE` | Over the row, byte, or upload limit. |
+| 400 | `NAVDATA_BAD_BATCH` | More than 2000 rows in a batch, malformed input, unknown row type/column, or a row that violates a constraint (for example a runway whose airport row does not exist). The whole batch is rolled back. |
+| 413 | `NAVDATA_TOO_LARGE` | Over a byte limit (a `/rows` body over 4 MiB, or a snapshot upload over 64 MiB). |
 | 503 | `NAVDATA_BUSY` | The replica is being replaced (a snapshot is uploading or being swapped). `Retry-After` is set; `/rows` is refused for the whole import so a batch can never land in the epoch that is about to be replaced. |
 
 ## Query endpoints (session)
@@ -157,7 +157,7 @@ expire after 7 days and are deleted once the replica answers them. See
   treated as absent; the server still starts.
 - Snapshot uploads are staged in a per-process private temporary directory and
   removed after import.
-- Ingest cost: a 41,871-row airport snapshot imports in a few seconds on a
+- Ingest cost: a full worldwide airport index imports in a few seconds on a
   desktop machine.
 
 See also [api.md](api.md), [configuration.md](configuration.md),
