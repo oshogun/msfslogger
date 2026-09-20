@@ -1,0 +1,542 @@
+// Scratch replica files in the OS temp dir, never flights.db. Synthetic
+// idents and coordinates only — no real navdata is committed to this repo.
+
+import { afterEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import zlib from 'zlib';
+import { applyNavdataSchema } from '../src/navdata/schema';
+import { wptKey, legKey } from '../src/navdata/keys';
+import {
+  closeNavDb,
+  getNavDb,
+  openNavdata,
+  resolveNavdataPath,
+} from '../src/navdata/connection';
+import {
+  applyIncrementalBatch,
+  applyNavRows,
+  NavdataStoreError,
+  readNavMeta,
+  verifyNavdataColumns,
+} from '../src/navdata/store';
+import { importNavdataSnapshot } from '../src/navdata/snapshot';
+import type { NavRow, NavRowType } from '../src/navdata/wire';
+
+const dirs: string[] = [];
+const handles: Database.Database[] = [];
+const savedEnv = process.env.NAVDATA_DB_PATH;
+
+function tempDir(): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'navdata-store-'));
+  dirs.push(d);
+  return d;
+}
+
+/** A standalone replica file for the row-level rules. */
+function scratchReplica(): Database.Database {
+  const db = new Database(path.join(tempDir(), 'rows.db'));
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  applyNavdataSchema(db);
+  handles.push(db);
+  return db;
+}
+
+/** Points NAVDATA_DB_PATH at a fresh directory and returns it. */
+function replicaDir(): string {
+  const d = tempDir();
+  process.env.NAVDATA_DB_PATH = path.join(d, 'navdata.db');
+  return d;
+}
+
+type Row = Record<string, string | number | null>;
+const row = (t: NavRowType, r: Row): NavRow => ({ t, r: { rev: 1, ...r } });
+
+const apply = (db: Database.Database, ...rows: NavRow[]) => applyNavRows(db, rows);
+const one = (db: Database.Database, sql: string, ...args: unknown[]) =>
+  db.prepare(sql).get(...args) as Record<string, string | number | null> | undefined;
+const count = (db: Database.Database, table: string): number =>
+  (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+const ZZAA_DETAIL: Row = {
+  ident: 'ZZAA',
+  name: 'Zulu Alpha Field',
+  n_runways: 2,
+  detail_state: 'detail',
+  detail_fetched_at: 1_000,
+  detail_runways: 2,
+  rev: 1,
+};
+const ZZAA_POSITION: Row = { ident: 'ZZAA', lat: 10.5, lon: 20.25, position_source: 'list', rev: 2 };
+
+// ── Snapshot fixtures ────────────────────────────────────────────────────────
+
+interface SnapshotParts {
+  snapshotId?: string;
+  rev?: number;
+  schemaVersion?: number;
+  rows?: NavRow[];
+  footerRows?: number;
+  footerCounts?: Partial<Record<NavRowType, number>>;
+}
+
+/** Writes a gzipped NDJSON snapshot outside the replica directory. */
+function writeSnapshot(parts: SnapshotParts = {}): string {
+  const rows = parts.rows ?? [row('airport', { ident: 'ZZAA', name: 'Zulu Alpha Field' })];
+  const counts: Record<string, number> = {};
+  for (const r of rows) counts[r.t] = (counts[r.t] ?? 0) + 1;
+  const header = {
+    kind: 'header',
+    v: 1,
+    schemaVersion: parts.schemaVersion ?? 1,
+    snapshotId: parts.snapshotId ?? 'snapshot-1',
+    rev: parts.rev ?? 7,
+    simId: '2024',
+    simAppName: 'Test Sim',
+    simAppVersion: '1.0.0',
+    sidecarVersion: '0.0.1-test',
+    createdAt: 1_700_000_000_000,
+    counts,
+  };
+  const footer = {
+    kind: 'footer',
+    rows: parts.footerRows ?? rows.length,
+    counts: parts.footerCounts ?? counts,
+  };
+  const lines = [header, ...rows, footer].map(o => JSON.stringify(o)).join('\n');
+  const file = path.join(tempDir(), 'navdata-snapshot.ndjson.gz');
+  fs.writeFileSync(file, zlib.gzipSync(`${lines}\n`));
+  return file;
+}
+
+afterEach(() => {
+  closeNavDb();
+  for (const h of handles.splice(0)) if (h.open) h.close();
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  if (savedEnv === undefined) delete process.env.NAVDATA_DB_PATH;
+  else process.env.NAVDATA_DB_PATH = savedEnv;
+});
+
+describe('merge rules for airport, navaid and waypoint', () => {
+  it('merges detail then position without losing either', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', ZZAA_DETAIL));
+    const result = apply(db, row('airport', ZZAA_POSITION));
+
+    expect(result).toEqual({ applied: 1, counts: { airport: 1 } });
+    expect(one(db, 'SELECT * FROM nav_airport WHERE ident = ?', 'ZZAA')).toMatchObject({
+      name: 'Zulu Alpha Field',
+      n_runways: 2,
+      detail_state: 'detail',
+      lat: 10.5,
+      lon: 20.25,
+      position_source: 'list',
+      rev: 2,
+    });
+  });
+
+  it('merges position then detail without losing either', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', ZZAA_POSITION));
+    apply(db, row('airport', { ...ZZAA_DETAIL, rev: 3 }));
+
+    expect(one(db, 'SELECT * FROM nav_airport WHERE ident = ?', 'ZZAA')).toMatchObject({
+      name: 'Zulu Alpha Field',
+      detail_state: 'detail',
+      lat: 10.5,
+      lon: 20.25,
+      position_source: 'list',
+      rev: 3,
+    });
+  });
+
+  it('leaves stored values alone on a thin re-fetch', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', ZZAA_DETAIL), row('airport', ZZAA_POSITION));
+    const before = one(db, 'SELECT * FROM nav_airport WHERE ident = ?', 'ZZAA');
+
+    const result = apply(db, row('airport', { ident: 'ZZAA', rev: 9 }));
+
+    expect(result.applied).toBe(0);
+    expect(one(db, 'SELECT * FROM nav_airport WHERE ident = ?', 'ZZAA')).toEqual(before);
+  });
+
+  it('writes nothing, and does not bump rev, when the merged row is unchanged', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', ZZAA_DETAIL));
+
+    const result = apply(db, row('airport', { ...ZZAA_DETAIL, rev: 42 }));
+
+    expect(result).toEqual({ applied: 0, counts: {} });
+    expect(one(db, 'SELECT rev FROM nav_airport WHERE ident = ?', 'ZZAA')).toEqual({ rev: 1 });
+  });
+
+  it('keeps a facility position against a list report, and takes the next facility one', () => {
+    const db = scratchReplica();
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZV', region: 'ZZ', lat: 11, lon: 21, alt_m: 100,
+      position_source: 'facility', position_fetched_at: 500, rev: 1,
+    }));
+
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZV', region: 'ZZ', lat: 99, lon: 99, position_source: 'list', rev: 2,
+    }));
+    expect(one(db, 'SELECT * FROM nav_navaid WHERE ident = ?', 'ZZV')).toMatchObject({
+      lat: 11, lon: 21, position_source: 'facility',
+    });
+
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZV', region: 'ZZ', lat: 12, lon: 22,
+      position_source: 'facility', position_fetched_at: 900, rev: 3,
+    }));
+    expect(one(db, 'SELECT * FROM nav_navaid WHERE ident = ?', 'ZZV')).toMatchObject({
+      lat: 12, lon: 22, position_fetched_at: 900,
+    });
+  });
+
+  it('fills a position when the stored row has no source to demote', () => {
+    const db = scratchReplica();
+    apply(db, row('navaid', { kind: 'N', ident: 'ZZN', region: 'ZZ', name: 'Zulu November', rev: 1 }));
+
+    apply(db, row('navaid', {
+      kind: 'N', ident: 'ZZN', region: 'ZZ', lat: 13, lon: 23, position_source: 'minimal', rev: 2,
+    }));
+
+    expect(one(db, 'SELECT * FROM nav_navaid WHERE ident = ?', 'ZZN')).toMatchObject({
+      name: 'Zulu November', lat: 13, lon: 23, position_source: 'minimal',
+    });
+  });
+
+  it('ignores a position source that arrives without a position', () => {
+    const db = scratchReplica();
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZW', region: 'ZZ', lat: 14, lon: 24, position_source: 'list', rev: 1,
+    }));
+
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZW', region: 'ZZ', name: 'Zulu Whiskey',
+      position_source: 'facility', position_fetched_at: 700, rev: 2,
+    }));
+    expect(one(db, 'SELECT * FROM nav_navaid WHERE ident = ?', 'ZZW')).toMatchObject({
+      lat: 14, lon: 24, position_source: 'list', position_fetched_at: null, name: 'Zulu Whiskey',
+    });
+
+    apply(db, row('navaid', {
+      kind: 'V', ident: 'ZZW', region: 'ZZ', lat: 15, lon: 25, position_source: 'list', rev: 3,
+    }));
+    expect(one(db, 'SELECT * FROM nav_navaid WHERE ident = ?', 'ZZW')).toMatchObject({
+      lat: 15, lon: 25, position_source: 'list',
+    });
+  });
+
+  it('keeps three same-ident waypoints apart by position', () => {
+    const db = scratchReplica();
+    const at = (lat: number, lon: number): NavRow =>
+      row('waypoint', { wpt_key: wptKey('ZZFIX', 'ZZ', lat, lon), ident: 'ZZFIX', region: 'ZZ', lat, lon });
+
+    apply(db, at(30.1, 40.1), at(30.2, 40.2), at(30.3, 40.3));
+
+    expect(count(db, 'nav_waypoint')).toBe(3);
+    expect(db.prepare('SELECT lat FROM nav_waypoint ORDER BY lat').all()).toEqual([
+      { lat: 30.1 }, { lat: 30.2 }, { lat: 30.3 },
+    ]);
+    // 4e-7 degrees is inside the key's ~1.1 m resolution: the same fix, not a fourth.
+    apply(db, at(30.1 + 4e-7, 40.1));
+    expect(count(db, 'nav_waypoint')).toBe(3);
+  });
+
+  it('never deletes an airport row when the airport is touched again', () => {
+    const db = scratchReplica();
+    apply(db,
+      row('airport', ZZAA_DETAIL),
+      row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', heading_deg: 90, length_m: 2000 }),
+      row('frequency', { freq_key: 'ZZAA|1|118000000', airport_ident: 'ZZAA', freq_type: 1, frequency_hz: 118_000_000 }),
+      row('procedure', { proc_key: 'ZZAA|SID|ZZONE1||||', airport_ident: 'ZZAA', kind: 'SID', name: 'ZZONE1' }),
+      row('procedure_transition', { trans_key: 'ZZAA|SID|ZZONE1||||common|', proc_key: 'ZZAA|SID|ZZONE1||||', role: 'common', name: '' }),
+      row('procedure_leg', { trans_key: 'ZZAA|SID|ZZONE1||||common|', seq: 0, leg_type: 18, fix_ident: 'ZZFIX', fix_lat: 30.1, fix_lon: 40.1 }),
+    );
+
+    // A later touch of the airport row must not cascade its children away.
+    expect(apply(db, row('airport', { ident: 'ZZAA', name: 'Zulu Alpha Intl', rev: 5 })).applied).toBe(1);
+
+    expect(one(db, 'SELECT name FROM nav_airport WHERE ident = ?', 'ZZAA')).toEqual({ name: 'Zulu Alpha Intl' });
+    expect(count(db, 'nav_runway')).toBe(1);
+    expect(count(db, 'nav_airport_frequency')).toBe(1);
+    expect(count(db, 'nav_procedure')).toBe(1);
+    expect(count(db, 'nav_procedure_transition')).toBe(1);
+    expect(count(db, 'nav_procedure_leg')).toBe(1);
+  });
+});
+
+describe('the other tables: last wins, by key', () => {
+  it('dedupes an airway leg reported from either end', () => {
+    const db = scratchReplica();
+    const a = wptKey('ZZAAA', 'ZZ', 31, 41);
+    const b = wptKey('ZZBBB', 'ZZ', 32, 42);
+    const base = {
+      leg_key: legKey('ZZ1', a, b), airway: 'ZZ1',
+      min_lat: 31, max_lat: 32, min_lon: 41, max_lon: 42,
+    };
+
+    apply(db, row('airway_leg', {
+      ...base, from_key: a, to_key: b,
+      from_ident: 'ZZAAA', from_region: 'ZZ', from_lat: 31, from_lon: 41,
+      to_ident: 'ZZBBB', to_region: 'ZZ', to_lat: 32, to_lon: 42,
+    }));
+    const second = apply(db, row('airway_leg', {
+      ...base, from_key: b, to_key: a,
+      from_ident: 'ZZBBB', from_region: 'ZZ', from_lat: 32, from_lon: 42,
+      to_ident: 'ZZAAA', to_region: 'ZZ', to_lat: 31, to_lon: 41,
+    }));
+
+    expect(count(db, 'nav_airway_leg')).toBe(1);
+    expect(second.applied).toBe(1);
+    expect(one(db, 'SELECT from_ident FROM nav_airway_leg')).toEqual({ from_ident: 'ZZBBB' });
+
+    // A report identical to the stored row is not a write.
+    expect(apply(db, row('airway_leg', {
+      ...base, from_key: b, to_key: a,
+      from_ident: 'ZZBBB', from_region: 'ZZ', from_lat: 32, from_lon: 42,
+      to_ident: 'ZZAAA', to_region: 'ZZ', to_lat: 31, to_lon: 41,
+    })).applied).toBe(0);
+  });
+
+  it('overwrites runway and coverage-cell rows instead of merging them', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', { ident: 'ZZAA' }));
+    apply(db, row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2000, width_m: 45 }));
+    // A column the second report leaves out is cleared, not kept: these rows
+    // do not merge.
+    apply(db, row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2500, rev: 2 }));
+    expect(one(db, 'SELECT length_m, width_m FROM nav_runway')).toEqual({ length_m: 2500, width_m: null });
+
+    apply(db, row('coverage_cell', { kind: 'W', cell_id: 1234, harvested_at: 500, harvest_count: 4, row_count: 9 }));
+    apply(db, row('coverage_cell', { kind: 'W', cell_id: 1234, harvested_at: 600, harvest_count: 1, row_count: 0, rev: 2 }));
+    expect(one(db, 'SELECT harvested_at, harvest_count, row_count FROM nav_coverage_cell')).toEqual({
+      harvested_at: 600, harvest_count: 1, row_count: 0,
+    });
+  });
+
+  it('never moves nav_absent.first_seen_at forward, and takes the rest last-wins', () => {
+    const db = scratchReplica();
+    const absent = (over: Row): NavRow =>
+      row('absent', { kind: 'W', ident: 'ZZGONE', region: 'ZZ', reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000, attempts: 1, ...over });
+
+    apply(db, absent({}));
+    apply(db, absent({ first_seen_at: 5_000, last_checked_at: 5_000, attempts: 3, reason: 'exception', rev: 2 }));
+    expect(one(db, 'SELECT * FROM nav_absent')).toMatchObject({
+      first_seen_at: 1_000, last_checked_at: 5_000, attempts: 3, reason: 'exception',
+    });
+
+    apply(db, absent({ first_seen_at: 200, last_checked_at: 6_000, rev: 3 }));
+    expect(one(db, 'SELECT first_seen_at FROM nav_absent')).toEqual({ first_seen_at: 200 });
+  });
+
+  it("marks an airport absent only when the airport already has a row", () => {
+    const db = scratchReplica();
+    apply(db, row('airport', { ident: 'ZZAA', detail_state: 'pending' }));
+
+    apply(db,
+      row('absent', { kind: 'A', ident: 'ZZAA', reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000, rev: 4 }),
+      row('absent', { kind: 'A', ident: 'ZZNONE', reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000, rev: 4 }),
+    );
+
+    expect(one(db, 'SELECT detail_state, rev FROM nav_airport WHERE ident = ?', 'ZZAA')).toEqual({
+      detail_state: 'absent', rev: 4,
+    });
+    expect(count(db, 'nav_airport')).toBe(1);
+    expect(one(db, 'SELECT 1 AS hit FROM nav_absent WHERE ident = ?', 'ZZNONE')).toEqual({ hit: 1 });
+  });
+});
+
+describe('row validation', () => {
+  it('refuses an unknown table, an unknown column and a missing rev', () => {
+    const db = scratchReplica();
+    expect(() => apply(db, { t: 'airfield' as NavRowType, r: { ident: 'ZZAA', rev: 1 } }))
+      .toThrow(/unknown type/);
+    expect(() => apply(db, row('airport', { ident: 'ZZAA', elevation: 100 })))
+      .toThrow(/unknown column "elevation"/);
+    expect(() => apply(db, { t: 'airport', r: { ident: 'ZZAA' } })).toThrow(/no integer rev/);
+    expect(count(db, 'nav_airport')).toBe(0);
+  });
+
+  it('rolls the whole batch back when one row is bad', () => {
+    const db = scratchReplica();
+    expect(() => apply(db, row('airport', { ident: 'ZZAA' }), row('airport', { ident: 'ZZAB', bogus: 1 })))
+      .toThrow(NavdataStoreError);
+    expect(count(db, 'nav_airport')).toBe(0);
+  });
+
+  it('refuses a replica whose columns are not the shipped ones', () => {
+    const db = scratchReplica();
+    expect(() => verifyNavdataColumns(db)).not.toThrow();
+    db.exec('ALTER TABLE nav_airport ADD COLUMN elevation_ft REAL');
+    expect(() => verifyNavdataColumns(db)).toThrow(/nav_airport has columns/);
+  });
+});
+
+describe('snapshot import', () => {
+  it('builds and swaps in a replica, leaving no incoming or stale files', () => {
+    const d = replicaDir();
+    openNavdata();
+
+    return importNavdataSnapshot(writeSnapshot({
+      rows: [
+        row('airport', { ident: 'ZZAA', name: 'Zulu Alpha Field', lat: 10.5, lon: 20.25, position_source: 'list' }),
+        row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2000 }),
+      ],
+    })).then(ack => {
+      expect(ack).toMatchObject({ ok: true, snapshotId: 'snapshot-1', rev: 7, counts: { airport: 1, runway: 1 } });
+      expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1', rev: 7, sim_id: '2024' });
+      expect(count(getNavDb()!, 'nav_airport')).toBe(1);
+
+      const fresh = new Database(resolveNavdataPath(), { readonly: true });
+      handles.push(fresh);
+      expect(count(fresh, 'nav_runway')).toBe(1);
+      fresh.close();
+
+      closeNavDb();
+      expect(fs.readdirSync(d)).toEqual(['navdata.db']);
+    });
+  });
+
+  it('replaces the replica when the snapshot carries the epoch already held', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ rows: [row('airport', { ident: 'ZZAA' })] }));
+
+    await importNavdataSnapshot(writeSnapshot({ rows: [row('airport', { ident: 'ZZAB' })] }));
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
+    expect(count(getNavDb()!, 'nav_airport')).toBe(1);
+    expect(one(getNavDb()!, 'SELECT ident FROM nav_airport')).toEqual({ ident: 'ZZAB' });
+  });
+
+  it('leaves the previous replica intact when the footer count is wrong', async () => {
+    const d = replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rows: [row('airport', { ident: 'ZZAA' })] }));
+
+    await expect(importNavdataSnapshot(writeSnapshot({
+      snapshotId: 'snapshot-2',
+      rows: [row('airport', { ident: 'ZZAB' }), row('airport', { ident: 'ZZAC' })],
+      footerRows: 3,
+    }))).rejects.toMatchObject({ code: 'NAVDATA_BAD_BATCH', status: 400 });
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
+    expect(one(getNavDb()!, 'SELECT ident FROM nav_airport')).toEqual({ ident: 'ZZAA' });
+    closeNavDb();
+    expect(fs.readdirSync(d)).toEqual(['navdata.db']);
+  });
+
+  it('refuses a snapshot built to another schema version', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1' }));
+
+    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-9', schemaVersion: 2 })))
+      .rejects.toMatchObject({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', status: 409, serverSchemaVersion: 1 });
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
+  });
+
+  it('replaces a file whose schema version the server does not serve', async () => {
+    replicaDir();
+    const stale = new Database(resolveNavdataPath());
+    applyNavdataSchema(stale);
+    stale.prepare(
+      "INSERT INTO nav_meta (id, schema_version, snapshot_id, sim_id, created_at, updated_at) VALUES (1, 99, 'old', '2024', 1, 1)",
+    ).run();
+    stale.close();
+    openNavdata();
+    expect(getNavDb()).toBeNull();
+
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-fresh' }));
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-fresh', schema_version: 1 });
+  });
+
+  it('refuses a stream with no footer and cleans the incoming file up', async () => {
+    const d = replicaDir();
+    openNavdata();
+    const file = path.join(tempDir(), 'truncated.ndjson.gz');
+    const header = JSON.stringify({
+      kind: 'header', v: 1, schemaVersion: 1, snapshotId: 'snapshot-3', rev: 1,
+      simId: '2024', simAppName: null, simAppVersion: null, sidecarVersion: 't', createdAt: 1, counts: {},
+    });
+    fs.writeFileSync(file, zlib.gzipSync(`${header}\n${JSON.stringify(row('airport', { ident: 'ZZAA' }))}\n`));
+
+    await expect(importNavdataSnapshot(file)).rejects.toMatchObject({ code: 'NAVDATA_BAD_BATCH' });
+
+    expect(getNavDb()).toBeNull();
+    expect(fs.readdirSync(d)).toEqual([]);
+  });
+});
+
+describe('incremental batches', () => {
+  const batch = (over: Record<string, unknown> = {}) => ({
+    v: 1 as const, schemaVersion: 1 as const, snapshotId: 'snapshot-1',
+    fromRev: 7, toRev: 8, rows: [] as NavRow[], more: false, ...over,
+  });
+
+  it('applies rows, in parents-first order, and moves nav_meta.rev', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7, rows: [] }));
+
+    const ack = applyIncrementalBatch(batch({
+      rows: [
+        row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA', length_m: 2000, rev: 8 }),
+        row('airport', { ident: 'ZZAA', name: 'Zulu Alpha Field', rev: 8 }),
+      ],
+    }), 1_700_000_001_000);
+
+    expect(ack).toEqual({ ok: true, snapshotId: 'snapshot-1', rev: 8, applied: 2 });
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ rev: 8, updated_at: 1_700_000_001_000 });
+    expect(count(getNavDb()!, 'nav_runway')).toBe(1);
+  });
+
+  it('refuses a batch for another epoch, naming the epoch it holds', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7 }));
+
+    expect(() => applyIncrementalBatch(batch({ snapshotId: 'snapshot-other' }))).toThrow(NavdataStoreError);
+    try {
+      applyIncrementalBatch(batch({ snapshotId: 'snapshot-other' }));
+    } catch (err) {
+      expect(err).toMatchObject({
+        code: 'NAVDATA_SNAPSHOT_MISMATCH', status: 409, serverSnapshotId: 'snapshot-1', serverRev: 7,
+      });
+    }
+  });
+
+  it('refuses a batch when no replica is present, with a null server epoch', () => {
+    replicaDir();
+    openNavdata();
+    try {
+      applyIncrementalBatch(batch());
+      throw new Error('expected a refusal');
+    } catch (err) {
+      expect(err).toMatchObject({
+        code: 'NAVDATA_SNAPSHOT_MISMATCH', status: 409, serverSnapshotId: null, serverRev: 0,
+      });
+    }
+  });
+
+  it('refuses another schema version and an oversized batch', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7 }));
+
+    expect(() => applyIncrementalBatch(batch({ schemaVersion: 2 }) as never))
+      .toThrow(expect.objectContaining({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', serverSchemaVersion: 1 }));
+    const many = Array.from({ length: 2001 }, (_, i) => row('airport', { ident: `ZZ${i}` }));
+    expect(() => applyIncrementalBatch(batch({ rows: many })))
+      .toThrow(expect.objectContaining({ code: 'NAVDATA_BAD_BATCH' }));
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ rev: 7 });
+  });
+});

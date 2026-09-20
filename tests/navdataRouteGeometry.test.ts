@@ -1,0 +1,422 @@
+import { describe, it, expect } from 'vitest';
+import Database from 'better-sqlite3';
+import { applyNavdataSchema } from '../src/navdata/schema';
+import { legKey, procKey, transKey, wptKey } from '../src/navdata/keys';
+import {
+  AIRWAY_MAX_HOPS, AIRWAY_MAX_VISITED, buildRouteGeometry,
+} from '../src/navdata/routeGeometry';
+import { RUNWAY_HEADING_REFERENCE, dest, runwayTrueBearing } from '../src/navdata/geometry';
+import { bearingDeg, haversineNm } from '../src/geo';
+import { makePlannedLegWithChildren } from './helpers';
+import type { PlannedLegWithChildren, PlannedWaypoint } from '../src/types';
+
+// Synthetic data only: invented idents and coordinates.
+
+function fresh(): Database.Database {
+  const db = new Database(':memory:');
+  applyNavdataSchema(db);
+  return db;
+}
+
+function airport(db: Database.Database, ident: string, detail = 'detail', magvar: number | null = null): void {
+  db.prepare('INSERT INTO nav_airport (ident, detail_state, magvar, rev) VALUES (?, ?, ?, 1)').run(ident, detail, magvar);
+}
+
+function runway(
+  db: Database.Database, ap: string, lat: number, lon: number, heading: number, lengthM: number,
+  primary: [number, number], secondary: [number, number],
+): void {
+  db.prepare(
+    `INSERT INTO nav_runway (rwy_key, airport_ident, lat, lon, heading_deg, length_m,
+       primary_number, primary_designator, secondary_number, secondary_designator, rev)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+  ).run(`${ap}|${primary[0]}|${primary[1]}`, ap, lat, lon, heading, lengthM, ...primary, ...secondary);
+}
+
+interface L {
+  t: number; lat?: number | null; lon?: number | null; ident?: string;
+  cLat?: number | null; cLon?: number | null; turn?: number; alt1?: number;
+}
+
+function procedure(
+  db: Database.Database, ap: string, kind: 'SID' | 'STAR' | 'APPROACH', name: string,
+  rwy: [number, number] | null,
+  transitions: { role: 'common' | 'runway' | 'enroute' | 'approach' | 'final'; name?: string; rwy?: [number, number]; legs: L[] }[],
+): string {
+  const pk = procKey(ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null, null);
+  db.prepare(
+    'INSERT INTO nav_procedure (proc_key, airport_ident, kind, name, runway_number, runway_designator, rev) VALUES (?, ?, ?, ?, ?, ?, 1)',
+  ).run(pk, ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null);
+  for (const t of transitions) {
+    const tk = transKey(pk, t.role, t.name ?? '');
+    db.prepare(
+      'INSERT INTO nav_procedure_transition (trans_key, proc_key, role, name, runway_number, runway_designator, rev) VALUES (?, ?, ?, ?, ?, ?, 1)',
+    ).run(tk, pk, t.role, t.name ?? '', t.rwy?.[0] ?? null, t.rwy?.[1] ?? null);
+    t.legs.forEach((l, i) => {
+      db.prepare(
+        `INSERT INTO nav_procedure_leg (trans_key, seq, leg_type, fix_ident, fix_lat, fix_lon,
+           arc_center_lat, arc_center_lon, turn_direction, altitude1_m, rev)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(tk, i + 1, l.t, l.ident ?? null, l.lat ?? null, l.lon ?? null, l.cLat ?? null, l.cLon ?? null, l.turn ?? null, l.alt1 ?? null);
+    });
+  }
+  return pk;
+}
+
+function waypoint(db: Database.Database, ident: string, region: string, lat: number, lon: number): string {
+  const key = wptKey(ident, region, lat, lon);
+  db.prepare('INSERT INTO nav_waypoint (wpt_key, ident, region, lat, lon, rev) VALUES (?, ?, ?, ?, ?, 1)').run(key, ident, region, lat, lon);
+  return key;
+}
+
+function airwayLeg(db: Database.Database, airway: string, a: { key: string; ident: string; lat: number; lon: number }, b: typeof a): void {
+  db.prepare(
+    `INSERT INTO nav_airway_leg (leg_key, airway, from_key, to_key, from_ident, from_region, from_lat, from_lon,
+       to_ident, to_region, to_lat, to_lon, min_lat, max_lat, min_lon, max_lon, rev)
+     VALUES (?, ?, ?, ?, ?, 'ZZ', ?, ?, ?, 'ZZ', ?, ?, 0, 0, 0, 0, 1)`,
+  ).run(legKey(airway, a.key, b.key), airway, a.key, b.key, a.ident, a.lat, a.lon, b.ident, b.lat, b.lon);
+}
+
+function wpt(seq: number, ident: string, lat: number, lon: number, over: Partial<PlannedWaypoint> = {}): PlannedWaypoint {
+  return {
+    id: seq, planned_leg_id: 11, seq, ident, name: null, region: null, airway: null, track: null,
+    type: 'WAYPOINT', comment: null, lat, lon, alt_ft: null, ...over,
+  };
+}
+
+function planned(over: Partial<PlannedLegWithChildren> = {}): PlannedLegWithChildren {
+  return makePlannedLegWithChildren({
+    departure_ident: 'TSTA', departure_lat: 10, departure_lon: 20,
+    destination_ident: 'TSTB', destination_lat: 10, destination_lon: 22,
+    waypoints: [
+      wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+      wpt(2, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+    ],
+    ...over,
+  });
+}
+
+describe('procedure legs', () => {
+  it('counts coordinate-less types, rejects (0,0), collapses duplicates without counting', () => {
+    const db = fresh();
+    airport(db, 'TSTA');
+    procedure(db, 'TSTA', 'SID', 'ALPHA1', [10, 0], [{
+      role: 'runway', rwy: [10, 0],
+      legs: [
+        { t: 4, lat: 11, lon: 21, ident: 'FIXA' },
+        { t: 2, lat: 11.1, lon: 21.1 },                 // CA: coordinate-less even with a coordinate
+        { t: 18, lat: 11, lon: 21, ident: 'FIXA' },     // duplicate of previous point
+        { t: 18, lat: 0, lon: 0 },                      // (0,0) rejected
+        { t: 19 },                                      // VA
+        { t: 18, lat: 11.5, lon: 21.5, ident: 'FIXB' },
+        { t: 0, lat: 12, lon: 22, ident: 'FIXC' },      // UNKNOWN with a valid coordinate
+        { t: 0, lat: null, lon: null },                 // UNKNOWN without one
+      ],
+    }]);
+    const r = buildRouteGeometry(planned({ sid_name: 'alpha1 ', sid_runway: '10' }), db);
+    expect(r.sid.points.map((p) => p.ident)).toEqual(['FIXA', 'FIXB', 'FIXC']);
+    expect(r.skippedLegs).toBe(4);
+    expect(r.skippedByChain).toEqual({ sid: 4, enroute: 0, star: 0, approach: 0 });
+    expect(r.sid.synthetic).toBe(false);
+    expect(r.sid.source).toBe('TSTA|SID|ALPHA1|10|0|');
+  });
+
+  it('emits an arc only for AF/RF with a valid centre and a previous point', () => {
+    const db = fresh();
+    airport(db, 'TSTA');
+    procedure(db, 'TSTA', 'SID', 'ARCS1', null, [{
+      role: 'common',
+      legs: [
+        { t: 17, lat: 11, lon: 21, cLat: 11, cLon: 20.5, turn: 1 },   // first point: no previous
+        { t: 17, lat: 11.2, lon: 21.2, cLat: 11.1, cLon: 21, turn: 2 },
+        { t: 1, lat: 11.4, lon: 21.4, cLat: 0, cLon: 0, turn: 1 },    // invalid centre
+        { t: 1, lat: 11.6, lon: 21.6, cLat: 11.5, cLon: 21.5, turn: 3 },
+      ],
+    }]);
+    const r = buildRouteGeometry(planned({ sid_name: 'ARCS1' }), db);
+    expect(r.sid.points).toHaveLength(4);
+    expect(r.sid.arcs).toEqual([
+      { fromIndex: 0, toIndex: 1, centerLat: 11.1, centerLon: 21, turn: 'R' },
+      { fromIndex: 2, toIndex: 3, centerLat: 11.5, centerLon: 21.5, turn: null },
+    ]);
+  });
+
+  it('selects by runway, then null-runway, then smallest key; carries crossing altitudes', () => {
+    const db = fresh();
+    airport(db, 'TSTB');
+    const leg = (id: string): L[] => [{ t: 4, lat: 9, lon: 21, ident: id, alt1: 1500 }];
+    procedure(db, 'TSTB', 'STAR', 'BRAVO2', [10, 0], [{ role: 'common', legs: leg('R10') }]);
+    procedure(db, 'TSTB', 'STAR', 'BRAVO2', [28, 0], [{ role: 'common', legs: leg('R28') }]);
+    procedure(db, 'TSTB', 'STAR', 'CHARL1', [28, 0], [{ role: 'common', legs: leg('C28') }]);
+    procedure(db, 'TSTB', 'STAR', 'CHARL1', null, [{ role: 'common', legs: leg('CNULL') }]);
+    procedure(db, 'TSTB', 'STAR', 'DELTA1', [36, 0], [{ role: 'common', legs: leg('D36') }]);
+    procedure(db, 'TSTB', 'STAR', 'DELTA1', [18, 0], [{ role: 'common', legs: leg('D18') }]);
+    const pick = (name: string, rwy: string | null): string | null =>
+      buildRouteGeometry(planned({ star_name: name, star_runway: rwy }), db).star.points[0]?.ident ?? null;
+    expect(pick('BRAVO2', '28')).toBe('R28');
+    expect(pick('CHARL1', '10')).toBe('CNULL');
+    expect(pick('DELTA1', '10')).toBe('D18');
+    expect(buildRouteGeometry(planned({ star_name: 'BRAVO2', star_runway: '28' }), db).star.points[0].altitude1M).toBe(1500);
+  });
+
+  it('reports the right reason when a procedure is missing', () => {
+    const db = fresh();
+    airport(db, 'TSTA', 'detail');
+    airport(db, 'TSTB', 'index');
+    const r = buildRouteGeometry(planned({ sid_name: 'NOPE1', star_name: 'NOPE2', approach_name: 'ILS28', approach_type: 'ILS' }), db);
+    expect(r.unresolved).toEqual([
+      { kind: 'sid', name: 'NOPE1', reason: 'procedure not in cache' },
+      { kind: 'star', name: 'NOPE2', reason: 'airport detail not fetched' },
+      { kind: 'approach', name: 'ILS28', reason: 'airport detail not fetched' },
+    ]);
+  });
+
+  it('reports an unparseable procedure runway on its own', () => {
+    const db = fresh();
+    airport(db, 'TSTA');
+    const r = buildRouteGeometry(planned({ sid_name: 'ALPHA1', sid_runway: '45' }), db);
+    expect(r.unresolved).toEqual([{ kind: 'sid', name: 'ALPHA1', reason: 'unparseable runway' }]);
+    expect(r.sid.points).toEqual([]);
+  });
+});
+
+describe('enroute waypoints and airways', () => {
+  it('draws the planned position and never reports USER or airport waypoints as missing', () => {
+    const db = fresh();
+    const r = buildRouteGeometry(planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'MYPT', 10, 20.5, { type: 'USER' }),
+        wpt(3, 'LOST', 10, 21, { type: 'WAYPOINT' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'MYPT', 'LOST', 'TSTB']);
+    expect(r.enroute.source).toBe('planned');
+    expect(r.unresolved).toEqual([{ kind: 'waypoint', name: 'LOST', reason: 'ident not in cache' }]);
+  });
+
+  it('uses nearest-neighbour when the region is unknown, ties to the smaller key, and flags a disagreement', () => {
+    const db = fresh();
+    waypoint(db, 'DUPE', 'AA', 10, 40);   // far
+    waypoint(db, 'DUPE', 'BB', 10, 20.5); // near, matches the plan
+    waypoint(db, 'FAR', 'AA', 10, 21.5);  // 0.5 degrees from the planned position
+    const r = buildRouteGeometry(planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'DUPE', 10, 20.5),
+        wpt(3, 'FAR', 10, 21),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    expect(r.unresolved).toEqual([{ kind: 'waypoint', name: 'FAR', reason: 'position disagrees with cache' }]);
+    expect(r.enroute.points[2]).toMatchObject({ ident: 'FAR', lat: 10, lon: 21 });
+
+    const tie = fresh();
+    const kb = waypoint(tie, 'TIE', 'BB', 10, 20.5);
+    const ka = waypoint(tie, 'TIE', 'AA', 10, 20.5);
+    expect(ka < kb).toBe(true);
+    const r2 = buildRouteGeometry(planned({
+      waypoints: [wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }), wpt(2, 'TIE', 10, 20.5), wpt(3, 'TSTB', 10, 22, { type: 'AIRPORT' })],
+    }), tie);
+    expect(r2.unresolved).toEqual([]);
+  });
+
+  function airwayPlan(from: string, to: string, fLat: number, tLat: number): PlannedLegWithChildren {
+    return planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, from, fLat, 21, { region: 'ZZ' }),
+        wpt(3, to, tLat, 21, { region: 'ZZ', airway: 'T100' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    });
+  }
+
+  it('expands an airway through the ascending-key neighbour', () => {
+    const db = fresh();
+    const n = (ident: string, lat: number) => ({ key: waypoint(db, ident, 'ZZ', lat, 21), ident, lat, lon: 21 });
+    const a = n('AAAAA', 10.1), b = n('BBBBB', 10.2), c = n('CCCCC', 10.3), d = n('DDDDD', 10.4);
+    airwayLeg(db, 'T100', a, c); airwayLeg(db, 'T100', c, d); airwayLeg(db, 'T100', a, b); airwayLeg(db, 'T100', b, d);
+    const r = buildRouteGeometry(airwayPlan('AAAAA', 'DDDDD', 10.1, 10.4), db);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'AAAAA', 'BBBBB', 'DDDDD', 'TSTB']);
+    expect(r.unresolved).toEqual([]);
+    expect(r.skippedLegs).toBe(0);
+  });
+
+  function lineAirway(count: number): Database.Database {
+    const db = fresh();
+    const nodes = Array.from({ length: count }, (_, i) => {
+      const ident = `N${String(i).padStart(4, '0')}`;
+      return { key: waypoint(db, ident, 'ZZ', 10 + i * 0.001, 21), ident, lat: 10 + i * 0.001, lon: 21 };
+    });
+    for (let i = 1; i < count; i++) airwayLeg(db, 'T100', nodes[i - 1], nodes[i]);
+    return db;
+  }
+
+  it('honours the hop cap: exactly 200 hops expands, 201 falls back to the direct segment', () => {
+    const db = lineAirway(AIRWAY_MAX_HOPS + 2);
+    const ok = buildRouteGeometry(airwayPlan('N0000', `N${String(AIRWAY_MAX_HOPS).padStart(4, '0')}`, 10, 10 + AIRWAY_MAX_HOPS * 0.001), db);
+    expect(ok.unresolved).toEqual([]);
+    expect(ok.enroute.points).toHaveLength(AIRWAY_MAX_HOPS + 1 + 2);
+    const tooFar = buildRouteGeometry(airwayPlan('N0000', `N${String(AIRWAY_MAX_HOPS + 1).padStart(4, '0')}`, 10, 10 + (AIRWAY_MAX_HOPS + 1) * 0.001), db);
+    expect(tooFar.unresolved).toEqual([{ kind: 'airway', name: 'T100', reason: 'no path found' }]);
+    expect(tooFar.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'N0000', 'N0201', 'TSTB']);
+    expect(tooFar.skippedLegs).toBe(0);
+  });
+
+  it('honours the visit cap', () => {
+    const db = fresh();
+    const mk = (ident: string, lat: number) => ({ key: waypoint(db, ident, 'ZZ', lat, 21), ident, lat, lon: 21 });
+    const hub = mk('HUB', 10.1);
+    const target = mk('TARGET', 10.9);
+    for (let i = 0; i < AIRWAY_MAX_VISITED + 100; i++) {
+      airwayLeg(db, 'T100', hub, mk(`L${String(i).padStart(4, '0')}`, 10.2 + i * 1e-4));
+    }
+    airwayLeg(db, 'T100', hub, mk('ZLAST', 10.5));
+    airwayLeg(db, 'T100', mk('ZLAST2', 10.6), target);
+    airwayLeg(db, 'T100', { key: wptKey('ZLAST2', 'ZZ', 10.6, 21), ident: 'ZLAST2', lat: 10.6, lon: 21 }, { key: wptKey('ZLAST', 'ZZ', 10.5, 21), ident: 'ZLAST', lat: 10.5, lon: 21 });
+    const r = buildRouteGeometry(airwayPlan('HUB', 'TARGET', 10.1, 10.9), db);
+    expect(r.unresolved).toEqual([{ kind: 'airway', name: 'T100', reason: 'no path found' }]);
+  });
+
+  it('falls back to the direct segment when an endpoint is unresolved', () => {
+    const r = buildRouteGeometry(airwayPlan('AAAAA', 'DDDDD', 10.1, 10.4), fresh());
+    expect(r.unresolved).toContainEqual({ kind: 'airway', name: 'T100', reason: 'no path found' });
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'AAAAA', 'DDDDD', 'TSTB']);
+  });
+});
+
+describe('synthetic custom procedures', () => {
+  const nm = (a: { lat: number; lon: number }, b: { lat: number; lon: number }): number =>
+    haversineNm(a.lat, a.lon, b.lat, b.lon);
+  const centre = { lat: 10, lon: 22 };
+
+  function setup(magvar: number | null = null): Database.Database {
+    const db = fresh();
+    airport(db, 'TSTA', 'detail', magvar);
+    airport(db, 'TSTB', 'detail', magvar);
+    // 4000 m runway, primary end 10 heading 100, secondary end 28
+    runway(db, 'TSTB', centre.lat, centre.lon, 100, 4000, [10, 0], [28, 0]);
+    runway(db, 'TSTA', centre.lat, centre.lon, 100, 4000, [10, 0], [28, 0]);
+    return db;
+  }
+  const approach = (rwy: string | null, over: Partial<PlannedLegWithChildren> = {}): PlannedLegWithChildren =>
+    planned({
+      approach_type: 'CUSTOM', approach_name: 'TSTBCUS', approach_runway: rwy,
+      approach_custom_distance_nm: 3, approach_custom_altitude_ft: 1000, approach_custom_offset_deg: 0, ...over,
+    });
+
+  it('draws a custom approach from the landing threshold, 3 nm out, never counted as skipped', () => {
+    const r = buildRouteGeometry(approach('10'), setup());
+    const [start, thr] = r.approach.points;
+    expect(r.approach.synthetic).toBe(true);
+    expect(r.approach.source).toBe('TSTBCUS');
+    expect(nm(thr, centre)).toBeCloseTo(2000 / 1852, 2);
+    expect(nm(start, thr)).toBeCloseTo(3, 2);
+    // measured from the centre instead, the start would be 1.08 nm further out
+    expect(nm(start, centre)).toBeCloseTo(3 + 2000 / 1852, 1);
+    expect(start.altitude1M).toBeCloseTo(304.8, 6);
+    expect(start.ident).toBe('TSTBCUS');
+    expect(thr.ident).toBe('10');
+    expect(r.skippedLegs).toBe(0);
+    expect(r.skippedByChain).toEqual({ sid: 0, enroute: 0, star: 0, approach: 0 });
+    expect(r.unresolved).toEqual([]);
+    // approaching runway 10 (heading 100): the start lies on the reciprocal side
+    expect(bearingDeg(start.lat, start.lon, thr.lat, thr.lon)).toBeCloseTo(100, 0);
+  });
+
+  it('gives mirror-image geometry for the secondary end', () => {
+    const db = setup();
+    const p = buildRouteGeometry(approach('10'), db).approach.points;
+    const s = buildRouteGeometry(approach('28'), db).approach.points;
+    expect(nm(p[1], s[1])).toBeCloseTo(4000 / 1852, 2);
+    expect(bearingDeg(s[0].lat, s[0].lon, s[1].lat, s[1].lon)).toBeCloseTo(280, 0);
+    expect(nm(s[0], s[1])).toBeCloseTo(3, 2);
+  });
+
+  it('draws a custom departure from the departure threshold', () => {
+    const db = setup();
+    const r = buildRouteGeometry(planned({
+      sid_type: 'CUSTOMDEPART', sid_name: 'TSTACUS', sid_runway: '10', sid_custom_distance_nm: 5,
+    }), db);
+    const [thr, away] = r.sid.points;
+    expect(r.sid.synthetic).toBe(true);
+    expect(r.sid.source).toBe('TSTACUS');
+    expect(nm(thr, centre)).toBeCloseTo(2000 / 1852, 2);
+    expect(nm(thr, away)).toBeCloseTo(5, 2);
+    expect(bearingDeg(thr.lat, thr.lon, away.lat, away.lon)).toBeCloseTo(100, 0);
+    expect(r.skippedLegs).toBe(0);
+  });
+
+  it('reports a missing runway row without a chain or a skipped count', () => {
+    const db = setup();
+    const r = buildRouteGeometry(approach('16L'), db);
+    expect(r.approach).toMatchObject({ source: null, synthetic: false, points: [] });
+    expect(r.unresolved).toEqual([{ kind: 'approach', name: 'TSTBCUS', reason: 'custom procedure, no runway' }]);
+    expect(r.skippedLegs).toBe(0);
+    const none = buildRouteGeometry(approach(null), db);
+    expect(none.unresolved[0].reason).toBe('custom procedure, no runway');
+    const noDetail = buildRouteGeometry(approach('10'), fresh());
+    expect(noDetail.unresolved).toEqual([{ kind: 'approach', name: 'TSTBCUS', reason: 'custom procedure, no runway' }]);
+    expect(noDetail.unresolved.some((u) => u.reason === 'procedure not in cache')).toBe(false);
+  });
+
+  it('reports an unparseable runway on a custom procedure', () => {
+    const r = buildRouteGeometry(approach('XY'), setup());
+    expect(r.unresolved).toEqual([{ kind: 'approach', name: 'TSTBCUS', reason: 'unparseable runway' }]);
+    expect(r.approach.points).toEqual([]);
+  });
+
+  it('ignores a non-zero approach offset', () => {
+    const db = setup();
+    const base = buildRouteGeometry(approach('10'), db);
+    const off = buildRouteGeometry(approach('10', { approach_custom_offset_deg: 15 }), db);
+    expect(off.approach).toEqual(base.approach);
+    expect(off.approach.synthetic).toBe(true);
+    expect(off.unresolved).toEqual([]);
+  });
+
+  it('follows an injected heading reference', () => {
+    expect(RUNWAY_HEADING_REFERENCE).toBe('true');
+    expect(runwayTrueBearing(100, 12, 'true')).toBe(100);
+    expect(runwayTrueBearing(100, 12, 'unknown')).toBe(100);
+    expect(runwayTrueBearing(100, 12, 'magnetic')).toBe(112);
+    expect(runwayTrueBearing(350, 20, 'magnetic')).toBe(10);
+    expect(runwayTrueBearing(100, null, 'magnetic')).toBe(100);
+
+    const db = setup(12);
+    const t = buildRouteGeometry(approach('10'), db, { headingReference: 'true' }).approach.points[0];
+    const m = buildRouteGeometry(approach('10'), db, { headingReference: 'magnetic' }).approach.points[0];
+    const u = buildRouteGeometry(approach('10'), db, { headingReference: 'unknown' }).approach.points[0];
+    expect(u).toEqual(t);
+    expect(nm(t, m)).toBeGreaterThan(0.5);
+    const thrT = buildRouteGeometry(approach('10'), db, { headingReference: 'true' }).approach.points[1];
+    const thrM = buildRouteGeometry(approach('10'), db, { headingReference: 'magnetic' }).approach.points[1];
+    expect(bearingDeg(t.lat, t.lon, thrT.lat, thrT.lon)).toBeCloseTo(100, 0);
+    expect(bearingDeg(m.lat, m.lon, thrM.lat, thrM.lon)).toBeCloseTo(112, 0);
+    expect(dest(0, 0, 90, 0)).toEqual({ lat: 0, lon: 0 });
+  });
+});
+
+describe('empty answers', () => {
+  it('returns every chain empty for an absent replica', () => {
+    const r = buildRouteGeometry(planned({
+      sid_name: 'X', approach_type: 'CUSTOM', approach_name: 'Y', sid_type: 'CUSTOMDEPART',
+    }), null);
+    for (const c of [r.sid, r.enroute, r.star, r.approach]) {
+      expect(c).toEqual({ source: null, synthetic: false, points: [], arcs: [] });
+    }
+    expect(r.skippedLegs).toBe(0);
+    expect(r.unresolved).toEqual([]);
+    expect(r.legId).toBe(11);
+  });
+
+  it('reports endpoints with isAirport, and null when the coordinate is unusable', () => {
+    const r = buildRouteGeometry(planned({ destination_is_airport: 0, departure_lat: 0, departure_lon: 0 }), null);
+    expect(r.origin).toBeNull();
+    expect(r.destination).toEqual({ ident: 'TSTB', lat: 10, lon: 22, isAirport: false });
+    const ok = buildRouteGeometry(planned(), null);
+    expect(ok.origin).toEqual({ ident: 'TSTA', lat: 10, lon: 20, isAirport: true });
+  });
+});

@@ -148,6 +148,15 @@ export function swapInReplica(incomingPath: string, verify?: (incoming: Database
         verify(check);
       } finally {
         check.close();
+        // Opening a WAL file read-only can leave -wal/-shm beside it; the
+        // main file is about to be renamed away, so they would be orphans.
+        for (const suffix of ['-wal', '-shm']) {
+          try {
+            unlinkQuiet(incomingPath + suffix);
+          } catch {
+            // Best effort; startup clears any stale incoming files.
+          }
+        }
       }
     }
   } catch (err) {

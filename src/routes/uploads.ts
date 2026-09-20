@@ -1,4 +1,6 @@
 import multer from 'multer';
+import os from 'os';
+import path from 'path';
 
 /**
  * The multipart upload limits, in one place because two of them are read twice:
@@ -39,4 +41,16 @@ export const uploadLnmpln = multer({
     fieldSize: MAX_UPLOAD_FIELD_BYTES,
     parts: MAX_LNMPLN_FILES + MAX_UPLOAD_FIELDS + 1,   // 31 — 25 files plus the field allowance
   },
+});
+
+// ── Navdata snapshot ───────────────────────────────────────────────────────
+// Disk storage, unlike the two above: a snapshot is far larger than a PDF, is
+// consumed as a stream, and holding 64 MiB per request in memory is not a cost
+// this server should pay. The route deletes the temp file when it is done.
+export const SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
+export const uploadNavdataSnapshot = multer({
+  storage: multer.diskStorage({
+    destination: path.join(os.tmpdir(), 'msfslogger-navdata-uploads'),
+  }),
+  limits: { fileSize: SNAPSHOT_MAX_BYTES, files: 1, fields: 0, parts: 1 },
 });

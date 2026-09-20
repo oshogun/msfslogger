@@ -5,6 +5,7 @@ import path from 'path';
 import { randomBytes } from 'crypto';
 import type { FlightManager } from './flightManager';
 import { createIngestRouter } from './ingest';
+import { SidecarStateStore } from './navdata/sidecarState';
 import { TrafficStore } from './trafficStore';
 import { getConfig } from './config';
 import { getOrCreateAppSecret } from './db';
@@ -13,8 +14,9 @@ import { requireAuth, requireSameOrigin, SESSION_COOKIE_NAME } from './auth/midd
 import { createIngestTokenScopeGate } from './auth/ingestScope';
 import { createAuthRouter } from './auth/routes';
 import {
-  MAX_FLIGHT_PLAN_BYTES, MAX_LNMPLN_BYTES, MAX_LNMPLN_FILES,
+  MAX_FLIGHT_PLAN_BYTES, MAX_LNMPLN_BYTES, MAX_LNMPLN_FILES, SNAPSHOT_MAX_BYTES,
 } from './routes/uploads';
+import { createNavdataSyncRouter } from './routes/navdataSync';
 import { createFlightsRouter } from './routes/flights';
 import { createTripsRouter } from './routes/trips';
 import { createSettingsRouter } from './routes/settings';
@@ -32,6 +34,11 @@ export function createServer(flightManager: FlightManager): express.Express {
   // Middleware order is behaviour, and this order is frozen. Anything
   // registered after app.use('/api', requireAuth) below is gated by default,
   // including routes added later.
+  // A navdata batch is up to 4 MiB, well past the global limit. Path-scoped and
+  // registered first so it parses that one path before the global parser sees
+  // it (which then skips an already-parsed body); every other path keeps the
+  // global limit.
+  app.use('/api/navdata/rows', express.json({ limit: '4mb' }));
   app.use(express.json({ limit: config.jsonBodyLimit }));
   app.use(express.static(path.join(process.cwd(), 'client', 'dist')));
 
@@ -43,6 +50,13 @@ export function createServer(flightManager: FlightManager): express.Express {
   // and an ingest request must never allocate or touch the session store.
   // Authenticated by INGEST_TOKEN instead.
   app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest));
+
+  // The MCDU sidecar's navdata sync. Same reasoning as the ingest router: no
+  // cookie, INGEST_TOKEN instead, above the session middleware. It answers only
+  // its own four routes; other /api/navdata paths fall through to the session
+  // stack below.
+  const sidecarState = new SidecarStateStore();
+  app.use('/api/navdata', createNavdataSyncRouter(config.ingest, sidecarState));
 
   // A protocol endpoint, not a REST resource, deliberately outside /api: it
   // authenticates with its own MCP_TOKEN bearer gate rather than requireAuth,
@@ -200,6 +214,27 @@ export function createServer(flightManager: FlightManager): express.Express {
   });
 
   app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof MulterError && err.field === 'navdataSnapshot') {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({
+          ok: false, code: 'NAVDATA_TOO_LARGE',
+          message: `Snapshot exceeds ${SNAPSHOT_MAX_BYTES / (1024 * 1024)} MiB`,
+        });
+        return;
+      }
+      res.status(400).json({ ok: false, code: 'NAVDATA_BAD_BATCH', message: err.message });
+      return;
+    }
+    if (err && typeof err === 'object' && (err as { type?: string }).type === 'entity.too.large' &&
+        req.path === '/api/navdata/rows') {
+      res.status(413).json({ ok: false, code: 'NAVDATA_TOO_LARGE', message: 'Batch exceeds 4 MiB' });
+      return;
+    }
+    if (err instanceof SyntaxError && 'body' in err &&
+        (req.path === '/api/navdata/rows' || req.path === '/api/navdata/state')) {
+      res.status(400).json({ ok: false, code: 'NAVDATA_BAD_BATCH', message: 'Request body is not valid JSON' });
+      return;
+    }
     if (err instanceof MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         // err.field distinguishes which multer instance hit its limit: the

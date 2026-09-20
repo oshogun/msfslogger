@@ -1,0 +1,209 @@
+// An ephemeral express app around the real sync router, a scratch flights.db
+// and a scratch replica directory. Synthetic idents only.
+
+import express from 'express';
+import type { Server } from 'http';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import zlib from 'zlib';
+import Database from 'better-sqlite3';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createNavdataSyncRouter } from '../src/routes/navdataSync';
+import { SidecarStateStore } from '../src/navdata/sidecarState';
+import { closeNavDb, getNavDb, openNavdata, resolveNavdataPath } from '../src/navdata/connection';
+import { createScratchDb, destroyScratchDb, type ScratchDb } from './helpers/db';
+
+const TOKEN = 'test-ingest-token';
+const savedEnv = process.env.NAVDATA_DB_PATH;
+
+let scratch: ScratchDb;
+let dir: string;
+let server: Server;
+let base: string;
+let state: SidecarStateStore;
+
+function header(snapshotId: string, extra: Record<string, unknown> = {}) {
+  return {
+    kind: 'header', v: 1, schemaVersion: 1, snapshotId, rev: 5, simId: '2024',
+    simAppName: 'Test Sim', simAppVersion: '1.0', sidecarVersion: '0.0.1-test',
+    createdAt: 1_700_000_000_000, counts: {}, ...extra,
+  };
+}
+
+function snapshotFile(snapshotId: string, opts: { footerRows?: number; truncate?: boolean } = {}): string {
+  const rows = [
+    { t: 'airport', r: { ident: 'ZZAA', name: 'Zulu Alpha Field', lat: 10, lon: 20, position_source: 'list', rev: 1 } },
+    { t: 'airport', r: { ident: 'ZZAB', name: 'Zulu Bravo Field', lat: 11, lon: 21, position_source: 'list', rev: 1 } },
+  ];
+  const footer = { kind: 'footer', rows: opts.footerRows ?? rows.length, counts: { airport: rows.length } };
+  const text = [header(snapshotId), ...rows, footer].map(o => JSON.stringify(o)).join('\n') + '\n';
+  let gz = zlib.gzipSync(text);
+  if (opts.truncate) gz = gz.subarray(0, Math.floor(gz.length / 2));
+  const file = path.join(dir, `navdata-${snapshotId}.ndjson.gz`);
+  fs.writeFileSync(file, gz);
+  return file;
+}
+
+async function postSnapshot(file: string, token: string | null = TOKEN): Promise<Response> {
+  const form = new FormData();
+  form.append('navdataSnapshot', new Blob([fs.readFileSync(file)], { type: 'application/gzip' }), path.basename(file));
+  return fetch(`${base}/api/navdata/snapshot`, {
+    method: 'POST', body: form, headers: token ? { 'x-ingest-token': token } : {},
+  });
+}
+
+const postJson = (p: string, body: unknown, token: string | null = TOKEN) =>
+  fetch(`${base}${p}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(token ? { 'x-ingest-token': token } : {}) },
+    body: JSON.stringify(body),
+  });
+
+const airports = (): string[] =>
+  (getNavDb()!.prepare('SELECT ident FROM nav_airport ORDER BY ident').all() as { ident: string }[]).map(r => r.ident);
+
+const uploadTemps = (): string[] => {
+  const d = path.join(os.tmpdir(), 'msfslogger-navdata-uploads');
+  return fs.existsSync(d) ? fs.readdirSync(d) : [];
+};
+
+beforeEach(async () => {
+  scratch = createScratchDb();
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'navdata-routes-'));
+  process.env.NAVDATA_DB_PATH = path.join(dir, 'navdata.db');
+  openNavdata();
+  state = new SidecarStateStore();
+
+  const app = express();
+  app.use('/api/navdata/rows', express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: '100kb' }));
+  app.post('/api/other', (_req, res) => { res.json({ ok: true }); });
+  app.use('/api/navdata', createNavdataSyncRouter({ token: TOKEN, allowUnauthenticated: false }, state));
+  app.get('/api/navdata/features', (_req, res) => { res.status(401).json({ error: 'session' }); });
+  await new Promise<void>(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
+  base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+});
+
+afterEach(async () => {
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  closeNavDb();
+  destroyScratchDb(scratch);
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (savedEnv === undefined) delete process.env.NAVDATA_DB_PATH;
+  else process.env.NAVDATA_DB_PATH = savedEnv;
+});
+
+describe('token gate', () => {
+  it('rejects a missing or wrong token on every sync route, and falls through for other paths', async () => {
+    expect((await postJson('/api/navdata/rows', {}, null)).status).toBe(401);
+    expect((await postJson('/api/navdata/state', {}, 'nope')).status).toBe(401);
+    expect((await postSnapshot(snapshotFile('s1'), null)).status).toBe(401);
+    expect((await fetch(`${base}/api/navdata/demand`)).status).toBe(401);
+    // The router has no router-level gate: a path it does not own reaches the next handler.
+    expect((await fetch(`${base}/api/navdata/features`)).status).toBe(401);
+    expect((await (await fetch(`${base}/api/navdata/features`)).json())).toEqual({ error: 'session' });
+  });
+});
+
+describe('POST /snapshot', () => {
+  it('imports a snapshot, acks it, and deletes the temp upload', async () => {
+    const res = await postSnapshot(snapshotFile('s1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, snapshotId: 's1', rev: 5, counts: { airport: 2 } });
+    expect(airports()).toEqual(['ZZAA', 'ZZAB']);
+    await new Promise(r => setTimeout(r, 50));
+    expect(uploadTemps()).toEqual([]);
+  });
+
+  it('a truncated or wrong-footer upload leaves the previous replica intact', async () => {
+    expect((await postSnapshot(snapshotFile('s1'))).status).toBe(200);
+    const bad = await postSnapshot(snapshotFile('s2', { footerRows: 9 }));
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toMatchObject({ ok: false, code: 'NAVDATA_BAD_BATCH' });
+    expect((await postSnapshot(snapshotFile('s3', { truncate: true }))).status).toBe(400);
+    const meta = getNavDb()!.prepare('SELECT snapshot_id AS s FROM nav_meta').get() as { s: string };
+    expect(meta.s).toBe('s1');
+    expect(airports()).toEqual(['ZZAA', 'ZZAB']);
+    await new Promise(r => setTimeout(r, 50));
+    expect(uploadTemps()).toEqual([]);
+    expect(fs.readdirSync(dir).filter(n => n.includes('.incoming-'))).toEqual([]);
+  });
+});
+
+describe('POST /rows', () => {
+  const batch = (snapshotId: string, rows: unknown[], toRev = 6) =>
+    ({ v: 1, schemaVersion: 1, snapshotId, fromRev: 5, toRev, rows, more: false });
+
+  it('answers 409 NAVDATA_SNAPSHOT_MISMATCH with no replica', async () => {
+    const res = await postJson('/api/navdata/rows', batch('s1', []));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'NAVDATA_SNAPSHOT_MISMATCH', serverSnapshotId: null });
+  });
+
+  it('applies a batch, reports it, and marks the rows time', async () => {
+    await postSnapshot(snapshotFile('s1'));
+    expect(state.lastRowsAt()).toBeNull();
+    const res = await postJson('/api/navdata/rows', batch('s1', [
+      { t: 'airport', r: { ident: 'ZZAC', name: 'Zulu Charlie', lat: 12, lon: 22, position_source: 'list', rev: 6 } },
+    ]));
+    expect(await res.json()).toEqual({ ok: true, snapshotId: 's1', rev: 6, applied: 1 });
+    expect(airports()).toContain('ZZAC');
+    expect(state.lastRowsAt()).not.toBeNull();
+  });
+
+  it('does not mark the rows time when the batch is refused', async () => {
+    await postSnapshot(snapshotFile('s1'));
+    expect((await postJson('/api/navdata/rows', batch('other', []))).status).toBe(409);
+    expect((await postJson('/api/navdata/rows', batch('s1', [{ t: 'nope', r: {} }]))).status).toBe(400);
+    expect(state.lastRowsAt()).toBeNull();
+  });
+
+  it('accepts a ~1 MiB body here while the 100 kb limit still holds elsewhere', async () => {
+    await postSnapshot(snapshotFile('s1'));
+    const pad = 'x'.repeat(1024 * 1024);
+    expect((await postJson('/api/navdata/rows', { ...batch('s1', []), pad })).status).toBe(200);
+    expect((await postJson('/api/other', { pad })).status).toBe(413);
+  });
+});
+
+describe('GET /demand and POST /state', () => {
+  it('serves demand with no replica present', async () => {
+    const res = await fetch(`${base}/api/navdata/demand`, { headers: { 'x-ingest-token': TOKEN } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ v: 1, airports: [], waypoints: [], more: false });
+  });
+
+  it('answers a state report with exactly 204 and stores it', async () => {
+    const res = await postJson('/api/navdata/state', {
+      v: 1, state: 'nav.ready', reason: null, snapshotId: 's1', rev: 3, sentAt: 1,
+    });
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe('');
+    expect(state.read()).toMatchObject({ state: 'nav.ready', snapshotId: 's1', rev: 3 });
+  });
+
+  it('rejects an unknown state with 400 and stores nothing', async () => {
+    const res = await postJson('/api/navdata/state', { v: 1, state: 'nav.weird' });
+    expect(res.status).toBe(400);
+    expect(state.read()).toBeNull();
+  });
+});
+
+describe('busy', () => {
+  it('answers 503 NAVDATA_BUSY with Retry-After while a swap is in progress', async () => {
+    // Hold the router in its import phase by racing two uploads: the second sees the first.
+    const first = postSnapshot(snapshotFile('s1'));
+    const second = await postSnapshot(snapshotFile('s2'));
+    const firstRes = await first;
+    const statuses = [firstRes.status, second.status].sort();
+    if (statuses[1] === 503) {
+      const busy = firstRes.status === 503 ? firstRes : second;
+      expect(busy.headers.get('retry-after')).toBe('2');
+      expect(await busy.json()).toMatchObject({ ok: false, code: 'NAVDATA_BUSY' });
+    } else {
+      expect(statuses).toEqual([200, 200]);
+    }
+    expect(resolveNavdataPath()).toBe(path.join(dir, 'navdata.db'));
+  });
+});

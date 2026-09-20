@@ -103,6 +103,21 @@ describe('navdata connection', () => {
     expect(snapshotOf()).toBe('epoch-1');
   });
 
+  it('leaves no incoming -wal/-shm orphans after a successful swap with a verify', () => {
+    const d = scratch();
+    build(resolveNavdataPath(), 'epoch-1');
+    openNavdata();
+    const incoming = incomingNavdataPath();
+    build(incoming, 'epoch-2');
+    let verified = false;
+    swapInReplica(incoming, (check) => {
+      verified = (check.prepare('SELECT snapshot_id AS s FROM nav_meta').get() as { s: string }).s === 'epoch-2';
+    });
+    expect(verified).toBe(true);
+    expect(snapshotOf()).toBe('epoch-2');
+    expect(fs.readdirSync(d).filter(n => n.includes('.incoming-'))).toEqual([]);
+  });
+
   it('a failed verify leaves the live replica untouched and drops the temp', () => {
     const d = scratch();
     build(resolveNavdataPath(), 'epoch-1');
