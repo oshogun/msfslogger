@@ -67,7 +67,7 @@ function nmBetween(a: [number, number], b: [number, number]): number {
 }
 
 const UNRESOLVED_TEXT: Record<string, string> = {
-  'custom procedure, no runway': 'custom procedure, not a simulator procedure — runway detail not fetched yet',
+  'custom procedure, no runway': 'custom procedure, not a simulator procedure',
   'custom procedure, invalid distance': 'custom procedure, not a simulator procedure — its distance is missing',
   'unparseable runway': 'runway not recognised',
   'airport detail not fetched': 'airport detail not fetched yet',
@@ -84,6 +84,7 @@ export function procedureNote(leg: PlannedLegWithChildren, geometry?: RouteGeome
   if (leg.sid_name) parts.push(`SID ${leg.sid_name}`);
   if (leg.star_name) parts.push(`STAR ${leg.star_name}`);
   if (leg.approach_name) parts.push(`APP ${leg.approach_name}`);
+  const allParts = parts.slice();
   if (parts.length === 0) return null;
 
   if (!geometry || (!geometryHasChains(geometry) && geometry.unresolved.length === 0)) {
@@ -103,10 +104,20 @@ export function procedureNote(leg: PlannedLegWithChildren, geometry?: RouteGeome
   const kindLabel = { sid: 'SID', star: 'STAR', approach: 'APP' } as const;
   for (const u of geometry.unresolved) {
     if (u.kind !== 'sid' && u.kind !== 'star' && u.kind !== 'approach') continue;
-    clauses.push(`${kindLabel[u.kind]} ${u.name} — ${UNRESOLVED_TEXT[u.reason] ?? u.reason}`);
+    const label = `${kindLabel[u.kind]} ${u.name}`;
+    const end = u.kind === 'sid' ? geometry.origin : geometry.destination;
+    let text = UNRESOLVED_TEXT[u.reason] ?? u.reason;
+    if (u.reason === 'custom procedure, no runway') {
+      text += end?.isAirport === true ? ' — runway detail not fetched yet' : ' — could not be drawn';
+    }
+    // The label already heads this clause, so the plain header drops it.
+    const at = parts.indexOf(label);
+    if (at >= 0) parts.splice(at, 1);
+    clauses.push(`${label} — ${text}`);
   }
   if (geometry.skippedLegs > 0) clauses.push(`${geometry.skippedLegs} procedure legs not drawable`);
-  return clauses.length > 0 ? `${parts.join(' · ')} — ${clauses.join('; ')}` : parts.join(' · ');
+  if (clauses.length === 0) return allParts.join(' · ');
+  return `${parts.length > 0 ? `${parts.join(' · ')} — ` : ''}${clauses.join('; ')}`;
 }
 
 interface DrawnChain {

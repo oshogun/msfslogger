@@ -329,20 +329,20 @@ describe('the same merge rules on every other table', () => {
     const q = 'SELECT primary_threshold_m p, secondary_threshold_m s FROM nav_runway';
     const base = { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA' };
 
-    apply(db, row('runway', { ...base, primary_threshold_m: 62.77, secondary_threshold_m: 206.35 }));
-    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+    apply(db, row('runway', { ...base, primary_threshold_m: 60.5, secondary_threshold_m: 200.25 }));
+    expect(one(db, q)).toEqual({ p: 60.5, s: 200.25 });
 
     // A zero is a value and replaces what is stored; an omitted key is not a
     // value at all, so the other end keeps its displacement.
     apply(db, row('runway', { ...base, primary_threshold_m: 0, rev: 2 }));
-    expect(one(db, q)).toEqual({ p: 0, s: 206.35 });
+    expect(one(db, q)).toEqual({ p: 0, s: 200.25 });
 
-    apply(db, row('runway', { ...base, primary_threshold_m: 62.77, rev: 3 }));
-    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+    apply(db, row('runway', { ...base, primary_threshold_m: 60.5, rev: 3 }));
+    expect(one(db, q)).toEqual({ p: 60.5, s: 200.25 });
 
     // A row that mentions neither end changes nothing at all, rev included.
     expect(apply(db, row('runway', { ...base, rev: 4 })).applied).toBe(0);
-    expect(one(db, q)).toEqual({ p: 62.77, s: 206.35 });
+    expect(one(db, q)).toEqual({ p: 60.5, s: 200.25 });
     expect(one(db, 'SELECT rev FROM nav_runway')).toEqual({ rev: 3 });
   });
 

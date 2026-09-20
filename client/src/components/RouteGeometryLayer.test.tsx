@@ -53,6 +53,21 @@ describe('procedureNote', () => {
     const g = geometry({ unresolved: [{ kind: 'approach', name: 'ZZBB31', reason: 'custom procedure, no runway' }] });
     expect(procedureNote(leg, g)).toContain('APP ZZBB31 — custom procedure, not a simulator procedure — runway detail not fetched yet');
   });
+
+  it('names an unresolved custom procedure once and promises a fetch only for an airport', () => {
+    const only = { sid_name: null, star_name: null, approach_name: 'ZZCC09' } as unknown as PlannedLegWithChildren;
+    const unresolved = [{ kind: 'approach' as const, name: 'ZZCC09', reason: 'custom procedure, no runway' as const }];
+    const dest = (isAirport: boolean | null) =>
+      ({ ident: 'ZZCC', lat: 1, lon: 2, isAirport }) as unknown as RouteGeometryResponse['destination'];
+    expect(procedureNote(only, geometry({ unresolved, destination: dest(true) }))).toBe(
+      'APP ZZCC09 — custom procedure, not a simulator procedure — runway detail not fetched yet'
+    );
+    for (const flag of [false, null]) {
+      const note = procedureNote(only, geometry({ unresolved, destination: dest(flag) })) ?? '';
+      expect(note).toBe('APP ZZCC09 — custom procedure, not a simulator procedure — could not be drawn');
+      expect(note).not.toContain('not fetched yet');
+    }
+  });
 });
 
 describe('buildGeometryPaths', () => {

@@ -215,16 +215,16 @@ CREATE TABLE IF NOT EXISTS nav_runway (
   length_m                REAL,
   width_m                 REAL,
   -- Displaced threshold, in metres from the pavement end, per end. NULL and 0
-  -- both mean not displaced. MEASURED: non-zero in the wild (PANC 15/33 is
-  -- 62.77 and 206.35), and length_m INCLUDES the displaced portions -- PANC
-  -- 15/33 reports 3464.5 m with 3195.4 m usable. An instrument final is
+  -- both mean not displaced. MEASURED: displaced thresholds are non-zero on
+  -- real runways, and length_m INCLUDES the displaced portions, so the usable
+  -- length is shorter than length_m. An instrument final is
   -- referenced to the LANDING threshold, so a final projected from the pavement
   -- end starts ~200 m off on such a runway. Derivation:
   --   pavement end      = lat/lon (the CENTRE) +/- length_m/2 along the bearing
   --   landing threshold = that point moved INBOARD by the matching value here
   -- primary_* pairs with the primary end, i.e. the heading_deg direction.
-  -- PROVISIONAL: that pairing is confirmed by arithmetic on ONE runway
-  -- (PANC 15/33, the only non-zero sample) plus the member naming.
+  -- PROVISIONAL: that pairing is confirmed by arithmetic on ONE runway (the
+  -- only non-zero sample so far) plus the member naming.
   primary_threshold_m     REAL,
   secondary_threshold_m   REAL,
   pattern_altitude_m      REAL,
