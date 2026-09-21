@@ -138,8 +138,9 @@ expire after 7 days and are deleted once the replica answers them. See
   direct. Only an unknown airway name is reported as unresolved.
 - SIDs and STARs are matched by exact, case-insensitive name plus runway and
   suffix. An approach is NOT matched by name: the plan's `approach_name` is a fix
-  ident. Candidates are the airport's approaches on the plan runway (primary end,
-  never runway 0, which means "no runway") with the same suffix (the simulator
+  ident. Candidates are the airport's approaches whose runway number and designator equal
+  the plan's runway (an approach stored with runway 0, meaning "no runway", never
+  matches a plan runway) with the same suffix (the simulator
   writes `0` for none, so a plan with no suffix matches `0`; any other value,
   digit or letter, is a real suffix); then the plan's ARINC letter selects the
   approach type (I ILS, L LOC, B back course, R/H RNAV, P GPS, V/T VOR or TACAN,
