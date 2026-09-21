@@ -187,21 +187,30 @@ function lookupCandidates(db: Database.Database, wp: PlannedWaypoint): Resolved[
 }
 
 /**
+ * Endpoints whose key starts with `ident|`. The key begins with the ident, so a
+ * range on the key ('|' + 1 is '}') is served by the from_key and to_key indexes
+ * where a comparison on the ident column would scan the whole table.
+ */
+export const AIRWAY_ENDPOINT_SQL =
+  `SELECT from_key AS k, from_region AS region, from_lat AS lat, from_lon AS lon
+     FROM nav_airway_leg WHERE from_key >= @lo AND from_key < @hi
+   UNION ALL
+   SELECT to_key, to_region, to_lat, to_lon
+     FROM nav_airway_leg WHERE to_key >= @lo AND to_key < @hi`;
+
+/**
  * The key of an airway endpoint with this waypoint's ident (and region, when the
  * plan gives one), within the position tolerance of the planned point; the
  * nearest wins and a tie goes to the smaller key. Null when there is none.
+ * Keys carry the ident as the simulator spells it, uppercase in practice, so the
+ * ident is matched uppercased and, when the plan spelled it differently, as given.
  */
 function airwayEndpointNear(db: Database.Database, wp: PlannedWaypoint): string | null {
   const region = (wp.region ?? '').trim().toUpperCase();
-  const rows = db
-    .prepare(
-      `SELECT from_key AS k, from_region AS region, from_lat AS lat, from_lon AS lon
-         FROM nav_airway_leg WHERE upper(from_ident) = upper(?)
-       UNION ALL
-       SELECT to_key, to_region, to_lat, to_lon
-         FROM nav_airway_leg WHERE upper(to_ident) = upper(?)`,
-    )
-    .all(wp.ident, wp.ident) as { k: string; region: string; lat: number; lon: number }[];
+  const idents = [...new Set([wp.ident.toUpperCase(), wp.ident])];
+  const stmt = db.prepare(AIRWAY_ENDPOINT_SQL);
+  const rows = idents.flatMap((ident) => stmt.all({ lo: `${ident}|`, hi: `${ident}}` }) as
+    { k: string; region: string; lat: number; lon: number }[]);
   const cands = rows
     .filter((r) => (region === '' || r.region.toUpperCase() === region) && validCoordinate(r.lat, r.lon))
     .filter((r) => haversineNm(wp.lat, wp.lon, r.lat, r.lon) <= PLANNED_POSITION_TOLERANCE_M / NM_M)

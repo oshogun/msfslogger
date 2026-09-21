@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import { applyNavdataSchema } from '../src/navdata/schema';
 import { legKey, procKey, transKey, wptKey } from '../src/navdata/keys';
 import {
-  AIRWAY_MAX_HOPS, AIRWAY_MAX_VISITED, buildRouteGeometry,
+  AIRWAY_ENDPOINT_SQL, AIRWAY_MAX_HOPS, AIRWAY_MAX_VISITED, buildRouteGeometry,
 } from '../src/navdata/routeGeometry';
 import { RUNWAY_HEADING_REFERENCE, dest, runwayTrueBearing } from '../src/navdata/geometry';
 import { bearingDeg, haversineNm } from '../src/geo';
@@ -367,6 +367,85 @@ describe('enroute waypoints and airways', () => {
         { kind: 'waypoint', name: 'zzvor', reason: 'ident not in cache' },
         { kind: 'airway', name: 'T100', reason: 'no path found' },
       ]);
+    });
+  });
+
+  describe('airway endpoint lookup for a waypoint with no cache row', () => {
+    const vorPlan = (region: string | null, lat = 10.3, ident = 'ZZVOR') => planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'ZZAAA', 10.1, 21, { region: 'ZZ' }),
+        wpt(3, ident, lat, 21, { type: 'VOR', region, airway: 'T100' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    });
+    const node = (ident: string, lat: number, region = 'ZZ') => ({ key: wptKey(ident, region, lat, 21), ident, lat, lon: 21 });
+
+    it('reads the endpoint keys through the from_key and to_key indexes, never a table scan', () => {
+      const db = fresh();
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${AIRWAY_ENDPOINT_SQL}`).all({ lo: 'ZZVOR|', hi: 'ZZVOR}' }) as { detail: string }[];
+      const details = plan.map((p) => p.detail).join('\n');
+      expect(details).not.toMatch(/SCAN nav_airway_leg/);
+      expect(details).toMatch(/SEARCH nav_airway_leg USING (COVERING )?INDEX nav_airway_leg_from/);
+      expect(details).toMatch(/SEARCH nav_airway_leg USING (COVERING )?INDEX nav_airway_leg_to/);
+    });
+
+    it('gives the same result on a large table as on a small one', () => {
+      const db = fresh();
+      const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+      const mid = { key: waypoint(db, 'ZZMID', 'ZZ', 10.2, 21), ident: 'ZZMID', lat: 10.2, lon: 21 };
+      const vor = node('ZZVOR', 10.3001);
+      airwayLeg(db, 'T100', a, mid);
+      airwayLeg(db, 'T100', mid, vor);
+      const ins = db.prepare(
+        `INSERT INTO nav_airway_leg (leg_key, airway, from_key, to_key, from_ident, from_region, from_lat, from_lon,
+           to_ident, to_region, to_lat, to_lon, min_lat, max_lat, min_lon, max_lon, rev)
+         VALUES (?, 'J1', ?, ?, ?, 'ZZ', 0, 0, ?, 'ZZ', 0, 0, 0, 0, 0, 0, 1)`,
+      );
+      db.transaction(() => {
+        for (let i = 0; i < 20000; i++) {
+          const f = `F${i}|ZZ|${i}|0`, t = `F${i + 1}|ZZ|${i + 1}|0`;
+          ins.run(legKey('J1', f, t), f, t, `F${i}`, `F${i + 1}`);
+        }
+      })();
+      const r = buildRouteGeometry(vorPlan(null), db);
+      expect(r.unresolved).toEqual([]);
+      expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'ZZAAA', 'ZZMID', 'ZZVOR', 'TSTB']);
+    });
+
+    it('takes the nearer of two in-tolerance endpoints, and the smaller key on an exact tie', () => {
+      const build = () => {
+        const db = fresh();
+        const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+        const farOne = node('ZZVOR', 10.3005, 'AA'), nearOne = node('ZZVOR', 10.3001, 'BB');
+        expect(farOne.key < nearOne.key).toBe(true);
+        airwayLeg(db, 'T100', a, nearOne);
+        airwayLeg(db, 'T100', farOne, node('ZZOTH', 10.5));
+        return buildRouteGeometry(vorPlan(null, 10.3), db);
+      };
+      // The nearer endpoint has the larger key and is the only one on the airway.
+      const near = build();
+      expect(near.unresolved).toEqual([]);
+      expect(near.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'ZZAAA', 'ZZVOR', 'TSTB']);
+      // Two endpoints at the same spot in different regions: an exact distance tie.
+      const db = fresh();
+      const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+      const mid = { key: waypoint(db, 'ZZMID', 'ZZ', 10.2, 21), ident: 'ZZMID', lat: 10.2, lon: 21 };
+      const lo = node('ZZVOR', 10.3001, 'AA'), hi = node('ZZVOR', 10.3001, 'BB');
+      expect(lo.key < hi.key).toBe(true);
+      airwayLeg(db, 'T100', a, mid);
+      airwayLeg(db, 'T100', mid, hi);   // only the larger-key endpoint connects
+      airwayLeg(db, 'T100', a, lo);     // the smaller-key endpoint connects directly
+      const r = buildRouteGeometry(vorPlan(null, 10.3), db);
+      expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'ZZAAA', 'ZZVOR', 'TSTB']);
+    });
+
+    it('matches a lower-case stored ident as given', () => {
+      const db = fresh();
+      const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+      airwayLeg(db, 'T100', a, node('zzlow', 10.3001));
+      const r = buildRouteGeometry(vorPlan(null, 10.3, 'zzlow'), db);
+      expect(r.unresolved).toEqual([]);
     });
   });
 
