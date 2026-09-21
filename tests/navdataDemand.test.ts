@@ -15,10 +15,11 @@ import {
   swapInReplica,
 } from '../src/navdata/connection';
 import {
-  buildDemand, DemandSkipError, NAVDATA_DEMAND_CAP, NAVDATA_DEMAND_LEG_SCAN, NAVDATA_DEMAND_SKIP_MAX, parseDemandSkip,
+  buildDemand, DemandSkipError, GAP_PASS_BUDGET_MS, resetGapCursor, NAVDATA_DEMAND_CAP, NAVDATA_DEMAND_LEG_SCAN, NAVDATA_DEMAND_SKIP_MAX, parseDemandSkip,
 } from '../src/navdata/demand';
 import { listNavdataRequests, upsertNavdataRequest } from '../src/db/navdataRequests';
 import { wptKey } from '../src/navdata/keys';
+import { AIRWAY_MAX_HOPS, AIRWAY_MAX_VISITED, AIRWAY_NEIGHBOURS_SQL, walkAirway, type AirwayWalk } from '../src/navdata/routeGeometry';
 import type { NavRow, NavRowType } from '../src/navdata/wire';
 import { createScratchDb, destroyScratchDb, seedPlannedLeg, seedTrip, type ScratchDb } from './helpers/db';
 
@@ -103,6 +104,7 @@ function seedLeg(over: Partial<Parameters<typeof seedPlannedLeg>[1]> = {}): numb
 }
 
 beforeEach(() => {
+  resetGapCursor();
   scratch = createScratchDb();
   process.env.NAVDATA_DB_PATH = path.join(scratch.dir, 'navdata.db');
   openNavdata();
@@ -577,21 +579,22 @@ describe('an airport the simulator does not have, sent with no coordinates', () 
 });
 
 describe('airway gaps between planned waypoints', () => {
-  type Pt = { ident: string; lon: number };
+  type Pt = { ident: string; lon: number; region?: string };
   const LAT = 30;
-  const pt = (ident: string, lon: number): Pt => ({ ident, lon });
-  const key = (p: Pt): string => wptKey(p.ident, 'ZZ', LAT, p.lon);
+  const pt = (ident: string, lon: number, region?: string): Pt => ({ ident, lon, region });
+  const regionOf = (p: Pt): string => p.region ?? 'ZZ';
+  const key = (p: Pt): string => wptKey(p.ident, regionOf(p), LAT, p.lon);
 
   const fix = (p: Pt, routesState = 'fetched'): NavRow =>
-    row('waypoint', { wpt_key: key(p), ident: p.ident, region: 'ZZ', lat: LAT, lon: p.lon, routes_state: routesState });
+    row('waypoint', { wpt_key: key(p), ident: p.ident, region: regionOf(p), lat: LAT, lon: p.lon, routes_state: routesState });
 
   const airwayLeg = (airway: string, a: Pt, b: Pt): NavRow => {
     const [lo, hi] = key(a) < key(b) ? [a, b] : [b, a];
     return row('airway_leg', {
       leg_key: `${airway}|${key(lo)}|${key(hi)}`, airway, airway_type: 1,
       from_key: key(a), to_key: key(b),
-      from_ident: a.ident, from_region: 'ZZ', from_lat: LAT, from_lon: a.lon,
-      to_ident: b.ident, to_region: 'ZZ', to_lat: LAT, to_lon: b.lon,
+      from_ident: a.ident, from_region: regionOf(a), from_lat: LAT, from_lon: a.lon,
+      to_ident: b.ident, to_region: regionOf(b), to_lat: LAT, to_lon: b.lon,
       min_lat: LAT, max_lat: LAT, min_lon: Math.min(a.lon, b.lon), max_lon: Math.max(a.lon, b.lon), dateline: 0,
     });
   };
@@ -694,8 +697,20 @@ describe('airway gaps between planned waypoints', () => {
     setReplica([...ends2.fixes, ...ends2.legs, absent('W', 'ZZM1', 'ZZ')]);
     expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2')]);
 
-    setReplica([...ends2.fixes, ...ends2.legs, fix(M2, 'absent'), absent('W', 'ZZM1', '')], 'epoch-2');
+    setReplica([...ends2.fixes, ...ends2.legs, fix(M2, 'absent'), absent('W', 'ZZM1', 'ZZ')], 'epoch-2');
     expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('matches an absent row with no region only against a fix that has no region', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs, absent('W', 'ZZM1', '')]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+
+    const [E1, E2] = [pt('ZZE1', 40.1, ''), pt('ZZE2', 40.2, '')];
+    scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+    seedPlan([{ p: A }, { p: B, airway: 'ZZY1' }]);
+    setReplica([...ends2.fixes, airwayLeg('ZZY1', A, E1), airwayLeg('ZZY1', E2, B), absent('W', 'ZZE1', '')], 'epoch-2');
+    expect(buildDemand(NOW).waypoints).toEqual([{ ident: 'ZZE2', kind: 'W' }]);
   });
 
   it('asks again for a fix of the same ident recorded absent under another region', () => {
@@ -782,5 +797,220 @@ describe('airway gaps between planned waypoints', () => {
     seedPlan(ends());
     setReplica([...ends2.fixes, ...ends2.legs]);
     expect(Object.keys(buildDemand(NOW)).sort()).toEqual(['airports', 'cap', 'generatedAt', 'more', 'v', 'waypoints']);
+  });
+
+  it('spends the gap pass across polls when it runs out of time, starting each poll where the last stopped', () => {
+    const legs = [0, 1, 2].map((k) => {
+      const [a, b] = [pt(`ZZA${k}`, 60 + k * 5), pt(`ZZB${k}`, 60.3 + k * 5)];
+      const [m1, m2] = [pt(`ZZM${k}1`, 60.1 + k * 5), pt(`ZZM${k}2`, 60.2 + k * 5)];
+      return { a, b, m1, m2, airway: `ZZY${k}` };
+    });
+    const rows: NavRow[] = [];
+    legs.forEach((l, k) => {
+      seedPlan([{ p: l.a }, { p: l.b, airway: l.airway }], {}, k + 1);
+      rows.push(fix(l.a), fix(l.b), airwayLeg(l.airway, l.a, l.m1), airwayLeg(l.airway, l.m2, l.b));
+    });
+    setReplica(rows);
+    let t = 0;
+    const slow = (): number => (t += GAP_PASS_BUDGET_MS + 1);
+    const idents = (): string[] => buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident);
+
+    expect(idents()).toEqual(['ZZM01', 'ZZM02']);
+    expect(idents()).toEqual(['ZZM11', 'ZZM12']);
+    expect(idents()).toEqual(['ZZM21', 'ZZM22']);
+    expect(idents()).toEqual(['ZZM01', 'ZZM02']);
+    // A poll with time to spare covers every leg, beginning at the leg the last one stopped before.
+    expect(buildDemand(NOW).waypoints.map((w) => w.ident)).toEqual(['ZZM11', 'ZZM12', 'ZZM21', 'ZZM22', 'ZZM01', 'ZZM02']);
+  });
+
+  it('carries on with the next leg when a poll is cut short inside a leg', () => {
+    const [a, b, c] = [pt('ZZA', 40), pt('ZZB', 40.3), pt('ZZC', 40.6)];
+    seedPlan([{ p: a }, { p: b, airway: 'ZZY1' }, { p: c, airway: 'ZZY2' }], {}, 1);
+    const [a2, b2, m1, m2] = [pt('ZZA2', 70), pt('ZZB2', 70.3), pt('ZZN1', 70.1), pt('ZZN2', 70.2)];
+    seedPlan([{ p: a2 }, { p: b2, airway: 'ZZY3' }], {}, 2);
+    setReplica([
+      fix(a), fix(b), fix(c), airwayLeg('ZZY1', a, M1), airwayLeg('ZZY1', M2, b), airwayLeg('ZZY2', b, pt('ZZO1', 40.4)),
+      airwayLeg('ZZY2', pt('ZZO2', 40.5), c),
+      fix(a2), fix(b2), airwayLeg('ZZY3', a2, m1), airwayLeg('ZZY3', m2, b2),
+    ]);
+    let t = 0;
+    const slow = (): number => (t += GAP_PASS_BUDGET_MS + 1);
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM1', 'ZZM2']);
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZN1', 'ZZN2']);
+  });
+
+  it('restarts the rotation when the replica changes', () => {
+    const [a2, b2, m21, m22] = [pt('ZZA2', 70), pt('ZZB2', 70.3), pt('ZZM21', 70.1), pt('ZZM22', 70.2)];
+    seedPlan(ends(), {}, 1);
+    seedPlan([{ p: a2 }, { p: b2, airway: 'ZZY2' }], {}, 2);
+    const rows = [...ends2.fixes, ...ends2.legs, fix(a2), fix(b2), airwayLeg('ZZY2', a2, m21), airwayLeg('ZZY2', m22, b2)];
+    setReplica(rows);
+    let t = 0;
+    const slow = (): number => (t += GAP_PASS_BUDGET_MS + 1);
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM1', 'ZZM2']);
+    setReplica(rows, 'epoch-2');
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM1', 'ZZM2']);
+  });
+
+  /** Counts the statement runs whose text contains `match` while `fn` runs. */
+  function countQueries(match: string, fn: () => void): number {
+    const statementProto = Object.getPrototypeOf(scratch.db.prepare('SELECT 1')) as { all: (...a: unknown[]) => unknown };
+    const original = statementProto.all;
+    let walks = 0;
+    statementProto.all = function (this: { source: string }, ...args: unknown[]) {
+      if (this.source.includes(match)) walks++;
+      return original.apply(this, args);
+    };
+    try {
+      fn();
+    } finally {
+      statementProto.all = original;
+    }
+    return walks;
+  }
+
+  const countWalkQueries = (fn: () => void): number => countQueries('+airway', fn);
+
+  it('walks a repeated pair once per poll', () => {
+    seedPlan(ends(), {}, 1);
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    const single = countWalkQueries(() => buildDemand(NOW));
+    resetGapCursor();
+    seedPlan(ends(), {}, 2);
+    seedPlan(ends(), {}, 3);
+    expect(single).toBeGreaterThan(0);
+    expect(countWalkQueries(() => buildDemand(NOW))).toBe(single);
+  });
+
+  it('remembers walks between polls while the replica is unchanged and repeats them once it changes', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    const first = countWalkQueries(() => buildDemand(NOW));
+    expect(first).toBeGreaterThan(0);
+    expect(countWalkQueries(() => buildDemand(NOW))).toBe(0);
+    expect(countQueries('SELECT wpt_key, lat, lon FROM nav_waypoint', () => buildDemand(NOW))).toBe(0);
+
+    // A new revision of the same snapshot invalidates it as well.
+    const meta = new Database(resolveNavdataPath());
+    meta.prepare('UPDATE nav_meta SET rev = rev + 1 WHERE id = 1').run();
+    meta.close();
+    expect(countWalkQueries(() => buildDemand(NOW))).toBe(first);
+
+    setReplica([...ends2.fixes, ...ends2.legs, fix(M1), fix(M2), airwayLeg('ZZY1', M1, M2)], 'epoch-2');
+    expect(countWalkQueries(() => buildDemand(NOW))).toBeGreaterThan(0);
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+});
+
+describe('walkAirway', () => {
+  const LAT = 30;
+  const pt = (ident: string, lon: number): { ident: string; lon: number } => ({ ident, lon });
+  type P = ReturnType<typeof pt>;
+  const key = (p: P): string => wptKey(p.ident, 'ZZ', LAT, p.lon);
+  const leg = (a: P, b: P, airway = 'ZZY1'): NavRow => {
+    const [lo, hi] = key(a) < key(b) ? [a, b] : [b, a];
+    return row('airway_leg', {
+      leg_key: `${airway}|${key(lo)}|${key(hi)}`, airway, airway_type: 1, from_key: key(a), to_key: key(b),
+      from_ident: a.ident, from_region: 'ZZ', from_lat: LAT, from_lon: a.lon,
+      to_ident: b.ident, to_region: 'ZZ', to_lat: LAT, to_lon: b.lon,
+      min_lat: LAT, max_lat: LAT, min_lon: Math.min(a.lon, b.lon), max_lon: Math.max(a.lon, b.lon), dateline: 0,
+    });
+  };
+  const chain = (prefix: string, n: number, lon0: number): P[] =>
+    Array.from({ length: n }, (_, i) => pt(`${prefix}${i}`, lon0 + i * 0.001));
+  const links = (nodes: P[]): NavRow[] => nodes.slice(1).map((p, i) => leg(nodes[i], p));
+
+  let nav: Database.Database;
+  beforeEach(() => {
+    nav = new Database(':memory:');
+    applyNavdataSchema(nav);
+  });
+  afterEach(() => nav.close());
+
+  const countedWalk = (from: P, target?: P): { queries: number; walk: AirwayWalk } => {
+    let queries = 0;
+    const spy = {
+      prepare: (sql: string) => {
+        const stmt = nav.prepare(sql);
+        return { all: (...args: unknown[]) => { queries++; return stmt.all(...args); } };
+      },
+    } as unknown as Database.Database;
+    const walk = walkAirway(spy, 'ZZY1', key(from), target ? key(target) : undefined);
+    return { queries, walk };
+  };
+
+  it('stops at the target without exploring the rest of the component', () => {
+    const main = chain('ZZR', 4, 40);
+    const branch = chain('ZZS', 150, 41);
+    applyNavRows(nav, [...links(main), ...links([main[0], ...branch])]);
+
+    const early = countedWalk(main[0], main[3]);
+    expect(early.walk.reached).toBe(true);
+    expect(early.queries).toBeLessThanOrEqual(6);
+
+    const full = countedWalk(main[0]);
+    expect(full.walk.reached).toBe(false);
+    expect(full.queries).toBeGreaterThan(100);
+  });
+
+  it('returns the whole component when the target is not in it', () => {
+    const main = chain('ZZR', 4, 40);
+    applyNavRows(nav, [...links(main), leg(pt('ZZO1', 50), pt('ZZO2', 50.1))]);
+    const walk = walkAirway(nav, 'ZZY1', key(main[0]), key(pt('ZZO1', 50)));
+    expect(walk.reached).toBe(false);
+    expect(walk.nodes.map((n) => n.ident).sort()).toEqual(['ZZR0', 'ZZR1', 'ZZR2', 'ZZR3']);
+  });
+
+  it('stops at the hop bound: the fix AIRWAY_MAX_HOPS hops away is reached, the next is not', () => {
+    const long = chain('ZZL', AIRWAY_MAX_HOPS + 50, 40);
+    applyNavRows(nav, links(long));
+    expect(walkAirway(nav, 'ZZY1', key(long[0]), key(long[AIRWAY_MAX_HOPS])).reached).toBe(true);
+    expect(walkAirway(nav, 'ZZY1', key(long[0]), key(long[AIRWAY_MAX_HOPS + 1])).reached).toBe(false);
+    const all = walkAirway(nav, 'ZZY1', key(long[0])).nodes;
+    expect(all).toHaveLength(AIRWAY_MAX_HOPS + 1);
+  });
+
+  it('stops at the visit bound on a wide component', () => {
+    const hub = pt('ZZHUB', 40);
+    const spokes = Array.from({ length: AIRWAY_MAX_VISITED + 100 }, (_, i) => pt(`ZZK${i}`, 41 + i * 0.001));
+    applyNavRows(nav, spokes.map((s) => leg(hub, s)));
+    const walk = walkAirway(nav, 'ZZY1', key(hub));
+    expect(walk.nodes).toHaveLength(AIRWAY_MAX_VISITED);
+    expect(walkAirway(nav, 'ZZY1', key(hub), key(spokes[AIRWAY_MAX_VISITED + 50])).reached).toBe(false);
+  });
+
+  it('joins endpoint keys within the position tolerance and no further', () => {
+    const [a, x, b] = [pt('ZZA', 40), pt('ZZX', 40.1), pt('ZZB', 40.2)];
+    const xNear = { ...x, lon: x.lon + 0.0001 };
+    const xFar = { ...x, lon: x.lon + 0.00011 };
+    applyNavRows(nav, [leg(a, x), leg(xNear, b)]);
+    expect(walkAirway(nav, 'ZZY1', key(a), key(b)).reached).toBe(true);
+
+    nav.exec('DELETE FROM nav_airway_leg');
+    applyNavRows(nav, [leg(a, x), leg(xFar, b)]);
+    expect(walkAirway(nav, 'ZZY1', key(a), key(b)).reached).toBe(false);
+  });
+
+  it('counts a target within the tolerance of the start as reached at once', () => {
+    const a = pt('ZZA', 40);
+    applyNavRows(nav, [leg(a, pt('ZZB', 40.1))]);
+    const walk = walkAirway(nav, 'ZZY1', key(a), key({ ...a, lon: a.lon + 0.0001 }));
+    expect(walk).toEqual({ nodes: [], reached: true });
+  });
+
+  it('follows only the named airway', () => {
+    const [a, b] = [pt('ZZA', 40), pt('ZZB', 40.1)];
+    applyNavRows(nav, [leg(a, b, 'ZZOTHER')]);
+    expect(walkAirway(nav, 'ZZY1', key(a), key(b)).reached).toBe(false);
+  });
+
+  it('is served by the key indexes, not the airway-name index', () => {
+    const plan = nav
+      .prepare(`EXPLAIN QUERY PLAN ${AIRWAY_NEIGHBOURS_SQL}`)
+      .all({ airway: 'ZZY1', lo: 'ZZA|ZZ|', hi: 'ZZA|ZZ}' }) as { detail: string }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).toMatch(/SEARCH .*USING (COVERING )?INDEX nav_airway_leg_from/);
+    expect(details).toMatch(/SEARCH .*USING (COVERING )?INDEX nav_airway_leg_to/);
+    expect(details).not.toMatch(/nav_airway_leg_name/);
   });
 });

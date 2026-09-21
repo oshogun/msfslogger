@@ -167,18 +167,27 @@ function pickNearest(cands: Resolved[], near: { lat: number; lon: number }): Res
   return best;
 }
 
+const preparedStatements = new WeakMap<Database.Database, Map<string, Database.Statement>>();
+
+/** One prepared statement per handle and text, so a lookup made for every planned waypoint does not recompile. */
+function prepared(db: Database.Database, sql: string): Database.Statement {
+  let byText = preparedStatements.get(db);
+  if (!byText) preparedStatements.set(db, (byText = new Map()));
+  let stmt = byText.get(sql);
+  if (!stmt) byText.set(sql, (stmt = db.prepare(sql)));
+  return stmt;
+}
+
 function lookupCandidates(db: Database.Database, wp: PlannedWaypoint): Resolved[] {
   const region = (wp.region ?? '').trim();
   type WRow = { wpt_key: string; lat: number; lon: number };
   if (region) {
-    const exact = db
-      .prepare('SELECT wpt_key, lat, lon FROM nav_waypoint WHERE ident = ? AND region = ?')
+    const exact = prepared(db, 'SELECT wpt_key, lat, lon FROM nav_waypoint WHERE ident = ? AND region = ?')
       .all(wp.ident, region) as WRow[];
     if (exact.length) return exact.map((r) => ({ key: r.wpt_key, lat: r.lat, lon: r.lon }));
   }
-  const wpts = db.prepare('SELECT wpt_key, lat, lon FROM nav_waypoint WHERE ident = ?').all(wp.ident) as WRow[];
-  const navaids = db
-    .prepare('SELECT ident, region, lat, lon FROM nav_navaid WHERE ident = ? AND lat IS NOT NULL AND lon IS NOT NULL')
+  const wpts = prepared(db, 'SELECT wpt_key, lat, lon FROM nav_waypoint WHERE ident = ?').all(wp.ident) as WRow[];
+  const navaids = prepared(db, 'SELECT ident, region, lat, lon FROM nav_navaid WHERE ident = ? AND lat IS NOT NULL AND lon IS NOT NULL')
     .all(wp.ident) as { ident: string; region: string; lat: number; lon: number }[];
   return [
     ...wpts.map((r) => ({ key: r.wpt_key, lat: r.lat, lon: r.lon })),
@@ -208,7 +217,7 @@ export const AIRWAY_ENDPOINT_SQL =
 function airwayEndpointNear(db: Database.Database, wp: PlannedWaypoint): string | null {
   const region = (wp.region ?? '').trim().toUpperCase();
   const idents = [...new Set([wp.ident.toUpperCase(), wp.ident])];
-  const stmt = db.prepare(AIRWAY_ENDPOINT_SQL);
+  const stmt = prepared(db, AIRWAY_ENDPOINT_SQL);
   const rows = idents.flatMap((ident) => stmt.all({ lo: `${ident}|`, hi: `${ident}}` }) as
     { k: string; region: string; lat: number; lon: number }[]);
   const cands = rows
@@ -337,47 +346,70 @@ function expandAirway(db: Database.Database, airway: string, fromKey: string, to
 
 export interface AirwayReachNode { key: string; ident: string; region: string; lat: number; lon: number }
 
-const AIRWAY_NEIGHBOURS_SQL =
+/**
+ * The airway column is wrapped in `+` so the planner keeps to the key-range
+ * indexes: a plain equality on it would pick the airway-name index and read
+ * every leg of the airway for each step.
+ */
+export const AIRWAY_NEIGHBOURS_SQL =
   `SELECT from_key, to_key, from_ident, from_region, from_lat, from_lon, to_ident, to_region, to_lat, to_lon
      FROM nav_airway_leg WHERE +airway = @airway AND from_key >= @lo AND from_key < @hi
    UNION ALL
    SELECT from_key, to_key, from_ident, from_region, from_lat, from_lon, to_ident, to_region, to_lat, to_lon
      FROM nav_airway_leg WHERE +airway = @airway AND to_key >= @lo AND to_key < @hi`;
 
-const neighbourStatements = new WeakMap<Database.Database, Database.Statement>();
+export interface AirwayWalk {
+  /** Fixes visited, start first when any leg touches it. Only the part explored before a target was reached. */
+  nodes: AirwayReachNode[];
+  /** True when the walk stopped because it reached the target key. */
+  reached: boolean;
+}
 
 /**
- * Every fix reachable from `startKey` over one airway's legs, breadth first
- * within the hop and visit caps of `expandAirway`, joining endpoint keys with
- * the same position tolerance. Each step is a range lookup on the from_key and
- * to_key indexes, so the cost follows the component and never the table. The
- * start fix is part of the result when any leg touches it.
+ * Fixes reachable from `startKey` over one airway's legs, breadth first with the
+ * hop and visit caps of `expandAirway`, joining endpoint keys with the same
+ * position tolerance. Each step is a range lookup on the from_key and to_key
+ * indexes, so the cost follows the part of the component explored and never the
+ * table. With a `targetKey` the walk returns the moment it is reached, so a pair
+ * the airway already connects costs only the hops between them; without one, or
+ * when the target is not in the component, the whole component (within the caps)
+ * is returned.
  */
-export function walkAirway(db: Database.Database, airway: string, startKey: string): AirwayReachNode[] {
-  let stmt = neighbourStatements.get(db);
-  if (!stmt) neighbourStatements.set(db, (stmt = db.prepare(AIRWAY_NEIGHBOURS_SQL)));
+export function walkAirway(
+  db: Database.Database,
+  airway: string,
+  startKey: string,
+  targetKey?: string,
+): AirwayWalk {
+  const stmt = prepared(db, AIRWAY_NEIGHBOURS_SQL);
   type Row = {
     from_key: string; to_key: string; from_ident: string; from_region: string; from_lat: number; from_lon: number;
     to_ident: string; to_region: string; to_lat: number; to_lon: number;
   };
-  const visited = new Map<string, ParsedKey[]>();
   const nodes: AirwayReachNode[] = [];
+  const startParsed = parseKey(startKey);
+  if (!startParsed) return { nodes, reached: false };
+  const target = targetKey === undefined ? null : parseKey(targetKey);
+  const isTarget = (p: ParsedKey): boolean => target !== null && keysNear(p, target);
+  if (isTarget(startParsed)) return { nodes, reached: true };
+
+  const visited = new Map<string, ParsedKey[]>();
+  let visitedCount = 0;
   const seenKey = (p: ParsedKey): boolean => visited.get(p.prefix)?.some((q) => keysNear(q, p)) ?? false;
   const mark = (p: ParsedKey): void => {
+    visitedCount++;
     const list = visited.get(p.prefix);
     if (list) list.push(p);
     else visited.set(p.prefix, [p]);
   };
-  const startParsed = parseKey(startKey);
-  if (!startParsed) return nodes;
-  mark(startParsed);
-  let level: { key: string; p: ParsedKey }[] = [{ key: startKey, p: startParsed }];
   const infoAt = (r: Row, side: 'from' | 'to'): AirwayReachNode => side === 'from'
     ? { key: r.from_key, ident: r.from_ident, region: r.from_region, lat: r.from_lat, lon: r.from_lon }
     : { key: r.to_key, ident: r.to_ident, region: r.to_region, lat: r.to_lat, lon: r.to_lon };
-  let hops = 0;
+
+  mark(startParsed);
+  let level: { key: string; p: ParsedKey }[] = [{ key: startKey, p: startParsed }];
   let startAdded = false;
-  while (level.length && hops <= AIRWAY_MAX_HOPS) {
+  for (let depth = 0; level.length && depth < AIRWAY_MAX_HOPS; depth++) {
     const nextLevel: { key: string; p: ParsedKey }[] = [];
     for (const { key: cur, p } of level.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
       const rows = stmt.all({ airway, lo: `${p.prefix}|`, hi: `${p.prefix}}` }) as Row[];
@@ -392,29 +424,19 @@ export function walkAirway(db: Database.Database, airway: string, startKey: stri
           startAdded = true;
         }
         const otherSide = fromIsCur ? 'to' : 'from';
-        const other = infoAt(r, otherSide);
         const otherP = otherSide === 'to' ? toP : fromP;
         if (!otherP || seenKey(otherP)) continue;
-        if (nodes.length >= AIRWAY_MAX_VISITED) return nodes;
+        if (visitedCount >= AIRWAY_MAX_VISITED) return { nodes, reached: false };
+        const other = infoAt(r, otherSide);
         mark(otherP);
         nodes.push(other);
+        if (isTarget(otherP)) return { nodes, reached: true };
         nextLevel.push({ key: other.key, p: otherP });
       }
     }
     level = nextLevel;
-    hops++;
   }
-  return nodes;
-}
-
-/** Whether `key` is one of the walked fixes, joined with the position tolerance. */
-export function reachHasKey(nodes: readonly AirwayReachNode[], key: string): boolean {
-  const p = parseKey(key);
-  return nodes.some((n) => {
-    if (n.key === key) return true;
-    const q = p ? parseKey(n.key) : null;
-    return p !== null && q !== null && keysNear(p, q);
-  });
+  return { nodes, reached: false };
 }
 
 // ── Procedures ───────────────────────────────────────────────────────────────

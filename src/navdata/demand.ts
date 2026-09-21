@@ -19,10 +19,18 @@ import {
   pruneExpiredNavdataRequests,
   type NavdataRequestRow,
 } from '../db/navdataRequests';
+import { performance } from 'perf_hooks';
 import { haversineNm } from '../geo';
 import type { PlannedWaypoint } from '../types';
 import { getNavDb } from './connection';
-import { airwayAttempted, reachHasKey, resolvePlannedKey, validCoordinate, walkAirway, type AirwayReachNode } from './routeGeometry';
+import {
+  airwayAttempted,
+  resolvePlannedKey,
+  validCoordinate,
+  walkAirway,
+  type AirwayReachNode,
+  type AirwayWalk,
+} from './routeGeometry';
 import type { DemandResponse, DemandWaypoint } from './wire';
 
 /** Planned legs looked at per poll, so the scan cost cannot grow without bound. */
@@ -134,7 +142,7 @@ class Satisfaction {
   private readonly navaidInRegion;
   private readonly absentAny;
   private readonly absentInRegion;
-  private readonly absentWaypointOrAnyRegion;
+  private readonly absentWaypointInRegion;
 
   constructor(nav: Database.Database) {
     this.airportDetail = nav.prepare(
@@ -160,18 +168,16 @@ class Satisfaction {
     );
     this.absentAny = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ?');
     this.absentInRegion = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ? AND region = ?');
-    this.absentWaypointOrAnyRegion = nav.prepare(
-      "SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ? AND region IN (?, '')",
-    );
+    this.absentWaypointInRegion = nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ? AND region = ?");
   }
 
   /**
    * Whether one specific fix, ident and region, needs no further fetch: its
-   * routes were fetched or found absent, or it is recorded as missing (under its
-   * own region or with no region at all).
+   * routes were fetched or found absent, or it is recorded as missing under the
+   * same region (the empty region matches only an empty region).
    */
   waypointAnswered(ident: string, region: string): boolean {
-    return Boolean(this.waypointInRegion.get(ident, region) || this.absentWaypointOrAnyRegion.get(ident, region));
+    return Boolean(this.waypointInRegion.get(ident, region) || this.absentWaypointInRegion.get(ident, region));
   }
 
   holds(want: Want): boolean {
@@ -247,37 +253,110 @@ function frontier(reach: readonly AirwayReachNode[], farEnd: PlannedEnd, satisfa
   }));
 }
 
+/** Wall-clock allowance for the whole gap pass of one poll, in milliseconds. */
+export const GAP_PASS_BUDGET_MS = 100;
+
+/**
+ * What the gap pass remembers between polls, all in memory and all dropped
+ * whenever the replica's snapshot or revision changes: where the next poll's
+ * pass starts in the scanned legs (so legs behind an expensive one are not
+ * starved), and the airway walks and planned-waypoint key lookups already done.
+ * Those are pure functions of the replica's rows, so while it is unchanged a
+ * plan the airways already connect costs a map lookup per pair.
+ */
+interface GapState {
+  snapshotId: string;
+  rev: number;
+  offset: number;
+  resolved: Map<string, ReturnType<typeof resolvePlannedKey>>;
+  walks: Map<string, AirwayWalk>;
+}
+
+const freshGapState = (snapshotId = '', rev = -1): GapState =>
+  ({ snapshotId, rev, offset: 0, resolved: new Map(), walks: new Map() });
+
+let gapState = freshGapState();
+
+/** Entries kept per map, so a long-lived process cannot grow them without bound. */
+const GAP_MEMO_MAX = 5000;
+
+/** Forgets everything the gap pass remembers; for tests, which share one module. */
+export function resetGapCursor(): void {
+  gapState = freshGapState();
+}
+
+function currentGapState(nav: Database.Database): GapState {
+  const meta = nav.prepare('SELECT snapshot_id, rev FROM nav_meta WHERE id = 1').get() as
+    | { snapshot_id: string; rev: number }
+    | undefined;
+  const snapshotId = meta?.snapshot_id ?? '';
+  const rev = meta?.rev ?? -1;
+  if (gapState.snapshotId !== snapshotId || gapState.rev !== rev) gapState = freshGapState(snapshotId, rev);
+  if (gapState.resolved.size > GAP_MEMO_MAX) gapState.resolved.clear();
+  if (gapState.walks.size > GAP_MEMO_MAX) gapState.walks.clear();
+  return gapState;
+}
+
+/** Everything one poll's gap pass looks up more than once. */
+interface GapContext {
+  nav: Database.Database;
+  satisfaction: Satisfaction;
+  waypoints: Database.Statement;
+  state: GapState;
+  pairs: number;
+}
+
+function walkOnce(ctx: GapContext, airway: string, from: string, target?: string): AirwayWalk {
+  const id = `${airway}\u0000${from}\u0000${target ?? ''}`;
+  let walk = ctx.state.walks.get(id);
+  if (!walk) ctx.state.walks.set(id, (walk = walkAirway(ctx.nav, airway, from, target)));
+  return walk;
+}
+
+function resolveOnce(ctx: GapContext, wp: PlannedWaypoint, near: { lat: number; lon: number }) {
+  // The anchor only matters when the plan gave no usable position of its own.
+  if (!validCoordinate(wp.lat, wp.lon)) return resolvePlannedKey(ctx.nav, wp, near);
+  const id = `${wp.type}\u0000${wp.ident}\u0000${wp.region ?? ''}\u0000${wp.lat}\u0000${wp.lon}`;
+  if (!ctx.state.resolved.has(id)) ctx.state.resolved.set(id, resolvePlannedKey(ctx.nav, wp, near));
+  return ctx.state.resolved.get(id) ?? null;
+}
+
+type GapOutcome = 'done' | 'capped' | 'budget';
+
 /**
  * Fixes whose fetch would close a hole in an airway between two consecutive
  * planned waypoints. The sidecar fetches the fixes a plan names and one hop of
  * their neighbours, so the fixes in the middle of an airway segment are never
  * fetched and route geometry finds no path between the ends. Each poll walks
- * the replica's legs for that airway from both ends; when they do not meet, the
- * fixes at the edge of what is known, nearest the other end, are wanted.
+ * the replica's legs for that airway from one end, stopping the moment the other
+ * end is reached; only when it is not reached is the far side walked too, and
+ * the fixes at the edge of what is known, nearest the other end, are wanted.
+ * `outOfTime` is asked before each pair, `emit` returns false once nothing more
+ * can be accepted.
  */
 function gapWants(
-  db: Database.Database,
-  nav: Database.Database,
-  satisfaction: Satisfaction,
+  ctx: GapContext,
   leg: DemandLeg,
   emit: (want: Want) => boolean,
-): void {
-  const waypoints = db
-    .prepare('SELECT seq, ident, region, type, airway, lat, lon FROM planned_waypoints WHERE planned_leg_id = ? ORDER BY seq ASC')
-    .all(leg.id) as PlannedWaypoint[];
+  outOfTime: () => boolean,
+): GapOutcome {
+  const waypoints = ctx.waypoints.all(leg.id) as PlannedWaypoint[];
   let near = { lat: leg.departure_lat, lon: leg.departure_lon };
   let prev: PlannedEnd | null = null;
   let prevIsAirport = false;
   let hasPrevious = false;
 
   for (const wp of waypoints) {
-    const found = resolvePlannedKey(nav, wp, near);
+    const found = resolveOnce(ctx, wp, near);
     if (prev && found && prev.key !== found.key && airwayAttempted(leg, wp, prevIsAirport, hasPrevious)) {
+      if (outOfTime()) return 'budget';
+      ctx.pairs++;
       const airway = wp.airway as string;
-      const fromA = walkAirway(nav, airway, prev.key);
-      if (!reachHasKey(fromA, found.key)) {
-        for (const want of frontier(fromA, found, satisfaction)) if (!emit(want)) return;
-        for (const want of frontier(walkAirway(nav, airway, found.key), prev, satisfaction)) if (!emit(want)) return;
+      const fromA = walkOnce(ctx, airway, prev.key, found.key);
+      if (!fromA.reached) {
+        for (const want of frontier(fromA.nodes, found, ctx.satisfaction)) if (!emit(want)) return 'capped';
+        const fromB = walkOnce(ctx, airway, found.key);
+        for (const want of frontier(fromB.nodes, prev, ctx.satisfaction)) if (!emit(want)) return 'capped';
       }
     }
     if (validCoordinate(wp.lat, wp.lon)) {
@@ -287,6 +366,7 @@ function gapWants(
     prev = found ? { key: found.key, lat: found.lat, lon: found.lon } : null;
     prevIsAirport = wp.type === 'AIRPORT';
   }
+  return 'done';
 }
 
 function scanLegs(db: Database.Database): DemandLeg[] {
@@ -309,7 +389,11 @@ function wantOfRequest(row: NavdataRequestRow): Want {
  * the request row is an intent and nothing more. Idents in `skip` are left out
  * of the answer without being recorded anywhere.
  */
-export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandResponse {
+export function buildDemand(
+  now: Date = new Date(),
+  skip?: DemandSkip,
+  clock: () => number = () => performance.now(),
+): DemandResponse {
   pruneExpiredNavdataRequests(now);
   const db = getDb();
   const nav = getNavDb();
@@ -364,13 +448,40 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
   // the navaids; they are only worth computing while the cap has room for them.
   if (nav && satisfaction && !full()) {
     const room = (): boolean => primary.length + gaps.length <= NAVDATA_DEMAND_CAP;
-    for (const leg of legs) {
-      if (!room()) break;
-      gapWants(db, nav, satisfaction, leg, (want) => {
+    const ctx: GapContext = {
+      nav,
+      satisfaction,
+      waypoints: db.prepare(
+        'SELECT id, seq, ident, region, type, airway, lat, lon FROM planned_waypoints WHERE planned_leg_id = ? ORDER BY seq ASC',
+      ),
+      state: currentGapState(nav),
+      pairs: 0,
+    };
+    const startedAt = clock();
+    let pairsDone = false;
+    // The first pair of a pass is always looked at, so a slow pair cannot stop the pass from moving on.
+    const outOfTime = (): boolean => {
+      if (!pairsDone) {
+        pairsDone = true;
+        return false;
+      }
+      return clock() - startedAt > GAP_PASS_BUDGET_MS;
+    };
+    const first = legs.length === 0 ? 0 : ctx.state.offset % legs.length;
+    let nextOffset = 0;
+    for (let n = 0; n < legs.length; n++) {
+      if (!room()) { nextOffset = ctx.state.offset; break; }
+      const index = (first + n) % legs.length;
+      const pairsBefore = ctx.pairs;
+      const outcome = gapWants(ctx, legs[index], (want) => {
         if (!skipped(want) && !holds(want)) collect(want, gaps);
         return room();
-      });
+      }, outOfTime);
+      if (outcome === 'capped') { nextOffset = ctx.state.offset; break; }
+      // A leg that got no time at all is the first to run next poll; one cut short is not retried until the rotation wraps.
+      if (outcome === 'budget') { nextOffset = ctx.pairs > pairsBefore ? index + 1 : index; break; }
     }
+    ctx.state.offset = nextOffset;
   }
 
   const ordered = primary.concat(gaps, navaids);
