@@ -793,6 +793,132 @@ describe('airway gaps between planned waypoints', () => {
     expect(demand.more).toBe(true);
   });
 
+  describe('a frontier fix that is a navaid', () => {
+    const V = (ident: string, region = 'ZZ'): { ident: string; region: string; kind: 'V' } => ({ ident, region, kind: 'V' });
+    const both = [...ends2.fixes, ...ends2.legs];
+
+    it('is asked for as the navaid its ident and region match, and not at all once that navaid is answered', () => {
+      seedPlan(ends());
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index')]);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2'), V('ZZM1')]);
+
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'detail')], 'epoch-2');
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2')]);
+
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index'), absent('V', 'ZZM1', 'ZZ')], 'epoch-3');
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2')]);
+    });
+
+    it('is judged by the navaid rule, so a fetched waypoint row of that ident does not answer it', () => {
+      seedPlan(ends());
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index'), fix(M1)]);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2'), V('ZZM1')]);
+    });
+
+    it('is asked for as an NDB when the row is an NDB', () => {
+      seedPlan(ends());
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'N', 'index')]);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2'), { ident: 'ZZM1', region: 'ZZ', kind: 'N' }]);
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'N', 'detail')], 'epoch-2');
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2')]);
+    });
+
+    it('is asked for as a waypoint when no navaid row matches, or the only match is another region', () => {
+      seedPlan(ends());
+      setReplica(both);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+      setReplica([...both, navaid('ZZM1', 'ZZX', 'V', 'index')], 'epoch-2');
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+    });
+
+    it('is left out as a waypoint when a plan wants the same ident and region as a VOR', () => {
+      seedPlan([...ends(), { p: pt('ZZM1', 45), type: 'VOR', region: 'ZZ' }]);
+      setReplica(both);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2'), V('ZZM1')]);
+    });
+
+    it('is left out as a waypoint when a plan wants the ident as a region-less navaid, in any region', () => {
+      seedPlan([...ends(), { p: pt('ZZM1', 45), type: 'NDB', region: null }]);
+      setReplica(both);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2'), { ident: 'ZZM1', kind: 'N' }]);
+    });
+
+    it('is still asked for as a waypoint when the plan navaid is another region', () => {
+      seedPlan([...ends(), { p: pt('ZZM1', 45), type: 'VOR', region: 'ZZX' }]);
+      setReplica(both);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2'), V('ZZM1', 'ZZX')]);
+    });
+
+    it('comes after every waypoint and airport, and drops out by ident across kinds under a skip list', () => {
+      seedPlan([...ends(), { p: pt('ZZVOR', 45), type: 'VOR' }], { departure_is_airport: 1 });
+      seedPlan([{ p: pt('ZZOWN', 46) }], {}, 2);
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index')]);
+      const demand = buildDemand(NOW);
+      expect(demand.airports).toEqual(['ZZAA']);
+      expect(demand.waypoints.map((w) => `${w.kind}:${w.ident}`)).toEqual(['W:ZZOWN', 'W:ZZM2', 'V:ZZVOR', 'V:ZZM1']);
+
+      const skipped = buildDemand(NOW, parseDemandSkip({ skipWaypoints: 'zzm1,zzvor' }));
+      expect(skipped.waypoints.map((w) => w.ident)).toEqual(['ZZOWN', 'ZZM2']);
+    });
+
+    it('is pushed out by the cap after the waypoints', () => {
+      const many = Array.from({ length: NAVDATA_DEMAND_CAP - 1 }, (_, i) => ({ p: pt(`ZZQ${i}`, 50 + i * 0.01) }));
+      seedPlan(ends());
+      seedPlan(many, {}, 2);
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index')]);
+      const demand = buildDemand(NOW);
+      expect(demand.waypoints).toHaveLength(NAVDATA_DEMAND_CAP);
+      expect(demand.waypoints[NAVDATA_DEMAND_CAP - 1]).toEqual(wants('ZZM2'));
+      expect(demand.waypoints.map((w) => w.ident)).not.toContain('ZZM1');
+      expect(demand.more).toBe(true);
+    });
+
+    it('is asked once when both ends of the gap reach it', () => {
+      seedPlan(ends());
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index')]);
+      expect(buildDemand(NOW).waypoints.filter((w) => w.ident === 'ZZM1')).toHaveLength(1);
+    });
+
+    it('follows a navaid row added between polls, warm or cold', () => {
+      seedPlan(ends());
+      setReplica(both);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+
+      applyIncrementalBatch(
+        { v: NAVDATA_WIRE_VERSION, schemaVersion: NAVDATA_SCHEMA_VERSION, snapshotId: 'epoch-1', fromRev: 0, toRev: 0, rows: [navaid('ZZM1', 'ZZ', 'V', 'index')], more: false },
+        1,
+      );
+      const warm = buildDemand(NOW).waypoints;
+      expect(warm).toEqual([wants('ZZM2'), V('ZZM1')]);
+      resetGapCursor();
+      expect(buildDemand(NOW).waypoints).toEqual(warm);
+    });
+
+    it('is classified with one lookup that uses the ident index and never scans nav_navaid', () => {
+      seedPlan(ends());
+      setReplica([...both, navaid('ZZM1', 'ZZ', 'V', 'index')]);
+      const proto = Object.getPrototypeOf(scratch.db.prepare('SELECT 1')) as { all: (...a: unknown[]) => unknown };
+      const original = proto.all;
+      const sources = new Set<string>();
+      proto.all = function (this: { source: string }, ...args: unknown[]) {
+        if (this.source.includes('FROM nav_navaid WHERE ident = ?')) sources.add(this.source);
+        return original.apply(this, args);
+      };
+      try {
+        buildDemand(NOW);
+      } finally {
+        proto.all = original;
+      }
+      expect(sources.size).toBe(1);
+      const raw = new Database(resolveNavdataPath(), { readonly: true });
+      const plan = (raw.prepare(`EXPLAIN QUERY PLAN ${[...sources][0]}`).all('ZZM1', 'ZZ') as { detail: string }[])
+        .map((r) => r.detail).join('\n');
+      raw.close();
+      expect(plan).toContain('nav_navaid_ident');
+      expect(plan).not.toMatch(/SCAN nav_navaid/);
+    });
+  });
+
   it('answers with the same fields as before', () => {
     seedPlan(ends());
     setReplica([...ends2.fixes, ...ends2.legs]);

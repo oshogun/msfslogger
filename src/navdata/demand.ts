@@ -144,6 +144,7 @@ class Satisfaction {
   private readonly absentAny;
   private readonly absentInRegion;
   private readonly absentWaypointInRegion;
+  private readonly navaidKindsAt;
 
   constructor(nav: Database.Database) {
     this.airportDetail = nav.prepare(
@@ -170,6 +171,18 @@ class Satisfaction {
     this.absentAny = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ?');
     this.absentInRegion = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ? AND region = ?');
     this.absentWaypointInRegion = nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ? AND region = ?");
+    // The primary key leads with kind, so an ident and region lookup goes through the ident index.
+    this.navaidKindsAt = nav.prepare('SELECT kind FROM nav_navaid WHERE ident = ? AND region = ? ORDER BY kind');
+  }
+
+  /** The navaid kinds the replica holds a row for under exactly this ident and region, 'N' after 'V'. */
+  navaidKinds(ident: string, region: string): ('V' | 'N')[] {
+    return (this.navaidKindsAt.all(ident, region) as { kind: 'V' | 'N' }[]).map((r) => r.kind);
+  }
+
+  /** Whether the navaid of this kind at exactly this ident and region needs no further fetch. */
+  navaidAnswered(kind: 'V' | 'N', ident: string, region: string): boolean {
+    return Boolean(this.navaidInRegion.get(kind, ident, region) || this.absentInRegion.get(kind, ident, region));
   }
 
   /**
@@ -233,22 +246,41 @@ interface PlannedEnd { key: string; lat: number; lon: number }
 
 /**
  * The fixes on `reach` the replica has no answer for, nearest first to the far
- * end of the gap.
+ * end of the gap. A leg row does not say what kind of facility an endpoint is,
+ * so a node whose ident and region exactly match a navaid row is asked for as
+ * that navaid (a waypoint request for a VOR ident answers with whichever
+ * region's station the simulator picks) and is judged by the navaid rules. Any
+ * other node is a waypoint, and is left out when the same ident and region is
+ * already wanted as a navaid in this response.
  */
-function frontier(reach: readonly AirwayReachNode[], farEnd: PlannedEnd, satisfaction: Satisfaction): Want[] {
+function frontier(
+  reach: readonly AirwayReachNode[],
+  farEnd: PlannedEnd,
+  satisfaction: Satisfaction,
+  navaidWanted: (ident: string, region: string) => boolean,
+): Want[] {
   const seen = new Set<string>();
-  const open: { node: AirwayReachNode; dist: number }[] = [];
+  const open: { node: AirwayReachNode; kind: WaypointKind; dist: number }[] = [];
   for (const node of reach) {
     const region = normRegion(node.region) ?? '';
     const id = `${node.ident}|${region}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    if (satisfaction.waypointAnswered(node.ident, region)) continue;
-    open.push({ node, dist: haversineNm(farEnd.lat, farEnd.lon, node.lat, node.lon) });
+    const navaids = satisfaction.navaidKinds(node.ident, region);
+    let kind: WaypointKind;
+    if (navaids.length > 0) {
+      const unanswered = navaids.find((k) => !satisfaction.navaidAnswered(k, node.ident, region));
+      if (unanswered === undefined) continue;
+      kind = unanswered;
+    } else {
+      if (satisfaction.waypointAnswered(node.ident, region) || navaidWanted(node.ident, region)) continue;
+      kind = 'W';
+    }
+    open.push({ node, kind, dist: haversineNm(farEnd.lat, farEnd.lon, node.lat, node.lon) });
   }
   open.sort((a, b) => a.dist - b.dist || (a.node.key < b.node.key ? -1 : a.node.key > b.node.key ? 1 : 0));
-  return open.slice(0, GAP_NODES_PER_SIDE).map(({ node }) => ({
-    kind: 'W' as const,
+  return open.slice(0, GAP_NODES_PER_SIDE).map(({ node, kind }) => ({
+    kind,
     ident: node.ident,
     region: normRegion(node.region),
   }));
@@ -319,6 +351,8 @@ interface GapContext {
   nav: Database.Database;
   satisfaction: Satisfaction;
   waypoints: Database.Statement;
+  /** Whether a VOR or NDB with this ident and region (or no region) is already wanted in this response. */
+  navaidWanted: (ident: string, region: string) => boolean;
   state: GapState;
   pairs: number;
 }
@@ -371,9 +405,9 @@ function gapWants(
       const airway = wp.airway as string;
       const fromA = walkOnce(ctx, airway, prev.key, found.key);
       if (!fromA.reached) {
-        for (const want of frontier(fromA.nodes, found, ctx.satisfaction)) if (!emit(want)) return 'capped';
+        for (const want of frontier(fromA.nodes, found, ctx.satisfaction, ctx.navaidWanted)) if (!emit(want)) return 'capped';
         const fromB = walkOnce(ctx, airway, found.key);
-        for (const want of frontier(fromB.nodes, prev, ctx.satisfaction)) if (!emit(want)) return 'capped';
+        for (const want of frontier(fromB.nodes, prev, ctx.satisfaction, ctx.navaidWanted)) if (!emit(want)) return 'capped';
       }
     }
     if (validCoordinate(wp.lat, wp.lon)) {
@@ -430,11 +464,18 @@ export function buildDemand(
   const navaids: Want[] = [];
   const gaps: Want[] = [];
   const seen = new Set<string>();
+  // Regions ('' for none) each collected navaid ident is wanted under.
+  const navaidRegions = new Map<string, Set<string>>();
 
   const collect = (want: Want, into?: Want[]): void => {
     const key = `${want.kind}|${want.ident}|${want.region ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
+    if (want.kind === 'V' || want.kind === 'N') {
+      const regions = navaidRegions.get(want.ident) ?? new Set<string>();
+      regions.add(want.region ?? '');
+      navaidRegions.set(want.ident, regions);
+    }
     (into ?? (want.kind === 'V' || want.kind === 'N' ? navaids : primary)).push(want);
   };
   // Once the primary group alone overflows the cap nothing further can be emitted.
@@ -462,7 +503,7 @@ export function buildDemand(
   }
 
   // Airway gap fixes come after every fix the plans name themselves and before
-  // the navaids; they are only worth computing while the cap has room for them.
+  // the navaids (a gap fix that is a navaid joins them); they are only worth computing while the cap has room for them.
   if (nav && satisfaction && !full()) {
     const room = (): boolean => primary.length + gaps.length <= NAVDATA_DEMAND_CAP;
     const ctx: GapContext = {
@@ -471,6 +512,10 @@ export function buildDemand(
       waypoints: db.prepare(
         'SELECT id, seq, ident, region, type, airway, lat, lon FROM planned_waypoints WHERE planned_leg_id = ? ORDER BY seq ASC',
       ),
+      navaidWanted: (ident, region) => {
+        const regions = navaidRegions.get(ident);
+        return regions !== undefined && (regions.has('') || regions.has(region));
+      },
       state: currentGapState(nav),
       pairs: 0,
     };
@@ -491,7 +536,7 @@ export function buildDemand(
       const index = (first + n) % legs.length;
       const pairsBefore = ctx.pairs;
       const outcome = gapWants(ctx, legs[index], (want) => {
-        if (!skipped(want) && !holds(want)) collect(want, gaps);
+        if (!skipped(want) && !holds(want)) collect(want, want.kind === 'W' ? gaps : undefined);
         return room();
       }, outOfTime);
       if (outcome === 'capped') { nextOffset = ctx.state.offset; break; }
