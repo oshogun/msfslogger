@@ -252,6 +252,124 @@ describe('enroute waypoints and airways', () => {
     });
   }
 
+  it('resolves an ambiguous ident by the planned position, not the previous point, so the airway expands', () => {
+    const db = fresh();
+    const cand = (ident: string, region: string, lat: number, lon: number) => {
+      db.prepare(
+        "INSERT INTO nav_waypoint (wpt_key, ident, region, lat, lon, rev, position_source, routes_state) VALUES (?, ?, ?, ?, ?, 1, 'minimal', 'unknown')",
+      ).run(wptKey(ident, region, lat, lon), ident, region, lat, lon);
+      return { key: wptKey(ident, region, lat, lon), ident, lat, lon };
+    };
+    // Candidates of one ident: one beside the previous point, others elsewhere.
+    cand('AMBIG', 'AA', 10, 21.1); // nearer the previous point than the right one
+    const right = cand('AMBIG', 'BB', 10, 21.5);
+    cand('AMBIG', 'CC', 30, 40);
+    const from = { key: waypoint(db, 'FROMM', 'ZZ', 10, 21), ident: 'FROMM', lat: 10, lon: 21 };
+    const mid = { key: waypoint(db, 'MIDDL', 'ZZ', 10, 21.2), ident: 'MIDDL', lat: 10, lon: 21.2 };
+    airwayLeg(db, 'T100', from, mid);
+    airwayLeg(db, 'T100', mid, right);
+    const plan = planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'FROMM', 10, 21),
+        wpt(3, 'AMBIG', 10, 21.5, { airway: 'T100' }),
+        wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    });
+    const r = buildRouteGeometry(plan, db);
+    expect(r.unresolved).toEqual([]);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'FROMM', 'MIDDL', 'AMBIG', 'TSTB']);
+  });
+
+  it('falls back to the previous point when the planned coordinate is invalid', () => {
+    const db = fresh();
+    waypoint(db, 'FALLB', 'AA', 10, 20.4);  // beside the previous point
+    waypoint(db, 'FALLB', 'BB', 0.0001, 0.0001); // nearest the invalid (0,0), so a lookup anchored there would take it silently
+    const r = buildRouteGeometry(planned({
+      waypoints: [
+        wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+        wpt(2, 'FALLB', 0, 0),
+        wpt(3, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+      ],
+    }), db);
+    // Anchored on the previous point, the (10,20.4) candidate wins and the (0,0) plan disagrees with it.
+    expect(r.unresolved).toEqual([{ kind: 'waypoint', name: 'FALLB', reason: 'position disagrees with cache' }]);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'TSTB']);
+  });
+
+  it('joins airway endpoints of one fix whose keys differ by a unit in the fifth decimal', () => {
+    const db = fresh();
+    const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+    const c = { key: waypoint(db, 'ZZCCC', 'ZZ', 10.3, 21), ident: 'ZZCCC', lat: 10.3, lon: 21 };
+    const b1 = { key: wptKey('ZZBBB', 'ZZ', 10.2, 21), ident: 'ZZBBB', lat: 10.2, lon: 21 };
+    const b2 = { key: wptKey('ZZBBB', 'ZZ', 10.20001, 21), ident: 'ZZBBB', lat: 10.20001, lon: 21 };
+    expect(b1.key).not.toBe(b2.key);
+    airwayLeg(db, 'T100', a, b1);
+    airwayLeg(db, 'T100', b2, c);
+    const r = buildRouteGeometry(airwayPlan('ZZAAA', 'ZZCCC', 10.1, 10.3), db);
+    expect(r.unresolved).toEqual([]);
+    expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'ZZAAA', 'ZZBBB', 'ZZCCC', 'TSTB']);
+  });
+
+  it('does not join same-ident endpoints that are apart, or of another region', () => {
+    const far = fresh();
+    const a = { key: waypoint(far, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+    const c = { key: waypoint(far, 'ZZCCC', 'ZZ', 10.3, 21), ident: 'ZZCCC', lat: 10.3, lon: 21 };
+    const b1 = { key: wptKey('ZZBBB', 'ZZ', 10.2, 21), ident: 'ZZBBB', lat: 10.2, lon: 21 };
+    const b2 = { key: wptKey('ZZBBB', 'ZZ', 10.2003, 21), ident: 'ZZBBB', lat: 10.2003, lon: 21 };
+    airwayLeg(far, 'T100', a, b1);
+    airwayLeg(far, 'T100', b2, c);
+    expect(buildRouteGeometry(airwayPlan('ZZAAA', 'ZZCCC', 10.1, 10.3), far).unresolved)
+      .toEqual([{ kind: 'airway', name: 'T100', reason: 'no path found' }]);
+
+    const other = fresh();
+    const a2 = { key: waypoint(other, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+    const c2 = { key: waypoint(other, 'ZZCCC', 'ZZ', 10.3, 21), ident: 'ZZCCC', lat: 10.3, lon: 21 };
+    const bq = { key: wptKey('ZZBBB', 'QQ', 10.20001, 21), ident: 'ZZBBB', lat: 10.20001, lon: 21 };
+    airwayLeg(other, 'T100', a2, b1);
+    airwayLeg(other, 'T100', bq, c2);
+    expect(buildRouteGeometry(airwayPlan('ZZAAA', 'ZZCCC', 10.1, 10.3), other).unresolved)
+      .toEqual([{ kind: 'airway', name: 'T100', reason: 'no path found' }]);
+  });
+
+  describe('a planned waypoint with no cache row', () => {
+    function build(vorLat: number, region: string | null) {
+      const db = fresh();
+      const a = { key: waypoint(db, 'ZZAAA', 'ZZ', 10.1, 21), ident: 'ZZAAA', lat: 10.1, lon: 21 };
+      const mid = { key: waypoint(db, 'ZZMID', 'ZZ', 10.2, 21), ident: 'ZZMID', lat: 10.2, lon: 21 };
+      const vor = { key: wptKey('ZZVOR', 'ZZ', vorLat, 21), ident: 'ZZVOR', lat: vorLat, lon: 21 };
+      airwayLeg(db, 'T100', a, mid);
+      airwayLeg(db, 'T100', mid, vor);
+      return buildRouteGeometry(planned({
+        waypoints: [
+          wpt(1, 'TSTA', 10, 20, { type: 'AIRPORT' }),
+          wpt(2, 'ZZAAA', 10.1, 21, { region: 'ZZ' }),
+          wpt(3, 'zzvor', 10.3, 21, { type: 'VOR', region, airway: 'T100' }),
+          wpt(4, 'TSTB', 10, 22, { type: 'AIRPORT' }),
+        ],
+      }), db);
+    }
+
+    it('joins an airway endpoint by ident, region and proximity', () => {
+      for (const region of [null, 'ZZ', 'zz']) {
+        const r = build(10.3001, region);
+        expect(r.unresolved).toEqual([]);
+        expect(r.enroute.points.map((p) => p.ident)).toEqual(['TSTA', 'ZZAAA', 'ZZMID', 'zzvor', 'TSTB']);
+      }
+    });
+
+    it('does not join an endpoint 5 km away or in another region', () => {
+      expect(build(10.345, null).unresolved).toEqual([
+        { kind: 'waypoint', name: 'zzvor', reason: 'ident not in cache' },
+        { kind: 'airway', name: 'T100', reason: 'no path found' },
+      ]);
+      expect(build(10.3001, 'QQ').unresolved).toEqual([
+        { kind: 'waypoint', name: 'zzvor', reason: 'ident not in cache' },
+        { kind: 'airway', name: 'T100', reason: 'no path found' },
+      ]);
+    });
+  });
+
   it('treats DCT and the SID/STAR name as direct segments, not airways', () => {
     const db = fresh();
     waypoint(db, 'AAAAA', 'ZZ', 10.1, 21);

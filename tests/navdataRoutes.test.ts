@@ -216,7 +216,7 @@ describe('GET /demand and POST /state', () => {
     const encoded = new URLSearchParams({ skipAirports: 'ZZAB,ZZAC', skipWaypoints: 'ZZFIX' }).toString();
     expect(encoded).toContain('ZZAB%2CZZAC');
     expect(await get(`?${encoded}`)).toMatchObject({ airports: [], waypoints: [] });
-    expect(await get('?skipAirports=ZZAB%2CZZAC')).toMatchObject({ airports: [], waypoints: [{ ident: 'ZZFIX' }] });
+    expect(await get('?skipAirports=ZZAB%2CZZAC')).toMatchObject({ airports: [], waypoints: [{ ident: 'ZZFIX', kind: 'W' }] });
     expect(await get('?skipAirports=ZZAB,ZZAC')).toMatchObject({ airports: [] });
     expect((await get('?skipAirports=ZZAB')).airports).toEqual(['ZZAC']);
   });

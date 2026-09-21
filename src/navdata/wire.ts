@@ -66,7 +66,12 @@ export interface NavdataError {
   serverSnapshotId?: SnapshotId | null; serverRev?: Rev; serverSchemaVersion?: number;
 }
 
-export interface DemandWaypoint { ident: string; region?: string | null; }
+/**
+ * One waypoint-shaped facility wanted. `kind` is 'W' for a fix, 'V' for a VOR and
+ * 'N' for an NDB; omitted means 'W'. A VOR and a fix may share an ident and are
+ * separate entries.
+ */
+export interface DemandWaypoint { ident: string; region?: string | null; kind?: 'W' | 'V' | 'N'; }
 export interface DemandResponse {
   v: 1; airports: string[]; waypoints: DemandWaypoint[];
   cap: number; more: boolean; generatedAt: number;

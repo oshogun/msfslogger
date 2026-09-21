@@ -28,7 +28,8 @@ export const NAVDATA_DEMAND_LEG_SCAN = 200;
 export const NAVDATA_DEMAND_CAP = 50;
 
 /** Planned-waypoint types that name a simulator facility. USER never does. */
-const WAYPOINT_TYPES: ReadonlySet<string> = new Set(['WAYPOINT', 'VOR', 'NDB']);
+const WAYPOINT_TYPES_KIND: Readonly<Record<string, WaypointKind>> = { WAYPOINT: 'W', VOR: 'V', NDB: 'N' };
+const WAYPOINT_TYPES: ReadonlySet<string> = new Set(Object.keys(WAYPOINT_TYPES_KIND));
 
 interface DemandLeg {
   id: number;
@@ -44,7 +45,8 @@ interface PlannedWaypointRow {
   type: string;
 }
 
-type Want = { kind: 'A'; ident: string; region: null } | { kind: 'W'; ident: string; region: string | null };
+type WaypointKind = NonNullable<DemandWaypoint['kind']>;
+type Want = { kind: 'A'; ident: string; region: null } | { kind: WaypointKind; ident: string; region: string | null };
 
 const LEG_COLUMNS =
   'pl.id, pl.departure_ident, pl.departure_is_airport, pl.destination_ident, pl.destination_is_airport';
@@ -120,20 +122,33 @@ class Satisfaction {
   private readonly waypointInRegion;
   private readonly navaidAny;
   private readonly navaidInRegion;
-  private readonly waypointAbsentAny;
-  private readonly waypointAbsentInRegion;
+  private readonly absentAny;
+  private readonly absentInRegion;
 
   constructor(nav: Database.Database) {
     this.airportDetail = nav.prepare(
       "SELECT 1 FROM nav_airport WHERE ident = ? AND detail_state IN ('detail', 'absent')",
     );
     this.airportAbsent = nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'A' AND ident = ?");
-    this.waypointAny = nav.prepare('SELECT 1 FROM nav_waypoint WHERE ident = ?');
-    this.waypointInRegion = nav.prepare('SELECT 1 FROM nav_waypoint WHERE ident = ? AND region = ?');
-    this.navaidAny = nav.prepare('SELECT 1 FROM nav_navaid WHERE ident = ?');
-    this.navaidInRegion = nav.prepare('SELECT 1 FROM nav_navaid WHERE ident = ? AND region = ?');
-    this.waypointAbsentAny = nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ?");
-    this.waypointAbsentInRegion = nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ? AND region = ?");
+    // Only a row whose airways were fetched (or checked and found absent) answers a
+    // waypoint want. A minimal candidate from an ambiguous ident carries a position
+    // and nothing else, so it must not stop the demand for the fix's routes.
+    this.waypointAny = nav.prepare(
+      "SELECT 1 FROM nav_waypoint WHERE ident = ? AND routes_state IN ('fetched', 'absent')",
+    );
+    this.waypointInRegion = nav.prepare(
+      "SELECT 1 FROM nav_waypoint WHERE ident = ? AND region = ? AND routes_state IN ('fetched', 'absent')",
+    );
+    // A navaid answers a VOR or NDB want only once its facility detail was read;
+    // an index or position-only row does not.
+    this.navaidAny = nav.prepare(
+      "SELECT 1 FROM nav_navaid WHERE kind = ? AND ident = ? AND detail_state IN ('detail', 'absent')",
+    );
+    this.navaidInRegion = nav.prepare(
+      "SELECT 1 FROM nav_navaid WHERE kind = ? AND ident = ? AND region = ? AND detail_state IN ('detail', 'absent')",
+    );
+    this.absentAny = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ?');
+    this.absentInRegion = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ? AND region = ?');
   }
 
   holds(want: Want): boolean {
@@ -142,19 +157,15 @@ class Satisfaction {
       // what makes a custom procedure drawable.
       return Boolean(this.airportDetail.get(want.ident) || this.airportAbsent.get(want.ident));
     }
-    const region = want.region;
-    if (region === null) {
-      return Boolean(
-        this.waypointAny.get(want.ident) ||
-          this.navaidAny.get(want.ident) ||
-          this.waypointAbsentAny.get(want.ident),
-      );
+    const { kind, ident, region } = want;
+    if (kind === 'W') {
+      return region === null
+        ? Boolean(this.waypointAny.get(ident) || this.absentAny.get('W', ident))
+        : Boolean(this.waypointInRegion.get(ident, region) || this.absentInRegion.get('W', ident, region));
     }
-    return Boolean(
-      this.waypointInRegion.get(want.ident, region) ||
-        this.navaidInRegion.get(want.ident, region) ||
-        this.waypointAbsentInRegion.get(want.ident, region),
-    );
+    return region === null
+      ? Boolean(this.navaidAny.get(kind, ident) || this.absentAny.get(kind, ident))
+      : Boolean(this.navaidInRegion.get(kind, ident, region) || this.absentInRegion.get(kind, ident, region));
   }
 }
 
@@ -170,7 +181,7 @@ function legWants(db: Database.Database, leg: DemandLeg): Want[] {
     if (type === 'AIRPORT') {
       wants.push({ kind: 'A', ident: normIdent(w.ident), region: null });
     } else if (WAYPOINT_TYPES.has(type)) {
-      wants.push({ kind: 'W', ident: normIdent(w.ident), region: normRegion(w.region) });
+      wants.push({ kind: WAYPOINT_TYPES_KIND[type], ident: normIdent(w.ident), region: normRegion(w.region) });
     }
   }
 
@@ -229,8 +240,8 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
     if (airports.length + waypoints.length >= NAVDATA_DEMAND_CAP) return 'capped';
     seen.add(key);
     if (want.kind === 'A') airports.push(want.ident);
-    else if (want.region === null) waypoints.push({ ident: want.ident });
-    else waypoints.push({ ident: want.ident, region: want.region });
+    else if (want.region === null) waypoints.push({ ident: want.ident, kind: want.kind });
+    else waypoints.push({ ident: want.ident, region: want.region, kind: want.kind });
     return 'added';
   };
 

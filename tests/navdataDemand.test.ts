@@ -31,11 +31,16 @@ const row = (t: NavRowType, r: Row): NavRow => ({ t, r: { rev: 1, ...r } });
 
 const airport = (ident: string, detailState = 'detail'): NavRow =>
   row('airport', { ident, lat: 10, lon: 20, detail_state: detailState });
-const waypoint = (ident: string, region = 'ZZ'): NavRow =>
-  row('waypoint', { wpt_key: wptKey(ident, region, 11, 21), ident, region, lat: 11, lon: 21 });
-const navaid = (ident: string, region = 'ZZ'): NavRow =>
-  row('navaid', { kind: 'V', ident, region, lat: 12, lon: 22, position_source: 'list' });
-const absent = (kind: 'A' | 'W', ident: string, region = ''): NavRow =>
+const waypoint = (ident: string, region = 'ZZ', routesState = 'fetched'): NavRow =>
+  row('waypoint', { wpt_key: wptKey(ident, region, 11, 21), ident, region, lat: 11, lon: 21, routes_state: routesState });
+const minimalCandidate = (ident: string, region: string, lat: number): NavRow =>
+  row('waypoint', {
+    wpt_key: wptKey(ident, region, lat, 21), ident, region, lat, lon: 21,
+    position_source: 'minimal', routes_state: 'unknown', airport_ident: 'ZZAA',
+  });
+const navaid = (ident: string, region = 'ZZ', kind = 'V', detailState = 'detail'): NavRow =>
+  row('navaid', { kind, ident, region, lat: 12, lon: 22, position_source: 'list', detail_state: detailState });
+const absent = (kind: 'A' | 'W' | 'V' | 'N', ident: string, region = ''): NavRow =>
   row('absent', { kind, ident, region, reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000 });
 
 /** Builds a replica file from scratch and leaves it open as the live one. */
@@ -123,7 +128,7 @@ describe('demand from planned legs', () => {
 
     const demand = buildDemand(NOW);
 
-    expect(demand.waypoints).toEqual([{ ident: 'NEVER' }]);
+    expect(demand.waypoints).toEqual([{ ident: 'NEVER', kind: 'W' }]);
     expect(demand).toMatchObject({ v: 1, airports: [], cap: NAVDATA_DEMAND_CAP, more: false, generatedAt: NOW.getTime() });
   });
 
@@ -166,7 +171,109 @@ describe('demand from planned legs', () => {
 
     // ZZFIX is held for another region, so it is still wanted; ZZNAV names no
     // region, so the navaid answers it; ZZGON is recorded missing.
-    expect(buildDemand(NOW).waypoints).toEqual([{ ident: 'ZZFIX', region: 'YY' }]);
+    expect(buildDemand(NOW).waypoints).toEqual([{ ident: 'ZZFIX', region: 'YY', kind: 'W' }]);
+  });
+
+  it('is not satisfied by position-only candidates, only by fetched or absent rows', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZMIN', type: 'WAYPOINT' },
+      { ident: 'ZZMIR', type: 'WAYPOINT', region: 'ZZ' },
+      { ident: 'ZZFET', type: 'WAYPOINT' },
+      { ident: 'ZZFER', type: 'WAYPOINT', region: 'ZZ' },
+      { ident: 'ZZABS', type: 'WAYPOINT' },
+      { ident: 'ZZABR', type: 'WAYPOINT', region: 'ZZ' },
+      { ident: 'ZZNAB', type: 'WAYPOINT' },
+      { ident: 'ZZPEN', type: 'WAYPOINT' },
+      { ident: 'ZZFAI', type: 'WAYPOINT', region: 'ZZ' },
+    ]);
+    setReplica([
+      minimalCandidate('ZZMIN', 'ZZ', 11), minimalCandidate('ZZMIN', 'YY', 12),
+      minimalCandidate('ZZMIR', 'ZZ', 11), minimalCandidate('ZZMIR', 'YY', 12),
+      waypoint('ZZFET', 'YY'), waypoint('ZZFER', 'ZZ'),
+      waypoint('ZZABS', 'ZZ', 'absent'), waypoint('ZZABR', 'ZZ', 'absent'),
+      absent('W', 'ZZNAB'),
+      waypoint('ZZPEN', 'ZZ', 'pending'), waypoint('ZZFAI', 'ZZ', 'failed'),
+    ]);
+
+    expect(buildDemand(NOW).waypoints).toEqual([
+      { ident: 'ZZMIN', kind: 'W' }, { ident: 'ZZMIR', region: 'ZZ', kind: 'W' }, { ident: 'ZZPEN', kind: 'W' },
+      { ident: 'ZZFAI', region: 'ZZ', kind: 'W' },
+    ]);
+  });
+
+  it('emits the kind of each planned waypoint type', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZFIX', type: 'WAYPOINT' },
+      { ident: 'ZZVOR', type: 'VOR', region: 'ZZ' },
+      { ident: 'ZZNDB', type: 'NDB' },
+    ]);
+    setReplica([]);
+
+    expect(buildDemand(NOW).waypoints).toEqual([
+      { ident: 'ZZFIX', kind: 'W' }, { ident: 'ZZVOR', region: 'ZZ', kind: 'V' }, { ident: 'ZZNDB', kind: 'N' },
+    ]);
+  });
+
+  it('satisfies a VOR or NDB want only by a detailed navaid of that kind or a nav_absent row of that kind', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZV01', type: 'VOR' },                    // a fix row does not answer it
+      { ident: 'ZZV02', type: 'VOR' },                    // detailed navaid, any region
+      { ident: 'ZZV03', type: 'VOR', region: 'ZZ' },      // detailed navaid, named region
+      { ident: 'ZZV04', type: 'VOR', region: 'YY' },      // detailed navaid in another region
+      { ident: 'ZZV05', type: 'VOR' },                    // nav_absent V
+      { ident: 'ZZV06', type: 'VOR', region: 'ZZ' },      // nav_absent V, named region
+      { ident: 'ZZV07', type: 'VOR' },                    // index-only navaid
+      { ident: 'ZZV08', type: 'VOR' },                    // pending navaid
+      { ident: 'ZZV09', type: 'VOR' },                    // failed navaid
+      { ident: 'ZZV10', type: 'VOR' },                    // navaid of the other kind
+      { ident: 'ZZN01', type: 'NDB' },                    // detailed NDB
+      { ident: 'ZZN02', type: 'NDB' },                    // nav_absent N
+      { ident: 'ZZN03', type: 'NDB' },                    // nav_absent V does not answer an NDB
+      { ident: 'ZZN04', type: 'NDB' },                    // absent-state navaid
+      { ident: 'ZZV11', type: 'VOR', region: 'ZZ' },      // index-only navaid, named region
+      { ident: 'ZZF01', type: 'WAYPOINT' },               // a detailed navaid does not answer a fix
+    ]);
+    setReplica([
+      waypoint('ZZV01', 'ZZ'),
+      navaid('ZZV02'), navaid('ZZV03', 'ZZ'), navaid('ZZV04', 'ZZ'),
+      absent('V', 'ZZV05'), absent('V', 'ZZV06', 'ZZ'),
+      navaid('ZZV07', 'ZZ', 'V', 'index'), navaid('ZZV08', 'ZZ', 'V', 'pending'), navaid('ZZV09', 'ZZ', 'V', 'failed'),
+      navaid('ZZV10', 'ZZ', 'N'),
+      navaid('ZZN01', 'ZZ', 'N'), absent('N', 'ZZN02'), absent('V', 'ZZN03'),
+      navaid('ZZN04', 'ZZ', 'N', 'absent'),
+      navaid('ZZV11', 'ZZ', 'V', 'index'), navaid('ZZF01'),
+    ]);
+
+    expect(buildDemand(NOW).waypoints).toEqual([
+      { ident: 'ZZV01', kind: 'V' }, { ident: 'ZZV04', region: 'YY', kind: 'V' },
+      { ident: 'ZZV07', kind: 'V' }, { ident: 'ZZV08', kind: 'V' }, { ident: 'ZZV09', kind: 'V' },
+      { ident: 'ZZV10', kind: 'V' }, { ident: 'ZZN03', kind: 'N' },
+      { ident: 'ZZV11', region: 'ZZ', kind: 'V' }, { ident: 'ZZF01', kind: 'W' },
+    ]);
+  });
+
+  it('keeps a VOR and a fix that share an ident as two entries, and a skip removes both', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZSAM', type: 'WAYPOINT' },
+      { ident: 'ZZSAM', type: 'VOR' },
+      { ident: 'ZZSAM', type: 'VOR' },
+      { ident: 'ZZOTH', type: 'VOR' },
+    ]);
+    setReplica([]);
+
+    expect(buildDemand(NOW).waypoints).toEqual([
+      { ident: 'ZZSAM', kind: 'W' }, { ident: 'ZZSAM', kind: 'V' }, { ident: 'ZZOTH', kind: 'V' },
+    ]);
+    const skip = { airports: new Set<string>(), waypoints: new Set(['ZZSAM']) };
+    expect(buildDemand(NOW, skip).waypoints).toEqual([{ ident: 'ZZOTH', kind: 'V' }]);
   });
 
   it('wants everything when there is no replica at all', () => {
@@ -174,7 +281,7 @@ describe('demand from planned legs', () => {
     const leg = seedLeg({ trip_id: trip });
     seedWaypoints(leg, [{ ident: 'ZZFIX', type: 'WAYPOINT' }]);
 
-    expect(buildDemand(NOW)).toMatchObject({ airports: ['ZZAA', 'ZZAB'], waypoints: [{ ident: 'ZZFIX' }] });
+    expect(buildDemand(NOW)).toMatchObject({ airports: ['ZZAA', 'ZZAB'], waypoints: [{ ident: 'ZZFIX', kind: 'W' }] });
   });
 
   it('scans the active trip whatever the leg status, then legs still planned', () => {
@@ -202,7 +309,7 @@ describe('demand from planned legs', () => {
     const demand = buildDemand(NOW);
 
     expect(demand.waypoints).toHaveLength(NAVDATA_DEMAND_CAP);
-    expect(demand.waypoints[0]).toEqual({ ident: 'ZZW00' });
+    expect(demand.waypoints[0]).toEqual({ ident: 'ZZW00', kind: 'W' });
     expect(demand.more).toBe(true);
     expect(demand.cap).toBe(50);
   });
@@ -282,7 +389,7 @@ describe('manual requests', () => {
     const demand = buildDemand(NOW);
 
     expect(demand.airports).toEqual([]);
-    expect(demand.waypoints).toEqual([{ ident: 'ZZNEW' }]);
+    expect(demand.waypoints).toEqual([{ ident: 'ZZNEW', kind: 'W' }]);
     expect(listNavdataRequests(NOW).map(r => r.ident)).toEqual(['ZZNEW']);
   });
 });
@@ -345,7 +452,7 @@ describe('skipping idents the sidecar has parked', () => {
     // An airport skip does not hide a waypoint of the same ident, or the reverse.
     expect(buildDemand(NOW, skip(['ZZOTH'], ['ZZFIX']))).toMatchObject({
       airports: ['ZZAA'],
-      waypoints: [{ ident: 'ZZOTH' }],
+      waypoints: [{ ident: 'ZZOTH', kind: 'W' }],
     });
     expect(buildDemand(NOW, skip(['ZZAA'], [])).waypoints).toHaveLength(3);
   });

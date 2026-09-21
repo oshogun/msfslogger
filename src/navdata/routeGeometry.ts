@@ -186,7 +186,46 @@ function lookupCandidates(db: Database.Database, wp: PlannedWaypoint): Resolved[
   ];
 }
 
+/**
+ * The key of an airway endpoint with this waypoint's ident (and region, when the
+ * plan gives one), within the position tolerance of the planned point; the
+ * nearest wins and a tie goes to the smaller key. Null when there is none.
+ */
+function airwayEndpointNear(db: Database.Database, wp: PlannedWaypoint): string | null {
+  const region = (wp.region ?? '').trim().toUpperCase();
+  const rows = db
+    .prepare(
+      `SELECT from_key AS k, from_region AS region, from_lat AS lat, from_lon AS lon
+         FROM nav_airway_leg WHERE upper(from_ident) = upper(?)
+       UNION ALL
+       SELECT to_key, to_region, to_lat, to_lon
+         FROM nav_airway_leg WHERE upper(to_ident) = upper(?)`,
+    )
+    .all(wp.ident, wp.ident) as { k: string; region: string; lat: number; lon: number }[];
+  const cands = rows
+    .filter((r) => (region === '' || r.region.toUpperCase() === region) && validCoordinate(r.lat, r.lon))
+    .filter((r) => haversineNm(wp.lat, wp.lon, r.lat, r.lon) <= PLANNED_POSITION_TOLERANCE_M / NM_M)
+    .map((r) => ({ key: r.k, lat: r.lat, lon: r.lon }));
+  return pickNearest(cands, { lat: wp.lat, lon: wp.lon })?.key ?? null;
+}
+
 // ── Airway expansion ─────────────────────────────────────────────────────────
+
+/** Endpoint keys of one fix can differ by a unit or two in the last place when the sender rounded differently. */
+const KEY_JOIN_UNITS = 10;
+
+interface ParsedKey { prefix: string; lat: number; lon: number }
+
+/** Splits ident|region|lat|lon on the last two separators, so an odd ident cannot confuse it. */
+function parseKey(key: string): ParsedKey | null {
+  const lonAt = key.lastIndexOf('|');
+  const latAt = lonAt > 0 ? key.lastIndexOf('|', lonAt - 1) : -1;
+  if (latAt <= 0) return null;
+  const lat = Number(key.slice(latAt + 1, lonAt));
+  const lon = Number(key.slice(lonAt + 1));
+  if (key.slice(latAt + 1, lonAt) === '' || key.slice(lonAt + 1) === '' || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { prefix: key.slice(0, latAt), lat, lon };
+}
 
 interface AirwayNode { ident: string; lat: number; lon: number }
 
@@ -218,6 +257,46 @@ function expandAirway(db: Database.Database, airway: string, fromKey: string, to
     info.set(r.from_key, { ident: r.from_ident, lat: r.from_lat, lon: r.from_lon });
     info.set(r.to_key, { ident: r.to_ident, lat: r.to_lat, lon: r.to_lon });
   }
+
+  // Keys of one ident and region whose positions are within the join tolerance are
+  // one node; the smallest key stands for the cluster, so exact keys never merge.
+  const parsed = [...adj.keys()].sort().map((k) => ({ k, p: parseKey(k) }));
+  const reps: { k: string; p: ParsedKey }[] = [];
+  const repOf = new Map<string, string>();
+  const near = (a: ParsedKey, b: ParsedKey): boolean =>
+    a.prefix === b.prefix && Math.abs(a.lat - b.lat) <= KEY_JOIN_UNITS && Math.abs(a.lon - b.lon) <= KEY_JOIN_UNITS;
+  for (const { k, p } of parsed) {
+    const hit = p ? reps.find((r) => near(r.p, p)) : undefined;
+    if (hit) repOf.set(k, hit.k);
+    else {
+      repOf.set(k, k);
+      if (p) reps.push({ k, p });
+    }
+  }
+  const canon = (k: string): string => {
+    const known = repOf.get(k);
+    if (known !== undefined) return known;
+    const p = parseKey(k);
+    const hit = p ? reps.find((r) => near(r.p, p)) : undefined;
+    return hit ? hit.k : k;
+  };
+  if (repOf.size !== new Set(repOf.values()).size) {
+    const merged = new Map<string, Set<string>>();
+    const mergedInfo = new Map<string, AirwayNode>();
+    for (const [k, set] of adj) {
+      const rk = canon(k);
+      let m = merged.get(rk);
+      if (!m) merged.set(rk, (m = new Set()));
+      for (const n of set) if (canon(n) !== rk) m.add(canon(n));
+      if (!mergedInfo.has(rk) || k === rk) mergedInfo.set(rk, info.get(k) as AirwayNode);
+    }
+    adj.clear();
+    for (const [k, v] of merged) adj.set(k, v);
+    info.clear();
+    for (const [k, v] of mergedInfo) info.set(k, v);
+  }
+  fromKey = canon(fromKey);
+  toKey = canon(toKey);
   if (!adj.has(fromKey) || !adj.has(toKey)) return null;
 
   const parent = new Map<string, string | null>([[fromKey, null]]);
@@ -576,7 +655,10 @@ function buildEnroute(
     // Airports and user-defined points are not navdata: nothing to look up.
     const skipLookup = wp.type === 'AIRPORT' || wp.type === 'USER';
     if (!skipLookup) {
-      const chosen = pickNearest(lookupCandidates(db, wp), near);
+      // The planned position is the best anchor: an ident shared by many fixes must
+      // resolve to the one the plan drew, not the one nearest the previous point.
+      const anchor = validCoordinate(wp.lat, wp.lon) ? { lat: wp.lat, lon: wp.lon } : near;
+      const chosen = pickNearest(lookupCandidates(db, wp), anchor);
       if (chosen) {
         key = chosen.key;
         resolved = true;
@@ -584,7 +666,15 @@ function buildEnroute(
           addUnresolved(acc, 'waypoint', wp.ident, 'position disagrees with cache');
         }
       } else {
-        addUnresolved(acc, 'waypoint', wp.ident, 'ident not in cache');
+        // A facility whose own rows were never fetched can still be an airway
+        // endpoint; join by ident, region and proximity to the planned position.
+        const endpoint = validCoordinate(wp.lat, wp.lon) ? airwayEndpointNear(db, wp) : null;
+        if (endpoint) {
+          key = endpoint;
+          resolved = true;
+        } else {
+          addUnresolved(acc, 'waypoint', wp.ident, 'ident not in cache');
+        }
       }
     }
 
