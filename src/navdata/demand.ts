@@ -19,7 +19,10 @@ import {
   pruneExpiredNavdataRequests,
   type NavdataRequestRow,
 } from '../db/navdataRequests';
+import { haversineNm } from '../geo';
+import type { PlannedWaypoint } from '../types';
 import { getNavDb } from './connection';
+import { airwayAttempted, reachHasKey, resolvePlannedKey, validCoordinate, walkAirway, type AirwayReachNode } from './routeGeometry';
 import type { DemandResponse, DemandWaypoint } from './wire';
 
 /** Planned legs looked at per poll, so the scan cost cannot grow without bound. */
@@ -37,6 +40,12 @@ interface DemandLeg {
   departure_is_airport: number;
   destination_ident: string;
   destination_is_airport: number;
+  departure_lat: number;
+  departure_lon: number;
+  sid_name: string | null;
+  sid_transition: string | null;
+  star_name: string | null;
+  star_transition: string | null;
 }
 
 interface PlannedWaypointRow {
@@ -49,7 +58,8 @@ type WaypointKind = NonNullable<DemandWaypoint['kind']>;
 type Want = { kind: 'A'; ident: string; region: null } | { kind: WaypointKind; ident: string; region: string | null };
 
 const LEG_COLUMNS =
-  'pl.id, pl.departure_ident, pl.departure_is_airport, pl.destination_ident, pl.destination_is_airport';
+  'pl.id, pl.departure_ident, pl.departure_is_airport, pl.destination_ident, pl.destination_is_airport, ' +
+  'pl.departure_lat, pl.departure_lon, pl.sid_name, pl.sid_transition, pl.star_name, pl.star_transition';
 
 const ACTIVE_TRIP_LEGS = `
   SELECT ${LEG_COLUMNS}
@@ -124,6 +134,7 @@ class Satisfaction {
   private readonly navaidInRegion;
   private readonly absentAny;
   private readonly absentInRegion;
+  private readonly absentWaypointOrAnyRegion;
 
   constructor(nav: Database.Database) {
     this.airportDetail = nav.prepare(
@@ -149,6 +160,18 @@ class Satisfaction {
     );
     this.absentAny = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ?');
     this.absentInRegion = nav.prepare('SELECT 1 FROM nav_absent WHERE kind = ? AND ident = ? AND region = ?');
+    this.absentWaypointOrAnyRegion = nav.prepare(
+      "SELECT 1 FROM nav_absent WHERE kind = 'W' AND ident = ? AND region IN (?, '')",
+    );
+  }
+
+  /**
+   * Whether one specific fix, ident and region, needs no further fetch: its
+   * routes were fetched or found absent, or it is recorded as missing (under its
+   * own region or with no region at all).
+   */
+  waypointAnswered(ident: string, region: string): boolean {
+    return Boolean(this.waypointInRegion.get(ident, region) || this.absentWaypointOrAnyRegion.get(ident, region));
   }
 
   holds(want: Want): boolean {
@@ -196,6 +219,76 @@ function legWants(db: Database.Database, leg: DemandLeg): Want[] {
   return wants;
 }
 
+/** Frontier nodes asked per side of an airway gap. */
+const GAP_NODES_PER_SIDE = 2;
+
+interface PlannedEnd { key: string; lat: number; lon: number }
+
+/**
+ * The fixes on `reach` the replica has no answer for, nearest first to the far
+ * end of the gap.
+ */
+function frontier(reach: readonly AirwayReachNode[], farEnd: PlannedEnd, satisfaction: Satisfaction): Want[] {
+  const seen = new Set<string>();
+  const open: { node: AirwayReachNode; dist: number }[] = [];
+  for (const node of reach) {
+    const region = normRegion(node.region) ?? '';
+    const id = `${node.ident}|${region}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (satisfaction.waypointAnswered(node.ident, region)) continue;
+    open.push({ node, dist: haversineNm(farEnd.lat, farEnd.lon, node.lat, node.lon) });
+  }
+  open.sort((a, b) => a.dist - b.dist || (a.node.key < b.node.key ? -1 : a.node.key > b.node.key ? 1 : 0));
+  return open.slice(0, GAP_NODES_PER_SIDE).map(({ node }) => ({
+    kind: 'W' as const,
+    ident: node.ident,
+    region: normRegion(node.region),
+  }));
+}
+
+/**
+ * Fixes whose fetch would close a hole in an airway between two consecutive
+ * planned waypoints. The sidecar fetches the fixes a plan names and one hop of
+ * their neighbours, so the fixes in the middle of an airway segment are never
+ * fetched and route geometry finds no path between the ends. Each poll walks
+ * the replica's legs for that airway from both ends; when they do not meet, the
+ * fixes at the edge of what is known, nearest the other end, are wanted.
+ */
+function gapWants(
+  db: Database.Database,
+  nav: Database.Database,
+  satisfaction: Satisfaction,
+  leg: DemandLeg,
+  emit: (want: Want) => boolean,
+): void {
+  const waypoints = db
+    .prepare('SELECT seq, ident, region, type, airway, lat, lon FROM planned_waypoints WHERE planned_leg_id = ? ORDER BY seq ASC')
+    .all(leg.id) as PlannedWaypoint[];
+  let near = { lat: leg.departure_lat, lon: leg.departure_lon };
+  let prev: PlannedEnd | null = null;
+  let prevIsAirport = false;
+  let hasPrevious = false;
+
+  for (const wp of waypoints) {
+    const found = resolvePlannedKey(nav, wp, near);
+    if (prev && found && prev.key !== found.key && airwayAttempted(leg, wp, prevIsAirport, hasPrevious)) {
+      const airway = wp.airway as string;
+      const fromA = walkAirway(nav, airway, prev.key);
+      if (!reachHasKey(fromA, found.key)) {
+        for (const want of frontier(fromA, found, satisfaction)) if (!emit(want)) return;
+        for (const want of frontier(walkAirway(nav, airway, found.key), prev, satisfaction)) if (!emit(want)) return;
+      }
+    }
+    if (validCoordinate(wp.lat, wp.lon)) {
+      hasPrevious = true;
+      near = { lat: wp.lat, lon: wp.lon };
+    }
+    prev = found ? { key: found.key, lat: found.lat, lon: found.lon } : null;
+    prevIsAirport = wp.type === 'AIRPORT';
+  }
+}
+
 function scanLegs(db: Database.Database): DemandLeg[] {
   const active = db.prepare(ACTIVE_TRIP_LEGS).all(NAVDATA_DEMAND_LEG_SCAN) as DemandLeg[];
   const remaining = NAVDATA_DEMAND_LEG_SCAN - active.length;
@@ -234,13 +327,14 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
   // navaids can never push a fix out from under the cap.
   const primary: Want[] = [];
   const navaids: Want[] = [];
+  const gaps: Want[] = [];
   const seen = new Set<string>();
 
-  const collect = (want: Want): void => {
+  const collect = (want: Want, into?: Want[]): void => {
     const key = `${want.kind}|${want.ident}|${want.region ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
-    (want.kind === 'V' || want.kind === 'N' ? navaids : primary).push(want);
+    (into ?? (want.kind === 'V' || want.kind === 'N' ? navaids : primary)).push(want);
   };
   // Once the primary group alone overflows the cap nothing further can be emitted.
   const full = (): boolean => primary.length > NAVDATA_DEMAND_CAP;
@@ -256,7 +350,8 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
     collect(want);
   }
 
-  for (const leg of scanLegs(db)) {
+  const legs = scanLegs(db);
+  for (const leg of legs) {
     if (full()) break;
     for (const want of legWants(db, leg)) {
       if (skipped(want) || holds(want)) continue;
@@ -265,7 +360,20 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
     }
   }
 
-  const ordered = primary.concat(navaids);
+  // Airway gap fixes come after every fix the plans name themselves and before
+  // the navaids; they are only worth computing while the cap has room for them.
+  if (nav && satisfaction && !full()) {
+    const room = (): boolean => primary.length + gaps.length <= NAVDATA_DEMAND_CAP;
+    for (const leg of legs) {
+      if (!room()) break;
+      gapWants(db, nav, satisfaction, leg, (want) => {
+        if (!skipped(want) && !holds(want)) collect(want, gaps);
+        return room();
+      });
+    }
+  }
+
+  const ordered = primary.concat(gaps, navaids);
   const airports: string[] = [];
   const waypoints: DemandWaypoint[] = [];
   for (const want of ordered.slice(0, NAVDATA_DEMAND_CAP)) {

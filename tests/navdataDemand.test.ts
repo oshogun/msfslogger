@@ -575,3 +575,212 @@ describe('an airport the simulator does not have, sent with no coordinates', () 
     expect(buildDemand(NOW).airports).toEqual(['ZZAC']);
   });
 });
+
+describe('airway gaps between planned waypoints', () => {
+  type Pt = { ident: string; lon: number };
+  const LAT = 30;
+  const pt = (ident: string, lon: number): Pt => ({ ident, lon });
+  const key = (p: Pt): string => wptKey(p.ident, 'ZZ', LAT, p.lon);
+
+  const fix = (p: Pt, routesState = 'fetched'): NavRow =>
+    row('waypoint', { wpt_key: key(p), ident: p.ident, region: 'ZZ', lat: LAT, lon: p.lon, routes_state: routesState });
+
+  const airwayLeg = (airway: string, a: Pt, b: Pt): NavRow => {
+    const [lo, hi] = key(a) < key(b) ? [a, b] : [b, a];
+    return row('airway_leg', {
+      leg_key: `${airway}|${key(lo)}|${key(hi)}`, airway, airway_type: 1,
+      from_key: key(a), to_key: key(b),
+      from_ident: a.ident, from_region: 'ZZ', from_lat: LAT, from_lon: a.lon,
+      to_ident: b.ident, to_region: 'ZZ', to_lat: LAT, to_lon: b.lon,
+      min_lat: LAT, max_lat: LAT, min_lon: Math.min(a.lon, b.lon), max_lon: Math.max(a.lon, b.lon), dateline: 0,
+    });
+  };
+
+  interface PlanWaypoint { p: Pt; type?: string; airway?: string | null; region?: string | null }
+
+  /** A plan whose waypoints sit at the given longitudes on the shared latitude. */
+  function seedPlan(list: PlanWaypoint[], legOver: Parameters<typeof seedLeg>[0] = {}, seq = 1): number {
+    const trip = (scratch.db.prepare('SELECT id FROM trips WHERE is_active = 1').get() as { id: number } | undefined)?.id
+      ?? seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, seq, departure_is_airport: 0, destination_is_airport: 0, ...legOver });
+    const stmt = scratch.db.prepare(
+      'INSERT INTO planned_waypoints (planned_leg_id, seq, ident, region, airway, type, lat, lon) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    list.forEach((w, i) =>
+      stmt.run(leg, i + 1, w.p.ident, w.region === undefined ? 'ZZ' : w.region, w.airway ?? null, w.type ?? 'WAYPOINT', LAT, w.p.lon));
+    return leg;
+  }
+
+  const setLegColumn = (leg: number, column: string, value: string): void => {
+    scratch.db.prepare(`UPDATE planned_legs SET ${column} = ? WHERE id = ?`).run(value, leg);
+  };
+
+  const A = pt('ZZA', 40), M1 = pt('ZZM1', 40.1), M2 = pt('ZZM2', 40.2), B = pt('ZZB', 40.3);
+  const ends = (airway: string | null = 'ZZY1'): PlanWaypoint[] => [{ p: A }, { p: B, airway }];
+  const ends2 = { fixes: [fix(A), fix(B)], legs: [airwayLeg('ZZY1', A, M1), airwayLeg('ZZY1', M2, B)] };
+  const wants = (ident: string): { ident: string; region: string; kind: 'W' } => ({ ident, region: 'ZZ', kind: 'W' });
+
+  it('asks for the fixes in the middle of an airway whose legs stop at both ends, and stops once they are fetched', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+
+    setReplica([...ends2.fixes, ...ends2.legs, fix(M1), fix(M2), airwayLeg('ZZY1', M1, M2)], 'epoch-2');
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('wants nothing for a pair the airway already connects', () => {
+    seedPlan(ends());
+    setReplica([
+      ...ends2.fixes, ...ends2.legs, airwayLeg('ZZY1', M1, M2),
+    ]);
+    // ZZM1 and ZZM2 are unfetched but no longer a gap.
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('joins endpoint keys that differ by a unit in the fifth decimal when checking the connection', () => {
+    seedPlan(ends());
+    const shifted = airwayLeg('ZZY1', M1, M2);
+    // Same fix, key written one unit off on the second leg.
+    const near = row('airway_leg', {
+      ...shifted.r, leg_key: 'ZZY1|shifted', from_key: wptKey('ZZM1', 'ZZ', LAT, M1.lon + 0.00001),
+    });
+    setReplica([...ends2.fixes, ...ends2.legs, near]);
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it.each([
+    ['DCT', 'DCT'],
+    ['an empty airway', ''],
+    ['a null airway', null],
+  ])('wants nothing across %s', (_name, airway) => {
+    seedPlan(ends(airway));
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('wants nothing across the name of the plan\'s own SID, STAR or transition', () => {
+    for (const field of ['sid_name', 'sid_transition', 'star_name', 'star_transition'] as const) {
+      scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+      setLegColumn(seedPlan(ends('ZZY1')), field, 'zzy1');
+      setReplica([...ends2.fixes, ...ends2.legs], `epoch-${field}`);
+      expect(buildDemand(NOW).waypoints, field).toEqual([]);
+    }
+    // A different procedure name does not silence a real airway.
+    scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+    setLegColumn(seedPlan(ends('ZZY1')), 'sid_name', 'ZZSID1');
+    setReplica([...ends2.fixes, ...ends2.legs], 'epoch-other');
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+  });
+
+  it('wants nothing when an end is an airport or a user point', () => {
+    seedPlan([{ p: A, type: 'AIRPORT' }, { p: B, airway: 'ZZY1' }]);
+    setReplica([...ends2.fixes, ...ends2.legs, airport('ZZA')]);
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+
+    scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+    seedPlan([{ p: A }, { p: B, type: 'USER', airway: 'ZZY1' }]);
+    setReplica([...ends2.fixes, ...ends2.legs], 'epoch-2');
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+
+    scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+    seedPlan([{ p: A, type: 'USER' }, { p: B, airway: 'ZZY1' }]);
+    setReplica([...ends2.fixes, ...ends2.legs], 'epoch-3');
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('does not ask again for a frontier fix recorded absent, in either table', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs, absent('W', 'ZZM1', 'ZZ')]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM2')]);
+
+    setReplica([...ends2.fixes, ...ends2.legs, fix(M2, 'absent'), absent('W', 'ZZM1', '')], 'epoch-2');
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('asks again for a fix of the same ident recorded absent under another region', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs, absent('W', 'ZZM1', 'YY')]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+  });
+
+  it('skips a pair it cannot resolve, without throwing', () => {
+    seedPlan([{ p: pt('ZZNOWHERE', 55) }, { p: pt('ZZNOEND', 56), airway: 'ZZY1' }]);
+    setReplica([fix(A), ...ends2.legs], 'epoch-2');
+    expect(buildDemand(NOW).waypoints.map((w) => w.ident)).toEqual(['ZZNOWHERE', 'ZZNOEND']);
+
+    scratch.db.exec('DELETE FROM planned_waypoints; DELETE FROM planned_legs;');
+    seedPlan([{ p: A }, { p: pt('ZZNOEND', 56), airway: 'ZZY1' }]);
+    setReplica([fix(A), ...ends2.legs], 'epoch-3');
+    expect(buildDemand(NOW).waypoints.map((w) => w.ident)).toEqual(['ZZNOEND']);
+  });
+
+  it('wants nothing for a plan whose waypoints resolve to the same key', () => {
+    seedPlan([{ p: A }, { p: A, airway: 'ZZY1' }]);
+    setReplica([fix(A), airwayLeg('ZZY1', A, M1)]);
+    expect(buildDemand(NOW).waypoints).toEqual([]);
+  });
+
+  it('asks only for fixes nobody has answered, the two nearest the far end on each side', () => {
+    const [N1, N2, N3, N4, F, P1] = [
+      pt('ZZN1', 40.1), pt('ZZN2', 40.2), pt('ZZN3', 40.3), pt('ZZN4', 40.4), pt('ZZF', 40.5), pt('ZZP1', 40.8),
+    ];
+    const far = pt('ZZFAR', 41);
+    seedPlan([{ p: A }, { p: far, airway: 'ZZY1' }]);
+    setReplica([
+      fix(A), fix(far), fix(F),
+      // A - N1 - N2 - N3 - N4 chain, with the fetched ZZF closer to the far end than any of them but N4's tail.
+      airwayLeg('ZZY1', A, N1), airwayLeg('ZZY1', N1, N2), airwayLeg('ZZY1', N2, N3), airwayLeg('ZZY1', N3, N4),
+      airwayLeg('ZZY1', N4, F),
+      airwayLeg('ZZY1', far, P1),
+    ]);
+    // A side: N4 and N3 are nearest the far end (ZZF is fetched, ZZA is fetched); the far side: only P1.
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZN4'), wants('ZZN3'), wants('ZZP1')]);
+  });
+
+  it('is asked only about fixes on the named airway', () => {
+    seedPlan(ends());
+    setReplica([
+      ...ends2.fixes, ...ends2.legs,
+      airwayLeg('ZZOTHER', A, pt('ZZO1', 40.05)), airwayLeg('ZZOTHER', B, pt('ZZO2', 40.25)),
+    ]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+  });
+
+  it('places gap fixes after every plan fix and before navaids, inside the cap and under skip lists', () => {
+    seedPlan([...ends(), { p: pt('ZZVOR', 45), type: 'VOR' }]);
+    seedPlan([{ p: pt('ZZOWN', 46) }], {}, 2);
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    expect(buildDemand(NOW).waypoints.map((w) => w.ident)).toEqual(['ZZOWN', 'ZZM1', 'ZZM2', 'ZZVOR']);
+
+    const skipped = buildDemand(NOW, parseDemandSkip({ skipWaypoints: 'zzm1' }));
+    expect(skipped.waypoints.map((w) => w.ident)).toEqual(['ZZOWN', 'ZZM2', 'ZZVOR']);
+  });
+
+  it('gives a gap fix the cap slot after the plan fixes and reports the rest as more', () => {
+    const many = Array.from({ length: NAVDATA_DEMAND_CAP - 1 }, (_, i) => ({ p: pt(`ZZQ${i}`, 50 + i * 0.01) }));
+    seedPlan(ends());
+    seedPlan(many, {}, 2);
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    const demand = buildDemand(NOW);
+    expect(demand.waypoints).toHaveLength(NAVDATA_DEMAND_CAP);
+    expect(demand.waypoints.slice(0, NAVDATA_DEMAND_CAP - 1).map((w) => w.ident)).toEqual(many.map((w) => w.p.ident));
+    expect(demand.waypoints[NAVDATA_DEMAND_CAP - 1]).toEqual(wants('ZZM1'));
+    expect(demand.more).toBe(true);
+  });
+
+  it('never asks for gap fixes when the plans alone overflow the cap', () => {
+    seedPlan(ends());
+    seedPlan(Array.from({ length: NAVDATA_DEMAND_CAP + 1 }, (_, i) => ({ p: pt(`ZZQ${i}`, 50 + i * 0.01) })), {}, 2);
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    const demand = buildDemand(NOW);
+    expect(demand.waypoints.map((w) => w.ident)).not.toContain('ZZM1');
+    expect(demand.more).toBe(true);
+  });
+
+  it('answers with the same fields as before', () => {
+    seedPlan(ends());
+    setReplica([...ends2.fixes, ...ends2.legs]);
+    expect(Object.keys(buildDemand(NOW)).sort()).toEqual(['airports', 'cap', 'generatedAt', 'more', 'v', 'waypoints']);
+  });
+});

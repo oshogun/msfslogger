@@ -223,10 +223,10 @@ function airwayEndpointNear(db: Database.Database, wp: PlannedWaypoint): string 
 /** Endpoint keys of one fix can differ by a unit or two in the last place when the sender rounded differently. */
 const KEY_JOIN_UNITS = 10;
 
-interface ParsedKey { prefix: string; lat: number; lon: number }
+export interface ParsedKey { prefix: string; lat: number; lon: number }
 
 /** Splits ident|region|lat|lon on the last two separators, so an odd ident cannot confuse it. */
-function parseKey(key: string): ParsedKey | null {
+export function parseKey(key: string): ParsedKey | null {
   const lonAt = key.lastIndexOf('|');
   const latAt = lonAt > 0 ? key.lastIndexOf('|', lonAt - 1) : -1;
   if (latAt <= 0) return null;
@@ -234,6 +234,11 @@ function parseKey(key: string): ParsedKey | null {
   const lon = Number(key.slice(lonAt + 1));
   if (key.slice(latAt + 1, lonAt) === '' || key.slice(lonAt + 1) === '' || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   return { prefix: key.slice(0, latAt), lat, lon };
+}
+
+/** Whether two parsed keys are one fix: same ident and region, positions within the join tolerance. */
+export function keysNear(a: ParsedKey, b: ParsedKey): boolean {
+  return a.prefix === b.prefix && Math.abs(a.lat - b.lat) <= KEY_JOIN_UNITS && Math.abs(a.lon - b.lon) <= KEY_JOIN_UNITS;
 }
 
 interface AirwayNode { ident: string; lat: number; lon: number }
@@ -272,8 +277,7 @@ function expandAirway(db: Database.Database, airway: string, fromKey: string, to
   const parsed = [...adj.keys()].sort().map((k) => ({ k, p: parseKey(k) }));
   const reps: { k: string; p: ParsedKey }[] = [];
   const repOf = new Map<string, string>();
-  const near = (a: ParsedKey, b: ParsedKey): boolean =>
-    a.prefix === b.prefix && Math.abs(a.lat - b.lat) <= KEY_JOIN_UNITS && Math.abs(a.lon - b.lon) <= KEY_JOIN_UNITS;
+  const near = keysNear;
   for (const { k, p } of parsed) {
     const hit = p ? reps.find((r) => near(r.p, p)) : undefined;
     if (hit) repOf.set(k, hit.k);
@@ -329,6 +333,88 @@ function expandAirway(db: Database.Database, airway: string, fromKey: string, to
   for (let k = parent.get(toKey) ?? null; k !== null && k !== fromKey; k = parent.get(k) ?? null) path.push(k);
   path.reverse();
   return path.map((k) => info.get(k) as AirwayNode);
+}
+
+export interface AirwayReachNode { key: string; ident: string; region: string; lat: number; lon: number }
+
+const AIRWAY_NEIGHBOURS_SQL =
+  `SELECT from_key, to_key, from_ident, from_region, from_lat, from_lon, to_ident, to_region, to_lat, to_lon
+     FROM nav_airway_leg WHERE +airway = @airway AND from_key >= @lo AND from_key < @hi
+   UNION ALL
+   SELECT from_key, to_key, from_ident, from_region, from_lat, from_lon, to_ident, to_region, to_lat, to_lon
+     FROM nav_airway_leg WHERE +airway = @airway AND to_key >= @lo AND to_key < @hi`;
+
+const neighbourStatements = new WeakMap<Database.Database, Database.Statement>();
+
+/**
+ * Every fix reachable from `startKey` over one airway's legs, breadth first
+ * within the hop and visit caps of `expandAirway`, joining endpoint keys with
+ * the same position tolerance. Each step is a range lookup on the from_key and
+ * to_key indexes, so the cost follows the component and never the table. The
+ * start fix is part of the result when any leg touches it.
+ */
+export function walkAirway(db: Database.Database, airway: string, startKey: string): AirwayReachNode[] {
+  let stmt = neighbourStatements.get(db);
+  if (!stmt) neighbourStatements.set(db, (stmt = db.prepare(AIRWAY_NEIGHBOURS_SQL)));
+  type Row = {
+    from_key: string; to_key: string; from_ident: string; from_region: string; from_lat: number; from_lon: number;
+    to_ident: string; to_region: string; to_lat: number; to_lon: number;
+  };
+  const visited = new Map<string, ParsedKey[]>();
+  const nodes: AirwayReachNode[] = [];
+  const seenKey = (p: ParsedKey): boolean => visited.get(p.prefix)?.some((q) => keysNear(q, p)) ?? false;
+  const mark = (p: ParsedKey): void => {
+    const list = visited.get(p.prefix);
+    if (list) list.push(p);
+    else visited.set(p.prefix, [p]);
+  };
+  const startParsed = parseKey(startKey);
+  if (!startParsed) return nodes;
+  mark(startParsed);
+  let level: { key: string; p: ParsedKey }[] = [{ key: startKey, p: startParsed }];
+  const infoAt = (r: Row, side: 'from' | 'to'): AirwayReachNode => side === 'from'
+    ? { key: r.from_key, ident: r.from_ident, region: r.from_region, lat: r.from_lat, lon: r.from_lon }
+    : { key: r.to_key, ident: r.to_ident, region: r.to_region, lat: r.to_lat, lon: r.to_lon };
+  let hops = 0;
+  let startAdded = false;
+  while (level.length && hops <= AIRWAY_MAX_HOPS) {
+    const nextLevel: { key: string; p: ParsedKey }[] = [];
+    for (const { key: cur, p } of level.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+      const rows = stmt.all({ airway, lo: `${p.prefix}|`, hi: `${p.prefix}}` }) as Row[];
+      for (const r of rows) {
+        const fromP = parseKey(r.from_key);
+        const toP = parseKey(r.to_key);
+        const fromIsCur = fromP !== null && keysNear(fromP, p);
+        const toIsCur = toP !== null && keysNear(toP, p);
+        if (fromIsCur === toIsCur) continue;
+        if (!startAdded && cur === startKey) {
+          nodes.push(infoAt(r, fromIsCur ? 'from' : 'to'));
+          startAdded = true;
+        }
+        const otherSide = fromIsCur ? 'to' : 'from';
+        const other = infoAt(r, otherSide);
+        const otherP = otherSide === 'to' ? toP : fromP;
+        if (!otherP || seenKey(otherP)) continue;
+        if (nodes.length >= AIRWAY_MAX_VISITED) return nodes;
+        mark(otherP);
+        nodes.push(other);
+        nextLevel.push({ key: other.key, p: otherP });
+      }
+    }
+    level = nextLevel;
+    hops++;
+  }
+  return nodes;
+}
+
+/** Whether `key` is one of the walked fixes, joined with the position tolerance. */
+export function reachHasKey(nodes: readonly AirwayReachNode[], key: string): boolean {
+  const p = parseKey(key);
+  return nodes.some((n) => {
+    if (n.key === key) return true;
+    const q = p ? parseKey(n.key) : null;
+    return p !== null && q !== null && keysNear(p, q);
+  });
 }
 
 // ── Procedures ───────────────────────────────────────────────────────────────
@@ -638,11 +724,55 @@ export function buildRouteGeometry(
  * scoped to this plan's own procedure names, never a guess that a value looks
  * like a procedure.
  */
-function isNonAirway(leg: PlannedLegWithChildren, airway: string): boolean {
+export function isNonAirway(leg: ProcedureNames, airway: string): boolean {
   const a = norm(airway);
   if (a === '' || a === 'DCT') return true;
   return [leg.sid_name, leg.sid_transition, leg.star_name, leg.star_transition]
     .some((name) => name != null && norm(name) !== '' && norm(name) === a);
+}
+
+/** The airway-naming fields of a planned leg, all `isNonAirway` reads. */
+export type ProcedureNames = Pick<PlannedLegWithChildren, 'sid_name' | 'sid_transition' | 'star_name' | 'star_transition'>;
+
+/**
+ * Whether the enroute chain tries to expand the segment that ends at `wp`: it
+ * names a real airway, neither end is an airport, a point was already drawn
+ * (`hasPrevious`) and the planned position is usable.
+ */
+export function airwayAttempted(
+  leg: ProcedureNames,
+  wp: Pick<PlannedWaypoint, 'airway' | 'type' | 'lat' | 'lon'>,
+  prevIsAirport: boolean,
+  hasPrevious: boolean,
+): boolean {
+  // Airways neither start nor end at an airport, so a value there is noise.
+  return Boolean(wp.airway) && wp.type !== 'AIRPORT' && !prevIsAirport && !isNonAirway(leg, wp.airway as string)
+    && hasPrevious && validCoordinate(wp.lat, wp.lon);
+}
+
+/**
+ * The airway key a planned waypoint stands for: the replica's own fix or navaid
+ * when it holds one, else an airway endpoint with the same ident (and region)
+ * near the planned position. `viaEndpoint` marks the second case. Null for
+ * airports and user-defined points, which are not navdata, and when nothing matches.
+ */
+export function resolvePlannedKey(
+  db: Database.Database,
+  wp: PlannedWaypoint,
+  near: { lat: number; lon: number },
+): (Resolved & { viaEndpoint: boolean }) | null {
+  if (wp.type === 'AIRPORT' || wp.type === 'USER') return null;
+  // The planned position is the best anchor: an ident shared by many fixes must
+  // resolve to the one the plan drew, not the one nearest the previous point.
+  const anchor = validCoordinate(wp.lat, wp.lon) ? { lat: wp.lat, lon: wp.lon } : near;
+  const chosen = pickNearest(lookupCandidates(db, wp), anchor);
+  if (chosen) return { ...chosen, viaEndpoint: false };
+  // A facility whose own rows were never fetched can still be an airway
+  // endpoint; join by ident, region and proximity to the planned position.
+  const endpoint = validCoordinate(wp.lat, wp.lon) ? airwayEndpointNear(db, wp) : null;
+  if (!endpoint) return null;
+  const p = parseKey(endpoint);
+  return { key: endpoint, lat: p ? p.lat / 1e5 : wp.lat, lon: p ? p.lon / 1e5 : wp.lon, viaEndpoint: true };
 }
 
 function buildEnroute(
@@ -664,40 +794,29 @@ function buildEnroute(
     // Airports and user-defined points are not navdata: nothing to look up.
     const skipLookup = wp.type === 'AIRPORT' || wp.type === 'USER';
     if (!skipLookup) {
-      // The planned position is the best anchor: an ident shared by many fixes must
-      // resolve to the one the plan drew, not the one nearest the previous point.
-      const anchor = validCoordinate(wp.lat, wp.lon) ? { lat: wp.lat, lon: wp.lon } : near;
-      const chosen = pickNearest(lookupCandidates(db, wp), anchor);
-      if (chosen) {
-        key = chosen.key;
+      const found = resolvePlannedKey(db, wp, near);
+      if (found) {
+        key = found.key;
         resolved = true;
-        if (haversineNm(wp.lat, wp.lon, chosen.lat, chosen.lon) > PLANNED_POSITION_TOLERANCE_M / NM_M) {
+        if (!found.viaEndpoint && haversineNm(wp.lat, wp.lon, found.lat, found.lon) > PLANNED_POSITION_TOLERANCE_M / NM_M) {
           addUnresolved(acc, 'waypoint', wp.ident, 'position disagrees with cache');
         }
       } else {
-        // A facility whose own rows were never fetched can still be an airway
-        // endpoint; join by ident, region and proximity to the planned position.
-        const endpoint = validCoordinate(wp.lat, wp.lon) ? airwayEndpointNear(db, wp) : null;
-        if (endpoint) {
-          key = endpoint;
-          resolved = true;
-        } else {
-          addUnresolved(acc, 'waypoint', wp.ident, 'ident not in cache');
-        }
+        addUnresolved(acc, 'waypoint', wp.ident, 'ident not in cache');
       }
     }
 
-    // Airways neither start nor end at an airport, so a value there is noise.
-    if (wp.airway && wp.type !== 'AIRPORT' && !prevIsAirport && !isNonAirway(leg, wp.airway) && b.last && validCoordinate(wp.lat, wp.lon)) {
+    if (airwayAttempted(leg, wp, prevIsAirport, b.last !== null)) {
+      const airway = wp.airway as string;
       const via = prevResolved && resolved && prevKey && key && prevKey !== key
-        ? expandAirway(db, wp.airway, prevKey, key)
+        ? expandAirway(db, airway, prevKey, key)
         : null;
       if (via) {
         for (const n of via) {
           b.push(syntheticPoint(n.lat, n.lon, n.ident, null));
         }
       } else if (!(prevKey && key && prevKey === key)) {
-        addUnresolved(acc, 'airway', wp.airway, 'no path found');
+        addUnresolved(acc, 'airway', airway, 'no path found');
       }
     }
 
