@@ -23,6 +23,7 @@ import { performance } from 'perf_hooks';
 import { haversineNm } from '../geo';
 import type { PlannedWaypoint } from '../types';
 import { getNavDb } from './connection';
+import { navdataWriteGeneration } from './store';
 import {
   airwayAttempted,
   resolvePlannedKey,
@@ -257,23 +258,28 @@ function frontier(reach: readonly AirwayReachNode[], farEnd: PlannedEnd, satisfa
 export const GAP_PASS_BUDGET_MS = 100;
 
 /**
- * What the gap pass remembers between polls, all in memory and all dropped
- * whenever the replica's snapshot or revision changes: where the next poll's
- * pass starts in the scanned legs (so legs behind an expensive one are not
- * starved), and the airway walks and planned-waypoint key lookups already done.
+ * What the gap pass remembers between polls, all in memory: where the next
+ * poll's pass starts in the scanned legs (so legs behind an expensive one are not
+ * starved, and kept across replica changes), and the airway walks and
+ * planned-waypoint key lookups already done, dropped whenever the replica changes.
  * Those are pure functions of the replica's rows, so while it is unchanged a
  * plan the airways already connect costs a map lookup per pair.
  */
 interface GapState {
+  handle: Database.Database | null;
+  generation: number;
+  updatedAt: number;
   snapshotId: string;
   rev: number;
+  /** Survives replica changes; the memo maps do not. */
   offset: number;
   resolved: Map<string, ReturnType<typeof resolvePlannedKey>>;
   walks: Map<string, AirwayWalk>;
 }
 
-const freshGapState = (snapshotId = '', rev = -1): GapState =>
-  ({ snapshotId, rev, offset: 0, resolved: new Map(), walks: new Map() });
+const freshGapState = (offset = 0): GapState => ({
+  handle: null, generation: -1, updatedAt: -1, snapshotId: '', rev: -1, offset, resolved: new Map(), walks: new Map(),
+});
 
 let gapState = freshGapState();
 
@@ -285,13 +291,24 @@ export function resetGapCursor(): void {
   gapState = freshGapState();
 }
 
+/**
+ * The memo is valid only for the exact replica it was built from: the same open
+ * handle (a swapped-in file is a new one), the same header (snapshot, revision,
+ * timestamp) and the same count of header writes, since a batch or a same-epoch
+ * snapshot can change rows under an unchanged snapshot id and revision.
+ */
 function currentGapState(nav: Database.Database): GapState {
-  const meta = nav.prepare('SELECT snapshot_id, rev FROM nav_meta WHERE id = 1').get() as
-    | { snapshot_id: string; rev: number }
+  const meta = nav.prepare('SELECT snapshot_id, rev, updated_at FROM nav_meta WHERE id = 1').get() as
+    | { snapshot_id: string; rev: number; updated_at: number }
     | undefined;
   const snapshotId = meta?.snapshot_id ?? '';
   const rev = meta?.rev ?? -1;
-  if (gapState.snapshotId !== snapshotId || gapState.rev !== rev) gapState = freshGapState(snapshotId, rev);
+  const updatedAt = meta?.updated_at ?? -1;
+  const generation = navdataWriteGeneration();
+  const s = gapState;
+  if (s.handle !== nav || s.generation !== generation || s.updatedAt !== updatedAt || s.snapshotId !== snapshotId || s.rev !== rev) {
+    gapState = { ...freshGapState(s.offset), handle: nav, generation, updatedAt, snapshotId, rev };
+  }
   if (gapState.resolved.size > GAP_MEMO_MAX) gapState.resolved.clear();
   if (gapState.walks.size > GAP_MEMO_MAX) gapState.walks.clear();
   return gapState;

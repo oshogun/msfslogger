@@ -462,12 +462,22 @@ export interface NavMetaRow {
   updated_at: number;
 }
 
+let writeGeneration = 0;
+
+/**
+ * Counts writes of the replica's header: every applied batch and every snapshot
+ * import bumps it, so a reader that remembers anything derived from the rows can
+ * tell they changed even when the snapshot id, revision and timestamp did not.
+ */
+export const navdataWriteGeneration = (): number => writeGeneration;
+
 export function readNavMeta(db: Database.Database): NavMetaRow | null {
   return (db.prepare('SELECT * FROM nav_meta WHERE id = 1').get() as NavMetaRow | undefined) ?? null;
 }
 
 /** The one row the server owns inside the replica, written from a snapshot header. */
 export function writeNavMeta(db: Database.Database, header: SnapshotHeaderLine, updatedAt: number): void {
+  writeGeneration++;
   const bulk = header as unknown as {
     bulkStartedAt?: number | null;
     bulkCompletedAt?: number | null;
@@ -501,6 +511,7 @@ export function writeNavMeta(db: Database.Database, header: SnapshotHeaderLine, 
 }
 
 export function setNavMetaRev(db: Database.Database, rev: Rev, updatedAt: number): void {
+  writeGeneration++;
   db.prepare('UPDATE nav_meta SET rev = ?, updated_at = ? WHERE id = 1').run(rev, updatedAt);
 }
 

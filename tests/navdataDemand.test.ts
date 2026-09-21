@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { applyNavdataSchema } from '../src/navdata/schema';
-import { applyNavRows } from '../src/navdata/store';
+import { applyIncrementalBatch, applyNavRows } from '../src/navdata/store';
 import {
   closeNavDb,
   incomingNavdataPath,
@@ -20,7 +20,7 @@ import {
 import { listNavdataRequests, upsertNavdataRequest } from '../src/db/navdataRequests';
 import { wptKey } from '../src/navdata/keys';
 import { AIRWAY_MAX_HOPS, AIRWAY_MAX_VISITED, AIRWAY_NEIGHBOURS_SQL, walkAirway, type AirwayWalk } from '../src/navdata/routeGeometry';
-import type { NavRow, NavRowType } from '../src/navdata/wire';
+import { NAVDATA_SCHEMA_VERSION, NAVDATA_WIRE_VERSION, type NavRow, type NavRowType } from '../src/navdata/wire';
 import { createScratchDb, destroyScratchDb, seedPlannedLeg, seedTrip, type ScratchDb } from './helpers/db';
 
 let scratch: ScratchDb;
@@ -839,7 +839,7 @@ describe('airway gaps between planned waypoints', () => {
     expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZN1', 'ZZN2']);
   });
 
-  it('restarts the rotation when the replica changes', () => {
+  it('keeps the rotation across a replica change', () => {
     const [a2, b2, m21, m22] = [pt('ZZA2', 70), pt('ZZB2', 70.3), pt('ZZM21', 70.1), pt('ZZM22', 70.2)];
     seedPlan(ends(), {}, 1);
     seedPlan([{ p: a2 }, { p: b2, airway: 'ZZY2' }], {}, 2);
@@ -849,7 +849,88 @@ describe('airway gaps between planned waypoints', () => {
     const slow = (): number => (t += GAP_PASS_BUDGET_MS + 1);
     expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM1', 'ZZM2']);
     setReplica(rows, 'epoch-2');
-    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM1', 'ZZM2']);
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM21', 'ZZM22']);
+  });
+
+  it('keeps the rotation where it was when a poll stops at the cap', () => {
+    const legs = [0, 1, 2].map((k) => ({
+      a: pt(`ZZA${k}`, 60 + k * 5), b: pt(`ZZB${k}`, 60.3 + k * 5),
+      m1: pt(`ZZM${k}1`, 60.1 + k * 5), m2: pt(`ZZM${k}2`, 60.2 + k * 5), airway: `ZZY${k}`,
+    }));
+    const rows: NavRow[] = [];
+    legs.forEach((l, k) => {
+      seedPlan([{ p: l.a }, { p: l.b, airway: l.airway }], {}, k + 1);
+      rows.push(fix(l.a), fix(l.b), airwayLeg(l.airway, l.a, l.m1), airwayLeg(l.airway, l.m2, l.b));
+    });
+    setReplica(rows);
+    let t = 0;
+    const slow = (): number => (t += GAP_PASS_BUDGET_MS + 1);
+    expect(buildDemand(NOW, undefined, slow).waypoints.map((w) => w.ident)).toEqual(['ZZM01', 'ZZM02']);
+
+    // Forty-nine plan fixes leave room for one gap fix, so the pass stops inside leg 1 at the cap.
+    seedPlan(Array.from({ length: NAVDATA_DEMAND_CAP - 1 }, (_, i) => ({ p: pt(`ZZQ${i}`, 50 + i * 0.01) })), {}, 4);
+    for (let i = 0; i < 2; i++) {
+      const wanted = buildDemand(NOW).waypoints.map((w) => w.ident);
+      expect(wanted).toHaveLength(NAVDATA_DEMAND_CAP);
+      expect(wanted[NAVDATA_DEMAND_CAP - 1], `poll ${i}`).toBe('ZZM11');
+    }
+  });
+
+  it('does not reuse a walk made for another target', () => {
+    const C = pt('ZZC', 40.05);
+    seedPlan([{ p: A }, { p: C, airway: 'ZZY1' }], {}, 1);
+    seedPlan(ends(), {}, 2);
+    setReplica([...ends2.fixes, fix(C), ...ends2.legs, airwayLeg('ZZY1', A, C)]);
+    expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+  });
+
+  describe('rows changed under an unchanged snapshot id, revision and timestamp', () => {
+    const extra = pt('ZZM3', 40.15);
+    const change = [airwayLeg('ZZY1', M1, extra)];
+    const expected = [wants('ZZM3'), wants('ZZM1'), wants('ZZM2')];
+
+    function cold(): unknown {
+      resetGapCursor();
+      return buildDemand(NOW).waypoints;
+    }
+
+    it('a batch that keeps the revision', () => {
+      seedPlan(ends());
+      setReplica([...ends2.fixes, ...ends2.legs]);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+
+      applyIncrementalBatch(
+        { v: NAVDATA_WIRE_VERSION, schemaVersion: NAVDATA_SCHEMA_VERSION, snapshotId: 'epoch-1', fromRev: 0, toRev: 0, rows: change, more: false },
+        1,
+      );
+      const warm = buildDemand(NOW).waypoints;
+      expect(warm).toEqual(expected);
+      expect(warm).toEqual(cold());
+    });
+
+    it('a snapshot of the same epoch swapped in', () => {
+      seedPlan(ends());
+      setReplica([...ends2.fixes, ...ends2.legs]);
+      expect(buildDemand(NOW).waypoints).toEqual([wants('ZZM1'), wants('ZZM2')]);
+
+      const incoming = incomingNavdataPath();
+      writeReplica(incoming, [...ends2.fixes, ...ends2.legs, ...change], 'epoch-1');
+      swapInReplica(incoming);
+      const warm = buildDemand(NOW).waypoints;
+      expect(warm).toEqual(expected);
+      expect(warm).toEqual(cold());
+    });
+
+    it('a new timestamp alone', () => {
+      seedPlan(ends());
+      setReplica([...ends2.fixes, ...ends2.legs]);
+      buildDemand(NOW);
+      const raw = new Database(resolveNavdataPath());
+      raw.prepare('UPDATE nav_meta SET updated_at = updated_at + 1 WHERE id = 1').run();
+      raw.exec(`DELETE FROM nav_airway_leg`);
+      raw.close();
+      expect(buildDemand(NOW).waypoints).toEqual([]);
+    });
   });
 
   /** Counts the statement runs whose text contains `match` while `fn` runs. */
