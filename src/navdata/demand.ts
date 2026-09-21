@@ -175,7 +175,7 @@ class Satisfaction {
     this.navaidKindsAt = nav.prepare('SELECT kind FROM nav_navaid WHERE ident = ? AND region = ? ORDER BY kind');
   }
 
-  /** The navaid kinds the replica holds a row for under exactly this ident and region, 'N' after 'V'. */
+  /** The navaid kinds the replica holds a row for under exactly this ident and region, in ascending kind order ('N' before 'V'). */
   navaidKinds(ident: string, region: string): ('V' | 'N')[] {
     return (this.navaidKindsAt.all(ident, region) as { kind: 'V' | 'N' }[]).map((r) => r.kind);
   }
