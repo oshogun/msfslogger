@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import Database from 'better-sqlite3';
 import { NAVDATA_DDL, applyNavdataSchema } from '../src/navdata/schema';
@@ -34,9 +35,16 @@ describe('NAVDATA_DDL', () => {
     expect(maj > 3 || (maj === 3 && min >= 37)).toBe(true);
   });
 
-  it('is idempotent and pasted intact', () => {
+  it('is idempotent', () => {
     const db = fresh();
     expect(() => db.exec(NAVDATA_DDL)).not.toThrow();
-    expect(NAVDATA_DDL).toContain('`<`');
+  });
+
+  it('is the sidecar canonical schema, byte for byte', () => {
+    const bytes = Buffer.from(NAVDATA_DDL, 'utf8');
+    expect(bytes.length).toBe(32344);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      '724d6adfc46ce017236fa1adb670ac74213363f2b20620f0a2f58ccc38cbd463',
+    );
   });
 });

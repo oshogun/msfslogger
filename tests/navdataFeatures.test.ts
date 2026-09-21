@@ -351,14 +351,15 @@ describe('an airport the simulator does not have, sent with no coordinates', () 
     expect(await res.json()).toMatchObject({ ident: 'ZZAB', lat: null, lon: null, detailState: 'absent', runways: [], procedures: [] });
   });
 
-  it('is answered known-absent to a manual request, and nothing is queued', async () => {
+  it('is answered known-absent to a manual request when both the airport row and a nav_absent row exist, and nothing is queued', async () => {
     seed();
     expect(await (await post({ kind: 'A', ident: 'ZZAB' })).json()).toMatchObject({ ok: true, state: 'known-absent' });
     expect(listNavdataRequests().some(r => r.ident === 'ZZAB')).toBe(false);
   });
 
-  it('is reported already-present from the airport row alone, before its absent row arrives', async () => {
+  it('is reported known-absent from the airport row alone, before its absent row arrives', async () => {
     buildReplica(db => { applyNavRows(db, [ABSENT_ROWS[0]] as any); });
-    expect(await (await post({ kind: 'A', ident: 'ZZAB' })).json()).toMatchObject({ state: 'already-present' });
+    expect(await (await post({ kind: 'A', ident: 'ZZAB' })).json()).toMatchObject({ state: 'known-absent' });
+    expect(listNavdataRequests().some(r => r.ident === 'ZZAB')).toBe(false);
   });
 });

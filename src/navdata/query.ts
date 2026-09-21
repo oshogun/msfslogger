@@ -379,7 +379,10 @@ export function parseRequestBody(body: unknown): ParsedRequest | { error: string
 
 function isAbsent(nav: Database.Database, req: ParsedRequest): boolean {
   if (req.kind === 'A') {
-    return Boolean(nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'A' AND ident = ?").get(req.ident));
+    return Boolean(
+      nav.prepare("SELECT 1 FROM nav_absent WHERE kind = 'A' AND ident = ?").get(req.ident) ||
+        nav.prepare("SELECT 1 FROM nav_airport WHERE ident = ? AND detail_state = 'absent'").get(req.ident),
+    );
   }
   return Boolean(
     req.region === null
