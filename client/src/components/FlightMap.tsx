@@ -13,6 +13,7 @@ import {
 import type { FlightPoint, PlannedLegWithChildren, RouteGeometryResponse } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChain } from '../utils/geo';
+import { useFitBoundsOnChange } from '../hooks/useFitBoundsOnChange';
 
 const mkIcon = (color: string) =>
   L.divIcon({
@@ -43,11 +44,7 @@ function BoundsController({
   plannedLatlngs: [number, number][];
 }) {
   const map = useMap();
-  useEffect(() => {
-    const all = [...latlngs, ...plannedLatlngs];
-    if (all.length === 0) return;
-    map.fitBounds(L.latLngBounds(all), { padding: [30, 30] });
-  }, [map, latlngs, plannedLatlngs]);
+  useFitBoundsOnChange(map, [...latlngs, ...plannedLatlngs], [30, 30]);
   return null;
 }
 

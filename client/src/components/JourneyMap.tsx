@@ -1,8 +1,7 @@
-import { useEffect } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, useMap } from 'react-leaflet';
-import L from 'leaflet';
 import type { JourneyLeg, JourneyAirport } from '../types';
 import { unwrapLonChains } from '../utils/geo';
+import { useFitBoundsOnChange } from '../hooks/useFitBoundsOnChange';
 import { NavdataOverlay } from './NavdataControls';
 
 /**
@@ -58,11 +57,7 @@ export function airportPositions(
 
 function FitAll({ legs }: { legs: JourneyLeg[] }) {
   const map = useMap();
-  useEffect(() => {
-    const all = legTrackChains(legs).flat();
-    if (all.length === 0) return;
-    map.fitBounds(L.latLngBounds(all as [number, number][]), { padding: [28, 28] });
-  }, [map, legs]);
+  useFitBoundsOnChange(map, legTrackChains(legs).flat() as [number, number][], [28, 28]);
   return null;
 }
 

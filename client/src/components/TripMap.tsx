@@ -14,6 +14,7 @@ import {
 import type { Flight, PlannedLegWithChildren, RouteGeometryResponse } from '../types';
 import { formatDistance } from '../utils/format';
 import { unwrapLonChains } from '../utils/geo';
+import { useFitBoundsOnChange } from '../hooks/useFitBoundsOnChange';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 
@@ -62,13 +63,9 @@ function flightChains(flights: Flight[]): [number, number][][] {
 
 function BoundsController({ flights, plannedLegs }: { flights: Flight[]; plannedLegs: PlannedLegWithChildren[] }) {
   const map = useMap();
-  useEffect(() => {
-    const flownPoints = flightChains(flights).flat();
-    const plannedPoints = plannedLegChains(plannedLegs).flat();
-    const allPoints = [...flownPoints, ...plannedPoints];
-    if (allPoints.length === 0) return;
-    map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
-  }, [map, flights, plannedLegs]);
+  const flownPoints = flightChains(flights).flat();
+  const plannedPoints = plannedLegChains(plannedLegs).flat();
+  useFitBoundsOnChange(map, [...flownPoints, ...plannedPoints], [30, 30]);
   return null;
 }
 
