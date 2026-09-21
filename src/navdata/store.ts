@@ -33,8 +33,11 @@ import {
 } from './wire';
 import { getNavDb } from './connection';
 
-/** Rows accepted in one incremental batch. */
+/** Rows the sender aims for in one incremental batch; a single-rev batch may exceed it. */
 export const NAVDATA_MAX_BATCH_ROWS = 2000;
+
+/** Rows above which any incremental batch is refused, single-rev or not. */
+export const NAVDATA_BATCH_HARD_ROW_CEILING = 20000;
 
 /** Largest JSON body accepted on the incremental rows route. */
 export const NAVDATA_BATCH_MAX_BYTES = '4mb';
@@ -503,6 +506,12 @@ export function setNavMetaRev(db: Database.Database, rev: Rev, updatedAt: number
 
 // ── Incremental batches ──────────────────────────────────────────────────────
 
+function isSingleRev(rows: NavRow[]): boolean {
+  const first = rows[0]?.r?.rev;
+  if (typeof first !== 'number' || !Number.isInteger(first)) return false;
+  return rows.every(row => row?.r?.rev === first);
+}
+
 /**
  * Applies an incremental batch to the live replica. Every refusal carries the
  * code and status the sync route answers with; a revision is only meaningful
@@ -530,8 +539,15 @@ export function applyIncrementalBatch(batch: IncrementalBatch, now: number = Dat
   }
 
   if (!Array.isArray(batch.rows)) throw badBatch('rows is not an array');
-  if (batch.rows.length > NAVDATA_MAX_BATCH_ROWS) {
-    throw badBatch(`batch carries ${batch.rows.length} rows, more than ${NAVDATA_MAX_BATCH_ROWS}`);
+  if (batch.rows.length > NAVDATA_BATCH_HARD_ROW_CEILING) {
+    throw badBatch(`batch carries ${batch.rows.length} rows, more than ${NAVDATA_BATCH_HARD_ROW_CEILING}`);
+  }
+  // A revision's rows are written in one transaction on the sender and never
+  // split, so only a batch that stays inside one rev may outgrow the target.
+  if (batch.rows.length > NAVDATA_MAX_BATCH_ROWS && !isSingleRev(batch.rows)) {
+    throw badBatch(
+      `batch of ${batch.rows.length} rows spans more than one rev; only a single-rev batch may exceed ${NAVDATA_MAX_BATCH_ROWS} rows`,
+    );
   }
   if (!Number.isInteger(batch.toRev)) throw badBatch('toRev is not an integer');
   if (Number.isInteger(batch.fromRev) && batch.fromRev !== meta.rev) {

@@ -714,16 +714,80 @@ describe('incremental batches', () => {
     }
   });
 
-  it('refuses another schema version and an oversized batch', async () => {
+  it('refuses another schema version', async () => {
     replicaDir();
     openNavdata();
     await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7 }));
 
     expect(() => applyIncrementalBatch(batch({ schemaVersion: 1 }) as never))
       .toThrow(expect.objectContaining({ code: 'NAVDATA_SCHEMA_UNSUPPORTED', serverSchemaVersion: 2 }));
-    const many = Array.from({ length: 2001 }, (_, i) => row('airport', { ident: `ZZ${i}` }));
-    expect(() => applyIncrementalBatch(batch({ rows: many })))
-      .toThrow(expect.objectContaining({ code: 'NAVDATA_BAD_BATCH' }));
-    expect(readNavMeta(getNavDb()!)).toMatchObject({ rev: 7 });
+  });
+
+  describe('row-count limits', () => {
+    const absentRows = (n: number, rev: (i: number) => number): NavRow[] =>
+      Array.from({ length: n }, (_, i) => row('absent', {
+        kind: 'W', ident: `ZZ${i}`, region: 'ZZ', reason: 'silent',
+        first_seen_at: 1, last_checked_at: 1, attempts: 1, rev: rev(i),
+      }));
+    const absentCount = () => count(getNavDb()!, 'nav_absent');
+
+    async function ready() {
+      replicaDir();
+      openNavdata();
+      await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rev: 7 }));
+    }
+
+    it('accepts a single-rev batch above the sender target and acks it whole', async () => {
+      await ready();
+      const ack = applyIncrementalBatch(batch({ toRev: 9, rows: absentRows(2400, () => 9) }));
+      expect(ack).toEqual({ ok: true, snapshotId: 'snapshot-1', rev: 9, applied: 2400 });
+      expect(absentCount()).toBe(2400);
+      expect(readNavMeta(getNavDb()!)).toMatchObject({ rev: 9 });
+    });
+
+    it('refuses more than the target rows that span two revs, writing nothing', async () => {
+      await ready();
+      let err: unknown;
+      try {
+        applyIncrementalBatch(batch({ rows: absentRows(2001, i => (i === 0 ? 8 : 9)) }));
+      } catch (e) { err = e; }
+      expect(err).toMatchObject({ code: 'NAVDATA_BAD_BATCH', status: 400 });
+      expect((err as Error).message).toContain('spans more than one rev');
+      expect(absentCount()).toBe(0);
+      expect(readNavMeta(getNavDb()!)).toMatchObject({ rev: 7 });
+    });
+
+    it('still accepts exactly the target rows across several revs', async () => {
+      await ready();
+      const ack = applyIncrementalBatch(batch({ rows: absentRows(2000, i => 8 + (i % 3)) }));
+      expect(ack.applied).toBe(2000);
+      expect(absentCount()).toBe(2000);
+    });
+
+    it('accepts exactly the ceiling and refuses one row more', async () => {
+      await ready();
+      const ack = applyIncrementalBatch(batch({ rows: absentRows(20000, () => 8) }));
+      expect(ack.applied).toBe(20000);
+      let err: unknown;
+      try {
+        applyIncrementalBatch(batch({ rows: absentRows(20001, () => 9) }));
+      } catch (e) { err = e; }
+      expect(err).toMatchObject({ code: 'NAVDATA_BAD_BATCH', status: 400 });
+      expect((err as Error).message).toBe('batch carries 20001 rows, more than 20000');
+      expect(absentCount()).toBe(20000);
+    });
+
+    it('does not let a row without an integer rev pass as single-rev', async () => {
+      await ready();
+      const rows = absentRows(2001, () => 8);
+      delete rows[1000].r.rev;
+      expect(() => applyIncrementalBatch(batch({ rows })))
+        .toThrow(expect.objectContaining({ code: 'NAVDATA_BAD_BATCH' }));
+      expect(absentCount()).toBe(0);
+      const small = absentRows(3, () => 8);
+      delete small[1].r.rev;
+      expect(() => applyIncrementalBatch(batch({ rows: small })))
+        .toThrow(expect.objectContaining({ message: expect.stringContaining('no integer rev') }));
+    });
   });
 });
