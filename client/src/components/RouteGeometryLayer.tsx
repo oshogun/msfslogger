@@ -70,6 +70,7 @@ const UNRESOLVED_TEXT: Record<string, string> = {
   'custom procedure, no runway': 'custom procedure, not a simulator procedure',
   'custom procedure, invalid distance': 'custom procedure, not a simulator procedure — its distance is missing',
   'unparseable runway': 'runway not recognised',
+  'approach runway not specified': 'runway not specified, so not drawn',
   'airport detail not fetched': 'airport detail not fetched yet',
   'procedure not in cache': 'procedure not in the local navdata',
 };

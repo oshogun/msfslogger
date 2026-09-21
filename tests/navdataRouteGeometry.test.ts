@@ -37,18 +37,21 @@ function runway(
 
 interface L {
   t: number; lat?: number | null; lon?: number | null; ident?: string;
-  cLat?: number | null; cLon?: number | null; turn?: number; alt1?: number;
+  cLat?: number | null; cLon?: number | null; turn?: number; alt1?: number; spd?: number;
 }
+
+interface ProcOpts { type?: number | null; suffix?: string | null; faf?: string | null }
 
 function procedure(
   db: Database.Database, ap: string, kind: 'SID' | 'STAR' | 'APPROACH', name: string,
   rwy: [number, number] | null,
   transitions: { role: 'common' | 'runway' | 'enroute' | 'approach' | 'final'; name?: string; rwy?: [number, number]; legs: L[] }[],
+  opts: ProcOpts = {},
 ): string {
-  const pk = procKey(ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null, null);
+  const pk = procKey(ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null, opts.suffix ?? null);
   db.prepare(
-    'INSERT INTO nav_procedure (proc_key, airport_ident, kind, name, runway_number, runway_designator, rev) VALUES (?, ?, ?, ?, ?, ?, 1)',
-  ).run(pk, ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null);
+    'INSERT INTO nav_procedure (proc_key, airport_ident, kind, name, runway_number, runway_designator, approach_type, suffix, faf_ident, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
+  ).run(pk, ap, kind, name, rwy?.[0] ?? null, rwy?.[1] ?? null, opts.type ?? null, opts.suffix ?? null, opts.faf ?? null);
   for (const t of transitions) {
     const tk = transKey(pk, t.role, t.name ?? '');
     db.prepare(
@@ -57,9 +60,9 @@ function procedure(
     t.legs.forEach((l, i) => {
       db.prepare(
         `INSERT INTO nav_procedure_leg (trans_key, seq, leg_type, fix_ident, fix_lat, fix_lon,
-           arc_center_lat, arc_center_lon, turn_direction, altitude1_m, rev)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      ).run(tk, i + 1, l.t, l.ident ?? null, l.lat ?? null, l.lon ?? null, l.cLat ?? null, l.cLon ?? null, l.turn ?? null, l.alt1 ?? null);
+           arc_center_lat, arc_center_lon, turn_direction, altitude1_m, speed_limit_kt, rev)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      ).run(tk, i + 1, l.t, l.ident ?? null, l.lat ?? null, l.lon ?? null, l.cLat ?? null, l.cLon ?? null, l.turn ?? null, l.alt1 ?? null, l.spd ?? null);
     });
   }
   return pk;
@@ -165,7 +168,7 @@ describe('procedure legs', () => {
     const db = fresh();
     airport(db, 'TSTA', 'detail');
     airport(db, 'TSTB', 'index');
-    const r = buildRouteGeometry(planned({ sid_name: 'NOPE1', star_name: 'NOPE2', approach_name: 'ILS28', approach_type: 'ILS' }), db);
+    const r = buildRouteGeometry(planned({ sid_name: 'NOPE1', star_name: 'NOPE2', approach_name: 'ILS28', approach_type: 'ILS', approach_runway: '28' }), db);
     expect(r.unresolved).toEqual([
       { kind: 'sid', name: 'NOPE1', reason: 'procedure not in cache' },
       { kind: 'star', name: 'NOPE2', reason: 'airport detail not fetched' },
@@ -541,5 +544,140 @@ describe('empty answers', () => {
     expect(r.destination).toEqual({ ident: 'TSTB', lat: 10, lon: 22, isAirport: false });
     const ok = buildRouteGeometry(planned(), null);
     expect(ok.origin).toEqual({ ident: 'TSTA', lat: 10, lon: 20, isAirport: true });
+  });
+});
+
+describe('approach selection', () => {
+  // Three approaches to one runway sharing FAF and transition names, told apart only by type.
+  function setup(over: { suffixes?: (string | null)[]; types?: (number | null)[]; fafs?: string[] } = {}): Database.Database {
+    const db = fresh();
+    airport(db, 'TSTB');
+    const types = over.types ?? [1, 4, 10];
+    types.forEach((type, i) => {
+      procedure(db, 'TSTB', 'APPROACH', `ZZAPP${i}`, [28, 2], [
+        { role: 'approach', name: 'ZZIAF', legs: [{ t: 4, lat: 10 + i, lon: 21, ident: 'ZZIAF' }] },
+        { role: 'final', legs: [{ t: 4, lat: 10, lon: 21.5 + i / 100, ident: `ZZFIN${type}` }] },
+      ], { type, suffix: over.suffixes?.[i] ?? null, faf: over.fafs?.[i] ?? 'ZZFAF' });
+    });
+    return db;
+  }
+  const plan = (over: Partial<PlannedLegWithChildren> = {}): PlannedLegWithChildren =>
+    planned({ approach_name: 'ZZFAF', approach_runway: '28R', approach_type: 'ILS', approach_arinc: 'I28R', ...over });
+  const finalIdent = (r: ReturnType<typeof buildRouteGeometry>): string | undefined =>
+    r.approach.points[r.approach.points.length - 1]?.ident ?? undefined;
+
+  it('picks the type from the ARINC leading letter', () => {
+    const db = setup();
+    expect(finalIdent(buildRouteGeometry(plan({ approach_arinc: 'I28R' }), db))).toBe('ZZFIN4');
+    expect(finalIdent(buildRouteGeometry(plan({ approach_arinc: 'R28R' }), db))).toBe('ZZFIN10');
+    expect(finalIdent(buildRouteGeometry(plan({ approach_arinc: 'P28R' }), db))).toBe('ZZFIN1');
+  });
+
+  it('falls back to the approach_type string when ARINC is empty', () => {
+    const db = setup();
+    expect(finalIdent(buildRouteGeometry(plan({ approach_arinc: '', approach_type: 'GPS' }), db))).toBe('ZZFIN1');
+    expect(finalIdent(buildRouteGeometry(plan({ approach_arinc: null, approach_type: 'RNAV' }), db))).toBe('ZZFIN10');
+  });
+
+  it('treats an unknown letter or type as no preference and still draws', () => {
+    const db = setup();
+    for (const over of [{ approach_arinc: 'Z28R' }, { approach_arinc: '', approach_type: 'WHATEVER' }, { approach_arinc: 'S28R' }]) {
+      const r = buildRouteGeometry(plan(over), db);
+      expect(r.unresolved).toEqual([]);
+      expect(r.approach.points.length).toBeGreaterThan(0);
+      expect(finalIdent(r)).toBe('ZZFIN1'); // smallest proc_key
+    }
+  });
+
+  it('keeps every candidate when none has the preferred type', () => {
+    const db = setup({ types: [1, 10] });
+    const r = buildRouteGeometry(plan({ approach_arinc: 'I28R' }), db);
+    expect(r.unresolved).toEqual([]);
+    expect(finalIdent(r)).toBe('ZZFIN1');
+  });
+
+  it('matches suffix with "0" and NULL meaning none', () => {
+    const db = setup({ types: [4, 4], suffixes: ['Z', '0'] });
+    expect(finalIdent(buildRouteGeometry(plan({ approach_suffix: null }), db))).toBe('ZZFIN4');
+    const r = buildRouteGeometry(plan({ approach_suffix: ' ' }), db);
+    expect(r.approach.source).toContain('ZZAPP1');
+    const only = setup({ types: [4], suffixes: ['Z'] });
+    const none = buildRouteGeometry(plan({ approach_suffix: null }), only);
+    expect(none.approach.points).toEqual([]);
+    expect(none.unresolved).toEqual([{ kind: 'approach', name: 'ZZFAF', reason: 'procedure not in cache' }]);
+    const nullStored = setup({ types: [4], suffixes: [null] });
+    expect(buildRouteGeometry(plan({ approach_suffix: '0' }), nullStored).approach.points.length).toBeGreaterThan(0);
+  });
+
+  it('treats "1" as a real suffix and letters case-insensitively', () => {
+    const db = setup({ types: [4, 4], suffixes: ['0', '1'] });
+    expect(buildRouteGeometry(plan({ approach_suffix: '1' }), db).approach.source).toContain('ZZAPP1');
+    const zeroOnly = setup({ types: [4], suffixes: ['0'] });
+    expect(buildRouteGeometry(plan({ approach_suffix: '1' }), zeroOnly).approach.points).toEqual([]);
+    const letters = setup({ types: [4, 4], suffixes: [null, 'Z'] });
+    expect(buildRouteGeometry(plan({ approach_suffix: ' z ' }), letters).approach.source).toContain('ZZAPP1');
+  });
+
+  it('prefers the approach whose FAF or transition name equals approach_name, then the smallest proc_key', () => {
+    const db = setup({ types: [4, 4, 4], fafs: ['ZZAAA', 'ZZWANT', 'ZZBBB'] });
+    expect(finalIdent(buildRouteGeometry(plan({ approach_name: 'zzwant' }), db))).toBe('ZZFIN4');
+    expect(buildRouteGeometry(plan({ approach_name: 'zzwant' }), db).approach.source).toContain('ZZAPP1');
+    expect(buildRouteGeometry(plan({ approach_name: 'ZZIAF' }), db).approach.source).toContain('ZZAPP0');
+    expect(buildRouteGeometry(plan({ approach_name: 'ZZNONE' }), db).approach.source).toContain('ZZAPP0');
+    const viaTransition = fresh();
+    airport(viaTransition, 'TSTB');
+    procedure(viaTransition, 'TSTB', 'APPROACH', 'ZZAPP0', [28, 2], [
+      { role: 'approach', name: 'ZZOTHER', legs: [{ t: 4, lat: 10, lon: 21, ident: 'ZZOTHER' }] },
+    ], { type: 4, faf: 'ZZF0' });
+    procedure(viaTransition, 'TSTB', 'APPROACH', 'ZZAPP1', [28, 2], [
+      { role: 'approach', name: 'ZZWANT', legs: [{ t: 4, lat: 10, lon: 21, ident: 'ZZWANT' }] },
+    ], { type: 4, faf: 'ZZF1' });
+    expect(buildRouteGeometry(plan({ approach_name: 'ZZWANT' }), viaTransition).approach.source).toContain('ZZAPP1');
+  });
+
+  it('never compares approach_name to the stored procedure name', () => {
+    const db = setup({ types: [4] });
+    const r = buildRouteGeometry(plan({ approach_name: 'ZZAPP0' }), db);
+    expect(r.unresolved).toEqual([]);
+    expect(r.approach.points.length).toBeGreaterThan(0);
+    const other = buildRouteGeometry(plan({ approach_name: 'ZZDUYET' }), db);
+    expect(other.unresolved).toEqual([]);
+  });
+
+  it('does not guess a runway: an absent one reports unresolved and draws nothing', () => {
+    const db = setup({ types: [4] });
+    for (const rwy of [null, '', '  ']) {
+      const r = buildRouteGeometry(plan({ approach_runway: rwy }), db);
+      expect(r.approach).toMatchObject({ source: null, points: [] });
+      expect(r.unresolved).toEqual([{ kind: 'approach', name: 'ZZFAF', reason: 'approach runway not specified' }]);
+      expect(r.skippedLegs).toBe(0);
+    }
+  });
+
+  it('filters by runway and reports not in cache when none matches', () => {
+    const db = setup({ types: [4] });
+    const r = buildRouteGeometry(plan({ approach_runway: '10' }), db);
+    expect(r.unresolved).toEqual([{ kind: 'approach', name: 'ZZFAF', reason: 'procedure not in cache' }]);
+    expect(buildRouteGeometry(plan({ approach_runway: 'XY' }), db).unresolved)
+      .toEqual([{ kind: 'approach', name: 'ZZFAF', reason: 'unparseable runway' }]);
+  });
+});
+
+describe('speed limit sentinel', () => {
+  it('maps negative and non-finite speed limits to null and keeps real ones', () => {
+    const db = fresh();
+    airport(db, 'TSTA');
+    procedure(db, 'TSTA', 'SID', 'ZZSID1', [10, 0], [{
+      role: 'runway', rwy: [10, 0],
+      legs: [
+        { t: 4, lat: 11, lon: 21, ident: 'ZZA', spd: -1 },
+        { t: 4, lat: 11.1, lon: 21.1, ident: 'ZZB', spd: 45 },
+        { t: 4, lat: 11.2, lon: 21.2, ident: 'ZZC', spd: 0 },
+        { t: 4, lat: 11.3, lon: 21.3, ident: 'ZZD' },
+        { t: 4, lat: 11.4, lon: 21.4, ident: 'ZZE', spd: Infinity },
+      ],
+    }]);
+    const pts = buildRouteGeometry(planned({ sid_name: 'ZZSID1', sid_runway: '10' }), db).sid.points;
+    expect(pts.map((p) => p.speedLimitKt)).toEqual([null, 45, 0, null, null]);
   });
 });

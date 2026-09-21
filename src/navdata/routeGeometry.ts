@@ -57,7 +57,7 @@ const norm = (s: string | null | undefined): string => (s ?? '').trim().toUpperC
 
 // ── Row shapes (only the columns read here) ──────────────────────────────────
 
-interface ProcRow { proc_key: string; runway_number: number | null; runway_designator: number | null; suffix: string | null; name: string }
+interface ProcRow { proc_key: string; runway_number: number | null; runway_designator: number | null; suffix: string | null; name: string; approach_type?: number | null; faf_ident?: string | null }
 interface TransRow {
   trans_key: string; role: string; name: string;
   runway_number: number | null; runway_designator: number | null;
@@ -110,7 +110,9 @@ class ChainBuilder {
       flyOver: leg.fly_over == null ? null : leg.fly_over === 1,
       altitude1M: leg.altitude1_m,
       altitude2M: leg.altitude2_m,
-      speedLimitKt: leg.speed_limit_kt,
+      speedLimitKt: typeof leg.speed_limit_kt === 'number' && Number.isFinite(leg.speed_limit_kt) && leg.speed_limit_kt >= 0
+        ? leg.speed_limit_kt
+        : null,
     });
     if (
       appended && hadPrevious && ARC_LEG_TYPES.has(leg.leg_type) &&
@@ -270,6 +272,61 @@ function selectProcedure(
   const generic = rows.filter((r) => r.runway_number === null).sort(byKey);
   if (generic.length) return generic[0];
   return [...rows].sort(byKey)[0];
+}
+
+// The simulator writes approach_type as a small integer; these map the plan's ARINC leading letter
+// (or, when that is empty, its approach_type string) onto it. Unknown input means no preference.
+const ARINC_LETTER_TYPE: Record<string, number> = {
+  I: 4, L: 5, B: 11, R: 10, H: 10, P: 1, V: 2, T: 2, D: 8, N: 3, Q: 9, X: 7, S: 6, U: 6,
+};
+const APPROACH_TYPE_NAME: Record<string, number> = {
+  ILS: 4, LOC: 5, LDA: 7, VOR: 2, VORDME: 8, NDB: 3, NDBDME: 9, RNAV: 10, GPS: 1,
+  'LOC-BC': 11, LOCALIZER_BACK_COURSE: 11, SDF: 6,
+};
+
+function preferredApproachType(arinc: string | null | undefined, typeName: string | null | undefined): number | null {
+  const letter = norm(arinc).charAt(0);
+  if (letter) return ARINC_LETTER_TYPE[letter] ?? null;
+  return APPROACH_TYPE_NAME[norm(typeName)] ?? null;
+}
+
+// The simulator sends "0" for "no suffix"; any other value, digit or letter, is a real suffix.
+const noSuffix = (s: string | null | undefined): boolean => norm(s) === '' || norm(s) === '0';
+
+function selectApproach(
+  db: Database.Database,
+  airport: string,
+  fixName: string,
+  runway: { number: number; designator: number } | null,
+  suffix: string | null,
+  arinc: string | null,
+  typeName: string | null,
+): ProcRow | null {
+  let rows = db
+    .prepare(
+      `SELECT proc_key, name, runway_number, runway_designator, suffix, approach_type, faf_ident
+         FROM nav_procedure WHERE airport_ident = ? AND kind = 'APPROACH'`,
+    )
+    .all(airport) as ProcRow[];
+  if (runway) {
+    rows = rows.filter((r) => r.runway_number === runway.number && r.runway_designator === runway.designator);
+  }
+  rows = rows.filter((r) => (noSuffix(suffix) ? noSuffix(r.suffix) : norm(r.suffix) === norm(suffix)));
+  if (!rows.length) return null;
+  const preferred = preferredApproachType(arinc, typeName);
+  if (preferred !== null) {
+    const typed = rows.filter((r) => r.approach_type === preferred);
+    if (typed.length) rows = typed;
+  }
+  const wanted = norm(fixName);
+  const transNames = db.prepare('SELECT name FROM nav_procedure_transition WHERE proc_key = ?');
+  const fixMatch = (r: ProcRow): boolean =>
+    norm(r.faf_ident) === wanted ||
+    (transNames.all(r.proc_key) as { name: string }[]).some((t) => norm(t.name) === wanted);
+  const scored = rows.map((r) => ({ r, m: wanted !== '' && fixMatch(r) }));
+  scored.sort((a, b) =>
+    a.m !== b.m ? (a.m ? -1 : 1) : a.r.proc_key < b.r.proc_key ? -1 : a.r.proc_key > b.r.proc_key ? 1 : 0);
+  return scored[0].r;
 }
 
 function transitionsOf(db: Database.Database, procKey: string): TransRow[] {
@@ -574,6 +631,7 @@ function procedureChain(
   runwayName: string | null,
   suffix: string | null,
   assemble: (b: ChainBuilder, trans: TransRow[], rwy: { number: number; designator: number } | null, proc: ProcRow) => void,
+  approachPlan?: { arinc: string | null; typeName: string | null },
 ): GeometryChain {
   let rwy: { number: number; designator: number } | null = null;
   if (runwayName != null && runwayName.trim() !== '') {
@@ -582,8 +640,13 @@ function procedureChain(
       addUnresolved(acc, chainName, name, 'unparseable runway');
       return emptyChain();
     }
+  } else if (approachPlan) {
+    addUnresolved(acc, chainName, name, 'approach runway not specified');
+    return emptyChain();
   }
-  const proc = selectProcedure(db, airport, kind, name, rwy, suffix);
+  const proc = approachPlan
+    ? selectApproach(db, airport, name, rwy, suffix, approachPlan.arinc, approachPlan.typeName)
+    : selectProcedure(db, airport, kind, name, rwy, suffix);
   if (!proc) {
     const ap = db.prepare('SELECT detail_state FROM nav_airport WHERE ident = ?').get(airport) as
       | { detail_state: string }
@@ -674,5 +737,6 @@ function buildApproach(
       addTransition(db, b, chosen);
       addTransition(db, b, trans.find((t) => t.role === 'final'));
     },
+    { arinc: leg.approach_arinc, typeName: leg.approach_type },
   );
 }

@@ -850,7 +850,8 @@ export type UnresolvedReason =
   | 'custom procedure, no runway'
   /** A custom procedure whose runway resolved but whose distance is missing or not a positive number. */
   | 'custom procedure, invalid distance'
-  | 'unparseable runway';
+  | 'unparseable runway'
+  | 'approach runway not specified';
 
 export interface RouteGeometryResponse {
   legId: number;

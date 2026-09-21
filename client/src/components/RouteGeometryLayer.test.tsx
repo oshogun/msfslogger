@@ -54,6 +54,11 @@ describe('procedureNote', () => {
     expect(procedureNote(leg, g)).toContain('APP ZZBB31 — custom procedure, not a simulator procedure — runway detail not fetched yet');
   });
 
+  it('says an approach without a runway is not drawn', () => {
+    const g = geometry({ unresolved: [{ kind: 'approach', name: 'ZZDD09', reason: 'approach runway not specified' }] });
+    expect(procedureNote(leg, g)).toContain('APP ZZDD09 — runway not specified, so not drawn');
+  });
+
   it('names an unresolved custom procedure once and promises a fetch only for an airport', () => {
     const only = { sid_name: null, star_name: null, approach_name: 'ZZCC09' } as unknown as PlannedLegWithChildren;
     const unresolved = [{ kind: 'approach' as const, name: 'ZZCC09', reason: 'custom procedure, no runway' as const }];
