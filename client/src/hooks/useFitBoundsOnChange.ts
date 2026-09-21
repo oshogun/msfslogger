@@ -23,7 +23,9 @@ export function pointsSignature(points: readonly LatLng[]): string {
 /**
  * Fits the map to `points` on mount and whenever the points themselves change.
  * A parent re-render that rebuilds the array with the same coordinates does not
- * refit, so a zoom or pan the user made is left alone.
+ * refit, so a zoom or pan the user made is left alone. Once the user has moved
+ * or zoomed the map (wheel, buttons, pinch, drag, double-click), no automatic
+ * refit happens again for the life of the map, even if more points arrive.
  */
 export function useFitBoundsOnChange(
   map: LeafletMap,
@@ -32,11 +34,32 @@ export function useFitBoundsOnChange(
 ): void {
   const latest = useRef(points);
   latest.current = points;
+  const userMoved = useRef(false);
+  const fitting = useRef(false);
+
+  useEffect(() => {
+    userMoved.current = false;
+    // Leaflet raises movestart/zoomstart synchronously inside fitBounds, so the
+    // flag only needs to cover the call itself to tell our moves from the user's.
+    const onStart = () => {
+      if (!fitting.current) userMoved.current = true;
+    };
+    map.on('movestart zoomstart', onStart);
+    return () => {
+      map.off('movestart zoomstart', onStart);
+    };
+  }, [map]);
+
   const signature = pointsSignature(points);
   const [padX, padY] = padding;
   useEffect(() => {
     const pts = latest.current;
-    if (pts.length === 0) return;
-    map.fitBounds(L.latLngBounds(pts as LatLng[]), { padding: [padX, padY] });
+    if (pts.length === 0 || userMoved.current) return;
+    fitting.current = true;
+    try {
+      map.fitBounds(L.latLngBounds(pts as LatLng[]), { padding: [padX, padY] });
+    } finally {
+      fitting.current = false;
+    }
   }, [map, signature, padX, padY]);
 }
