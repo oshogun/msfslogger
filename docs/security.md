@@ -113,7 +113,7 @@ Two properties worth knowing: the 4 MiB JSON parser for `/api/navdata/rows` runs
 *before* the token check, so an unauthenticated caller can make the server parse
 up to 4 MiB (every other path rejects at 100 kB); and snapshot uploads are staged
 in a per-process temporary directory created with mode `0700` and deleted after
-import. `ALLOW_UNAUTHENTICATED_INGEST` opens these four routes too, like `/api/ingest/*`. The replica may contain Navigraph-derived data: it is git-ignored and
+import. A snapshot with zero rows is refused when the replica already holds any (it would erase the replica in exchange for nothing). Rejected sync requests are logged at warning level without the token, request body or row values. `ALLOW_UNAUTHENTICATED_INGEST` opens these four routes too, like `/api/ingest/*`. The replica may contain Navigraph-derived data: it is git-ignored and
 docker-ignored and must never be committed or baked into an image. See
 [navdata.md](navdata.md).
 

@@ -103,6 +103,18 @@ on-file dispatch data, not invented from nothing.
 
 ## Navdata
 
+**"Fetch detail" stays "Queued".** The request is stored (`navdata_requests` in
+`flights.db`) and waits for the MCDU client to poll `/api/navdata/demand` and fetch
+the airport from the simulator; it is cleared when the replica holds the airport's
+detail or a record that the simulator does not have it. Nothing else can answer it.
+Check the client's navdata state in `GET /api/navdata/status` (`sidecar`).
+
+**The sidecar is stuck retrying `/api/navdata/rows`.** Read `server.log` for
+`navdata: /rows rejected <status> <code>: <message>`: the message names the row,
+table and column or the limit that refused the batch. A batch over 2000 rows is
+accepted only if every row shares one `rev`; a body over 4 MiB is a `413`
+(not logged yet).
+
 **No Navdata panel on the maps.** The server has no replica (`GET /api/navdata/status`
 returns `present: false`): the MCDU client has not uploaded a snapshot, or the
 file is unreadable. Check the server log for `[Navdata]` lines and confirm

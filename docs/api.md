@@ -269,8 +269,8 @@ is in `INGEST_SCOPED_ROUTES`):
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | POST | `/api/navdata/snapshot` | ingest token | Multipart, one part `navdataSnapshot`, gzipped NDJSON, ≤ 64 MiB. Replaces the replica atomically. |
-| POST | `/api/navdata/rows` | ingest token | JSON incremental batch, ≤ 2000 rows / 4 MiB (exempt from the 100 kB JSON limit). |
-| GET | `/api/navdata/demand` | ingest token | What the sidecar should fetch next (≤ 50 per poll). |
+| POST | `/api/navdata/rows` | ingest token | JSON incremental batch: a single-`rev` batch may exceed 2000 rows (20 000 ceiling), a mixed-`rev` batch may not; 4 MiB byte bound (exempt from the 100 kB JSON limit). |
+| GET | `/api/navdata/demand` | ingest token | What the sidecar should fetch next (≤ 50 per poll); waypoint entries carry `kind` `W`/`V`/`N`, fixes before navaids; optional `skipAirports`/`skipWaypoints` lists of parked idents. |
 | POST | `/api/navdata/state` | ingest token | Sidecar health report; `204` (`400` if the body is not a state report). |
 
 **Query endpoints — session only** (an ingest token is rejected; with no replica

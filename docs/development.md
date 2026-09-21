@@ -121,7 +121,12 @@ does start a live server, deliberately isolated from the developer's own:
 Navdata tests (`tests/navdata*.test.ts`, client `Navdata*`/`RouteGeometry*`
 tests) use **synthetic idents and coordinates only** — never real navdata, which
 is licensed content (see [navdata.md](navdata.md#data-provenance-and-licensing)).
-They build scratch databases in a temp directory and never touch `flights.db` or
+The procedure-key collision ordering is pinned by a shared fixture,
+`tests/fixtures/navdata/approach-collision-vectors.json`, whose sha256 and length
+the suite asserts; it is shared byte for byte with the MCDU repository, so neither
+side edits it alone. The navdata schema in `src/navdata/schema.ts` is likewise the
+MCDU repository's canonical file, adopted verbatim and pinned by sha256. Tests
+build scratch databases in a temp directory and never touch `flights.db` or
 the live server.
 
 ## CI

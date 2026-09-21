@@ -54,6 +54,14 @@ expanded planned routes; without it nothing changes. See [navdata.md](navdata.md
 for what each layer shows, the coverage notes, *Fetch detail*, and the dashed
 *computed straight-in / computed departure* lines drawn for custom procedures.
 
+### Map zoom
+
+The flight, trip and journey maps fit the whole route when they load, and refit
+only when the route's points genuinely change (a track that loads late, a flight
+gaining points). Once you zoom or pan a map yourself, it never refits on its own
+again until you leave the page — so a zoom-in to check runways stays put. The live
+map on the home page still recentres on the aircraft at each position update.
+
 ## Replaying a flight
 
 Any completed flight with at least two recorded points has a **Replay flight** button on
