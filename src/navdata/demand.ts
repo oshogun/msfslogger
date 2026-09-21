@@ -229,21 +229,21 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
   const skipped = (want: Want): boolean =>
     skip !== undefined && (want.kind === 'A' ? skip.airports : skip.waypoints).has(want.ident);
 
-  const airports: string[] = [];
-  const waypoints: DemandWaypoint[] = [];
+  // Wants are collected first and capped after: fixes and airports keep their
+  // encounter order and always come ahead of VOR and NDB wants, so a long run of
+  // navaids can never push a fix out from under the cap.
+  const primary: Want[] = [];
+  const navaids: Want[] = [];
   const seen = new Set<string>();
-  let more = false;
 
-  const push = (want: Want): 'added' | 'duplicate' | 'capped' => {
+  const collect = (want: Want): void => {
     const key = `${want.kind}|${want.ident}|${want.region ?? ''}`;
-    if (seen.has(key)) return 'duplicate';
-    if (airports.length + waypoints.length >= NAVDATA_DEMAND_CAP) return 'capped';
+    if (seen.has(key)) return;
     seen.add(key);
-    if (want.kind === 'A') airports.push(want.ident);
-    else if (want.region === null) waypoints.push({ ident: want.ident, kind: want.kind });
-    else waypoints.push({ ident: want.ident, region: want.region, kind: want.kind });
-    return 'added';
+    (want.kind === 'V' || want.kind === 'N' ? navaids : primary).push(want);
   };
+  // Once the primary group alone overflows the cap nothing further can be emitted.
+  const full = (): boolean => primary.length > NAVDATA_DEMAND_CAP;
 
   for (const request of listNavdataRequests(now)) {
     const want = wantOfRequest(request);
@@ -253,21 +253,27 @@ export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandRe
       deleteNavdataRequestById(request.id);
       continue;
     }
-    if (push(want) === 'capped') more = true;
+    collect(want);
   }
 
   for (const leg of scanLegs(db)) {
-    let capped = false;
+    if (full()) break;
     for (const want of legWants(db, leg)) {
       if (skipped(want) || holds(want)) continue;
-      if (push(want) === 'capped') {
-        more = true;
-        capped = true;
-        break;
-      }
+      collect(want);
+      if (full()) break;
     }
-    if (capped) break;
   }
+
+  const ordered = primary.concat(navaids);
+  const airports: string[] = [];
+  const waypoints: DemandWaypoint[] = [];
+  for (const want of ordered.slice(0, NAVDATA_DEMAND_CAP)) {
+    if (want.kind === 'A') airports.push(want.ident);
+    else if (want.region === null) waypoints.push({ ident: want.ident, kind: want.kind });
+    else waypoints.push({ ident: want.ident, region: want.region, kind: want.kind });
+  }
+  const more = ordered.length > NAVDATA_DEMAND_CAP;
 
   return {
     v: 1,

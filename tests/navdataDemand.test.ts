@@ -251,10 +251,11 @@ describe('demand from planned legs', () => {
     ]);
 
     expect(buildDemand(NOW).waypoints).toEqual([
+      { ident: 'ZZF01', kind: 'W' },
       { ident: 'ZZV01', kind: 'V' }, { ident: 'ZZV04', region: 'YY', kind: 'V' },
       { ident: 'ZZV07', kind: 'V' }, { ident: 'ZZV08', kind: 'V' }, { ident: 'ZZV09', kind: 'V' },
       { ident: 'ZZV10', kind: 'V' }, { ident: 'ZZN03', kind: 'N' },
-      { ident: 'ZZV11', region: 'ZZ', kind: 'V' }, { ident: 'ZZF01', kind: 'W' },
+      { ident: 'ZZV11', region: 'ZZ', kind: 'V' },
     ]);
   });
 
@@ -274,6 +275,55 @@ describe('demand from planned legs', () => {
     ]);
     const skip = { airports: new Set<string>(), waypoints: new Set(['ZZSAM']) };
     expect(buildDemand(NOW, skip).waypoints).toEqual([{ ident: 'ZZOTH', kind: 'V' }]);
+  });
+
+  it('lists every fix ahead of any VOR or NDB before the cap, so navaids never starve fixes', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    const navs = Array.from({ length: NAVDATA_DEMAND_CAP + 2 }, (_, i) => ({
+      ident: `ZZN${String(i).padStart(2, '0')}`, type: i % 2 ? 'NDB' : 'VOR',
+    }));
+    seedWaypoints(leg, [...navs, { ident: 'ZZFA', type: 'WAYPOINT' }, { ident: 'ZZFB', type: 'WAYPOINT' }, { ident: 'ZZFC', type: 'WAYPOINT' }]);
+    setReplica([]);
+
+    const demand = buildDemand(NOW);
+
+    expect(demand.waypoints).toHaveLength(NAVDATA_DEMAND_CAP);
+    expect(demand.waypoints.slice(0, 3).map(w => w.ident)).toEqual(['ZZFA', 'ZZFB', 'ZZFC']);
+    expect(demand.waypoints[3]).toEqual({ ident: 'ZZN00', kind: 'V' });
+    expect(demand.waypoints[NAVDATA_DEMAND_CAP - 1].ident).toBe(`ZZN${String(NAVDATA_DEMAND_CAP - 4).padStart(2, '0')}`);
+    expect(demand.more).toBe(true);
+  });
+
+  it('keeps manual-then-plan order within the fix group and within the navaid group', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZPV1', type: 'VOR' }, { ident: 'ZZPF1', type: 'WAYPOINT' },
+      { ident: 'ZZPV2', type: 'NDB' }, { ident: 'ZZPF2', type: 'WAYPOINT' },
+    ]);
+    setReplica([]);
+    upsertNavdataRequest('W', 'ZZMF1', null, NOW);
+    upsertNavdataRequest('W', 'ZZMF2', null, NOW);
+
+    const idents = buildDemand(NOW).waypoints.map(w => w.ident);
+    expect(idents.slice(0, 2).sort()).toEqual(['ZZMF1', 'ZZMF2']);
+    expect(idents.slice(2)).toEqual(['ZZPF1', 'ZZPF2', 'ZZPV1', 'ZZPV2']);
+  });
+
+  it('gives every entry a kind of exactly W, V or N', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZFIX', type: 'waypoint' }, { ident: 'ZZVOR', type: ' vor ', region: 'zz' }, { ident: 'ZZNDB', type: 'NDB', region: '  ' },
+    ]);
+    setReplica([]);
+    upsertNavdataRequest('W', 'zzman', 'yy', NOW);
+
+    const { waypoints } = buildDemand(NOW);
+    expect(waypoints).toHaveLength(4);
+    for (const w of waypoints) expect(['W', 'V', 'N']).toContain(w.kind);
+    expect(waypoints.map(w => w.kind)).toEqual(['W', 'W', 'V', 'N']);
   });
 
   it('wants everything when there is no replica at all', () => {
