@@ -572,6 +572,46 @@ describe('snapshot import', () => {
     expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-fresh', schema_version: 2 });
   });
 
+  it('refuses a zero-row snapshot over a populated replica and leaves it untouched', async () => {
+    const d = replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({
+      snapshotId: 'snapshot-1',
+      rows: [row('airport', { ident: 'ZZAA' }), row('runway', { rwy_key: 'ZZAA|9|0', airport_ident: 'ZZAA' })],
+    }));
+
+    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-2', rows: [] })))
+      .rejects.toMatchObject({ code: 'NAVDATA_BAD_BATCH', status: 400, message: /empty snapshot/ });
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
+    expect(count(getNavDb()!, 'nav_airport')).toBe(1);
+    expect(count(getNavDb()!, 'nav_runway')).toBe(1);
+    closeNavDb();
+    expect(fs.readdirSync(d)).toEqual(['navdata.db']);
+  });
+
+  it('accepts a zero-row snapshot when there is no replica', async () => {
+    replicaDir();
+    openNavdata();
+    expect(getNavDb()).toBeNull();
+
+    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rows: [] })))
+      .resolves.toMatchObject({ ok: true, snapshotId: 'snapshot-1' });
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-1' });
+  });
+
+  it('accepts a zero-row snapshot over a replica that holds no rows', async () => {
+    replicaDir();
+    openNavdata();
+    await importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-1', rows: [] }));
+
+    await expect(importNavdataSnapshot(writeSnapshot({ snapshotId: 'snapshot-2', rows: [] })))
+      .resolves.toMatchObject({ ok: true, snapshotId: 'snapshot-2' });
+
+    expect(readNavMeta(getNavDb()!)).toMatchObject({ snapshot_id: 'snapshot-2' });
+  });
+
   it('refuses a stream with no footer and cleans the incoming file up', async () => {
     const d = replicaDir();
     openNavdata();

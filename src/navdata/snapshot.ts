@@ -13,7 +13,7 @@ import type Database from 'better-sqlite3';
 import fs from 'fs';
 import readline from 'readline';
 import zlib from 'zlib';
-import { incomingNavdataPath, swapInReplica } from './connection';
+import { getNavDb, incomingNavdataPath, swapInReplica } from './connection';
 import { applyNavdataSchema } from './schema';
 import { applyNavRows, NavdataStoreError, verifyNavdataColumns, writeNavMeta } from './store';
 import {
@@ -33,6 +33,27 @@ const SIM_IDS = new Set(['2020', '2024', 'fsx']);
 
 const badBatch = (message: string): NavdataStoreError =>
   new NavdataStoreError('NAVDATA_BAD_BATCH', message, { status: 400 });
+
+const ROW_TABLES = [
+  'nav_airport',
+  'nav_navaid',
+  'nav_waypoint',
+  'nav_airway_leg',
+  'nav_runway',
+  'nav_airport_frequency',
+  'nav_procedure',
+  'nav_procedure_transition',
+  'nav_procedure_leg',
+  'nav_coverage_cell',
+  'nav_absent',
+] as const;
+
+/** True when the replica being served holds at least one data row (nav_meta does not count). */
+function replicaHoldsRows(): boolean {
+  const current = getNavDb();
+  if (!current) return false;
+  return ROW_TABLES.some(t => current.prepare(`SELECT 1 FROM ${t} LIMIT 1`).get() !== undefined);
+}
 
 type Counts = Partial<Record<NavRowType, number>>;
 
@@ -191,6 +212,9 @@ export async function importNavdataSnapshot(
     swapInReplica(incoming, check => {
       verifyNavdataColumns(check);
       checkFooter(checkedFooter, read, total);
+      if (total === 0 && replicaHoldsRows()) {
+        throw badBatch('an empty snapshot would replace a populated replica');
+      }
       const meta = check.prepare('SELECT snapshot_id AS id FROM nav_meta WHERE id = 1').get() as
         | { id: string }
         | undefined;
