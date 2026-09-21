@@ -204,6 +204,33 @@ describe('GET /demand and POST /state', () => {
     expect(((await (await get('')).json()) as any).airports).toEqual(['ZZREQ']);
   });
 
+  it('reads a skip list the way URLSearchParams sends it, comma percent-encoded', async () => {
+    upsertNavdataRequest('A', 'ZZAB', null, new Date());
+    upsertNavdataRequest('A', 'ZZAC', null, new Date());
+    upsertNavdataRequest('W', 'ZZFIX', null, new Date());
+    const get = async (qs: string) => {
+      const res = await fetch(`${base}/api/navdata/demand${qs}`, { headers: { 'x-ingest-token': TOKEN } });
+      expect(res.status, qs).toBe(200);
+      return (await res.json()) as any;
+    };
+    const encoded = new URLSearchParams({ skipAirports: 'ZZAB,ZZAC', skipWaypoints: 'ZZFIX' }).toString();
+    expect(encoded).toContain('ZZAB%2CZZAC');
+    expect(await get(`?${encoded}`)).toMatchObject({ airports: [], waypoints: [] });
+    expect(await get('?skipAirports=ZZAB%2CZZAC')).toMatchObject({ airports: [], waypoints: [{ ident: 'ZZFIX' }] });
+    expect(await get('?skipAirports=ZZAB,ZZAC')).toMatchObject({ airports: [] });
+    expect((await get('?skipAirports=ZZAB')).airports).toEqual(['ZZAC']);
+  });
+
+  it('accepts a sorted, de-duplicated list of exactly 200 idents encoded with %2C', async () => {
+    const idents = Array.from({ length: 200 }, (_, i) => `ZZ${String(i).padStart(3, '0')}`).sort();
+    const qs = new URLSearchParams({ skipAirports: idents.join(',') }).toString();
+    expect(qs).toContain('%2C');
+    const res = await fetch(`${base}/api/navdata/demand?${qs}`, { headers: { 'x-ingest-token': TOKEN } });
+    expect(res.status).toBe(200);
+    const over = new URLSearchParams({ skipAirports: [...idents, 'ZZ200'].join(',') }).toString();
+    expect((await fetch(`${base}/api/navdata/demand?${over}`, { headers: { 'x-ingest-token': TOKEN } })).status).toBe(400);
+  });
+
   it('answers a malformed or oversized skip list with 400 NAVDATA_BAD_BATCH', async () => {
     const get = (qs: string) => fetch(`${base}/api/navdata/demand${qs}`, { headers: { 'x-ingest-token': TOKEN } });
     const tooMany = Array.from({ length: 201 }, (_, i) => `ZZ${i}`).join(',');

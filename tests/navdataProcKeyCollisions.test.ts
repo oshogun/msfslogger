@@ -5,8 +5,8 @@ import path from 'path';
 import { assignProcKeys, type ProcKeyRecord } from '../src/navdata/keys';
 
 const FILE = path.join(__dirname, 'fixtures', 'navdata', 'approach-collision-vectors.json');
-const SHA256 = 'ac1a6a002d6935790ae5fe28810fc59970347db1ac2f3ebae4ec2213bf4da7af';
-const BYTES = 12807;
+const SHA256 = '23a1416997bbc65a4bf0de053fafe7837953e01c0d55dd60c5e9b1c1397e39df';
+const BYTES = 13796;
 
 interface Vector {
   name: string;
@@ -48,6 +48,11 @@ describe('shared approach collision vectors', () => {
     expect(toObject(assignProcKeys(v.records.map(load).reverse(), v.baseKey))).toEqual(v.expectedReversed);
   });
 
+  it('covers all eleven vectors, including the mixed-case FAF one', () => {
+    expect(vectors).toHaveLength(11);
+    expect(vectors.some(v => v.name.startsWith('ZZBF 15'))).toBe(true);
+  });
+
   it('flags orderIndependent exactly where reversing changes nothing', () => {
     for (const v of vectors) {
       const same = Object.entries(v.expected).every(([id, key]) => v.expectedReversed[id] === key);
@@ -67,12 +72,6 @@ describe('shared approach collision vectors', () => {
 describe('assignProcKeys', () => {
   const rec = (id: string, over: Partial<ProcKeyRecord> = {}): ProcKeyRecord => ({
     id, fafIdent: 'ZZF', nTransitions: 1, missedLegCount: 1, missedAltM: 1, ...over,
-  });
-
-  it('orders the FAF by code unit, so an upper-case letter precedes a lower-case one', () => {
-    // localeCompare would put 'ZZa' first; '<' puts 'ZZB' first.
-    const out = assignProcKeys([rec('a', { fafIdent: 'ZZa' }), rec('b', { fafIdent: 'ZZB' })], 'K');
-    expect(toObject(out)).toEqual({ b: 'K', a: 'K#2' });
   });
 
   it('sorts an absent value last at every level', () => {
