@@ -97,7 +97,7 @@ store, and a browser session cookie is rejected here. They are **not** in
 |---|---|---|
 | POST | `/api/navdata/snapshot` | Multipart upload, one part named `navdataSnapshot`: a gzipped NDJSON file (header line, `{"t":"<table>","r":{…}}` row lines in parent-before-child order, footer line with row counts). Max 64 MiB compressed. The upload is spooled to a per-process private temporary directory, then streamed into a temporary replica file beside `navdata.db`, verified (schema version, per-table counts against the footer, column check), then swapped in atomically. Answers a `SnapshotAck` with the per-table counts actually written. |
 | POST | `/api/navdata/rows` | JSON `IncrementalBatch` (`snapshotId`, `fromRev`, `toRev`, `rows`, `more`). Up to 2000 rows is the sender's target; a batch of MORE than 2000 rows is accepted only when every row shares one `rev` (a whole transaction, for example one airport's detail), a mixed-`rev` batch over 2000 is refused, and 20 000 rows is a hard ceiling for any batch. The byte bound is 4 MiB. This one path is exempt from the global 100 kB JSON limit (a path-scoped `express.json({ limit: '4mb' })` sits above the global parser; every other path still rejects at 100 kB). The whole batch is one transaction. |
-| GET | `/api/navdata/demand` | What the sidecar should fetch: `airports` (idents wanted in full detail) and `waypoints` (fixes wanted with their airway routes), at most 50 entries per poll (`cap`, echoed), `more: true` when truncated. Derived from manual requests, then active-trip legs, then planned legs, minus what the replica already holds. `USER`-type waypoints are never demanded. Each `waypoints` entry is `{ ident, region?, kind }` with `kind` `W` (a fix), `V` (a VOR) or `N` (an NDB), taken from the plan's waypoint type; all fixes and airports are listed ahead of every VOR/NDB before the cap applies, so navaids never starve fixes. A fix want is satisfied only by a fetched or absent fix row (or an absence row of kind W); a VOR/NDB want only by a fetched or absent navaid row (or an absence row of that kind); position-only candidate rows for an ambiguous ident never satisfy it. Optional query parameters `skipAirports` and `skipWaypoints` are comma-separated idents (percent-encoded commas are fine, decoded before the split; at most 200 distinct, 1-8 characters of A-Z0-9 after trimming and uppercasing; a malformed list is a `400 NAVDATA_BAD_BATCH`): the sidecar reports parked idents there and the server excludes them before the cap, keeping no state. A skipped manual request is neither listed nor deleted. |
+| GET | `/api/navdata/demand` | What the sidecar should fetch: `airports` (idents wanted in full detail) and `waypoints` (fixes wanted with their airway routes), at most 50 entries per poll (`cap`, echoed), `more: true` when truncated. Derived from manual requests, then active-trip legs, then planned legs, minus what the replica already holds. `USER`-type waypoints are never demanded. Each `waypoints` entry is `{ ident, region?, kind }` with `kind` `W` (a fix), `V` (a VOR) or `N` (an NDB), taken from the plan's waypoint type; all fixes and airports are listed ahead of every VOR/NDB before the cap applies, so navaids never starve fixes. A fix want is satisfied only by a fetched or absent fix row (or an absence row of kind W); a VOR/NDB want only by a fetched or absent navaid row (or an absence row of that kind); position-only candidate rows for an ambiguous ident never satisfy it. Optional query parameters `skipAirports` and `skipWaypoints` are comma-separated idents (percent-encoded commas are fine, decoded before the split; at most 200 distinct, 1-8 characters of A-Z0-9 after trimming and uppercasing; a malformed list is a `400 NAVDATA_BAD_BATCH`; empty items are ignored, and an ident is skipped whatever its kind): the sidecar reports parked idents there and the server excludes them before the cap, keeping no state. A skipped manual request is neither listed nor deleted. |
 | POST | `/api/navdata/state` | Sidecar health (`nav.off`/`nav.unavailable`/`nav.bulk`/`nav.ready`/`nav.error`). `204` on success (`400 NAVDATA_BAD_BATCH` if the body is not a state report; a failure while storing it is swallowed into `204`, since the sidecar never retries). Kept in memory only; `/status` reports it as `sidecar: null` when the newest report is older than 15 minutes. |
 
 Error bodies are `{ "ok": false, "code", "message" }` (a bad or missing token is the ingest router's usual `401 { "error": … }`):
@@ -142,17 +142,20 @@ expire after 7 days and are deleted once the replica answers them. See
   the plan's runway (an approach stored with runway 0, meaning "no runway", never
   matches a plan runway) with the same suffix (the simulator
   writes `0` for none, so a plan with no suffix matches `0`; any other value,
-  digit or letter, is a real suffix); then the plan's ARINC letter selects the
-  approach type (I ILS, L LOC, B back course, R/H RNAV, P GPS, V/T VOR or TACAN,
-  D VOR/DME, N NDB, Q NDB/DME, X LDA); a candidate whose final-approach fix or
+  digit or letter, is a real suffix); then the plan's ARINC letter gives a
+  preferred approach type (I ILS, L LOC, B back course, R/H RNAV, P GPS, V/T VOR or
+  TACAN, D VOR/DME, N NDB, Q NDB/DME, X LDA, S/U SDF; with no letter the plan's
+  `approach_type` text is used instead). It is a preference, not a filter: if no
+  candidate has that type, all stay. A candidate whose final-approach fix or
   transition has the plan's fix name wins a tie; then the smallest key. A plan
   with no approach runway is reported as "approach runway not specified" and
   drawn as nothing rather than guessed.
 - A planned waypoint is resolved to the cached candidate nearest ITS OWN
   coordinates (the previous point only if those are invalid). Airway legs whose
   endpoints carry the same ident and region within 0.0001 degrees are one node,
-  and a plan VOR/NDB with no cached row joins an airway endpoint of the same
-  ident (and region) within 1 km.
+  and a planned fix, VOR or NDB with no cached candidate joins an airway endpoint
+  of the same ident (and region when the plan has one) within 1 km of its own
+  coordinates.
 - A negative speed limit on a procedure leg means "no limit" and is never drawn.
 - Custom procedures are computed from `nav_runway`: the runway is matched on its
   primary end first, then the secondary end (never by which number is lower),
@@ -171,7 +174,7 @@ expire after 7 days and are deleted once the replica answers them. See
   stop the server and delete `navdata.db` (and its `-wal`/`-shm`).
 - A `navdata.db` that is corrupt or of another schema version is logged and
   treated as absent; the server still starts.
-- Every rejected sync request (any of the four sidecar routes) logs one warning line `navdata: <route> rejected <status> <code>: <message>` in the server log. The message names only structure (row index, table, column, limits), never a value or the token; identical consecutive rejections within a minute collapse into one line with a repeat count. An oversize body or unparseable JSON answered by the global error handler is not logged yet.
+- Every rejected sync request (any of the four sidecar routes) logs one warning line `navdata: <route> rejected <status> <code>: <message>` in the server log. The message names only structure (row index, table, column, limits), never a value or the token; identical consecutive rejections within a minute collapse into one line with a repeat count. An oversize body (a `/rows` body over 4 MiB, or an oversize snapshot upload) or unparseable JSON answered by the global error handler is not logged yet.
 - Snapshot uploads are staged in a per-process private temporary directory and
   removed after import.
 - Ingest cost: a full worldwide airport index imports in a few seconds on a
