@@ -64,6 +64,43 @@ const PLANNED_LEGS = `
   ORDER BY pl.imported_at DESC, pl.id DESC
   LIMIT ?`;
 
+/** Longest skip list accepted per kind, so one request cannot make the exclusion set unbounded. */
+export const NAVDATA_DEMAND_SKIP_MAX = 200;
+
+/** Idents the sidecar has parked; excluded from this poll's answer and nothing else. */
+export interface DemandSkip {
+  airports: ReadonlySet<string>;
+  waypoints: ReadonlySet<string>;
+}
+
+export class DemandSkipError extends Error {}
+
+const SKIP_IDENT = /^[A-Z0-9]{1,8}$/;
+
+function parseSkipList(name: string, value: unknown): Set<string> {
+  const out = new Set<string>();
+  if (value === undefined) return out;
+  if (typeof value !== 'string') throw new DemandSkipError(`${name} must be a single comma-separated list`);
+  for (const part of value.split(',')) {
+    const ident = part.trim().toUpperCase();
+    if (ident === '') continue;
+    if (!SKIP_IDENT.test(ident)) throw new DemandSkipError(`${name} holds an invalid ident (1-8 letters or digits each)`);
+    out.add(ident);
+    if (out.size > NAVDATA_DEMAND_SKIP_MAX) {
+      throw new DemandSkipError(`${name} holds more than ${NAVDATA_DEMAND_SKIP_MAX} idents`);
+    }
+  }
+  return out;
+}
+
+/** Reads `skipAirports` / `skipWaypoints` from a query object; throws DemandSkipError when malformed. */
+export function parseDemandSkip(query: Record<string, unknown>): DemandSkip {
+  return {
+    airports: parseSkipList('skipAirports', query.skipAirports),
+    waypoints: parseSkipList('skipWaypoints', query.skipWaypoints),
+  };
+}
+
 const normIdent = (ident: string): string => ident.trim().toUpperCase();
 
 function normRegion(region: string | null | undefined): string | null {
@@ -165,15 +202,21 @@ function wantOfRequest(row: NavdataRequestRow): Want {
 /**
  * The current need. Manual requests come first and are deleted as soon as the
  * replica can answer them — the replica is the only record of what is held, so
- * the request row is an intent and nothing more.
+ * the request row is an intent and nothing more. Idents in `skip` are left out
+ * of the answer without being recorded anywhere.
  */
-export function buildDemand(now: Date = new Date()): DemandResponse {
+export function buildDemand(now: Date = new Date(), skip?: DemandSkip): DemandResponse {
   pruneExpiredNavdataRequests(now);
   const db = getDb();
   const nav = getNavDb();
   const satisfaction = nav ? new Satisfaction(nav) : null;
   // With no replica everything is wanted, which is what bootstraps the first harvest.
   const holds = (want: Want): boolean => (satisfaction ? satisfaction.holds(want) : false);
+
+  // A skipped ident is dropped before the cap is applied, so the tail of the
+  // wanted list is reached and `more` reflects only what can still be asked for.
+  const skipped = (want: Want): boolean =>
+    skip !== undefined && (want.kind === 'A' ? skip.airports : skip.waypoints).has(want.ident);
 
   const airports: string[] = [];
   const waypoints: DemandWaypoint[] = [];
@@ -193,6 +236,8 @@ export function buildDemand(now: Date = new Date()): DemandResponse {
 
   for (const request of listNavdataRequests(now)) {
     const want = wantOfRequest(request);
+    // The sidecar owns the retry decision, so a parked request is left in place.
+    if (skipped(want)) continue;
     if (holds(want)) {
       deleteNavdataRequestById(request.id);
       continue;
@@ -203,7 +248,7 @@ export function buildDemand(now: Date = new Date()): DemandResponse {
   for (const leg of scanLegs(db)) {
     let capped = false;
     for (const want of legWants(db, leg)) {
-      if (holds(want)) continue;
+      if (skipped(want) || holds(want)) continue;
       if (push(want) === 'capped') {
         more = true;
         capped = true;

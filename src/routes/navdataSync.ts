@@ -3,7 +3,7 @@ import fs from 'fs';
 import { ingestTokenDigest, ingestTokenMatches } from '../auth/ingestToken';
 import type { IngestConfig } from '../config';
 import { isNavdataBusy, NavdataBusyError } from '../navdata/connection';
-import { buildDemand } from '../navdata/demand';
+import { buildDemand, DemandSkipError, parseDemandSkip } from '../navdata/demand';
 import { importNavdataSnapshot } from '../navdata/snapshot';
 import { parseSidecarStateReport, type SidecarStateStore } from '../navdata/sidecarState';
 import { applyIncrementalBatch, NavdataStoreError } from '../navdata/store';
@@ -120,14 +120,18 @@ export function createNavdataSyncRouter(
     }
   });
 
-  router.get('/demand', requireToken, (_req, res) => {
+  router.get('/demand', requireToken, (req, res) => {
     if (isNavdataBusy()) {
       busy(res, 2, 'navdata replica is being replaced');
       return;
     }
     try {
-      res.json(buildDemand());
+      res.json(buildDemand(new Date(), parseDemandSkip(req.query)));
     } catch (err) {
+      if (err instanceof DemandSkipError) {
+        res.status(400).json({ ok: false, code: 'NAVDATA_BAD_BATCH' satisfies NavdataErrorCode, message: err.message });
+        return;
+      }
       if (err instanceof NavdataBusyError) {
         busy(res, err.retryAfterSeconds, err.message);
         return;

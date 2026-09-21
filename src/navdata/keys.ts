@@ -49,3 +49,45 @@ export function parseRunway(s: string | null): { number: number; designator: num
   const designator = DESIGNATORS[m[2]];
   return designator === undefined ? null : { number, designator };
 }
+
+export interface ProcKeyRecord {
+  id: string;
+  fafIdent: string | null | undefined;
+  nTransitions: number | null | undefined;
+  missedLegCount: number | null | undefined;
+  missedAltM: number | null | undefined;
+}
+
+const isAbsent = (v: string | number | null | undefined): boolean =>
+  v == null || v === '' || (typeof v === 'number' && Number.isNaN(v));
+
+/** Absent sorts last; otherwise ascending. Total even with NaN, which no subtraction would be. */
+function compareField<T extends string | number>(a: T | null | undefined, b: T | null | undefined): number {
+  const aAbsent = isAbsent(a);
+  const bAbsent = isAbsent(b);
+  if (aAbsent || bAbsent) return aAbsent === bAbsent ? 0 : aAbsent ? 1 : -1;
+  return (a as T) < (b as T) ? -1 : (a as T) > (b as T) ? 1 : 0;
+}
+
+/**
+ * Test-only mirror of how the sidecar disambiguates procedures that share a
+ * base key; the server never computes a proc_key at runtime. The first record
+ * in the order below keeps the base key, the next gets `#2`, then `#3`; there
+ * is no `#1`, and a set of one keeps the base key untouched. The order comes
+ * from the data (FAF ident by code-unit comparison, then transition count,
+ * missed-leg count and missed altitude), with arrival position as the last
+ * tiebreak, and absent values always sort last.
+ */
+export function assignProcKeys(records: readonly ProcKeyRecord[], baseKey: string): Map<string, string> {
+  const ordered = records
+    .map((record, arrival) => ({ record, arrival }))
+    .sort((x, y) =>
+      compareField(x.record.fafIdent, y.record.fafIdent) ||
+      compareField(x.record.nTransitions, y.record.nTransitions) ||
+      compareField(x.record.missedLegCount, y.record.missedLegCount) ||
+      compareField(x.record.missedAltM, y.record.missedAltM) ||
+      x.arrival - y.arrival);
+  const keys = new Map<string, string>();
+  ordered.forEach(({ record }, i) => keys.set(record.id, i === 0 ? baseKey : `${baseKey}#${i + 1}`));
+  return keys;
+}

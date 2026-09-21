@@ -14,6 +14,7 @@ import { createNavdataSyncRouter } from '../src/routes/navdataSync';
 import { snapshotUploadDir } from '../src/routes/uploads';
 import { SidecarStateStore } from '../src/navdata/sidecarState';
 import { closeNavDb, getNavDb, openNavdata, resolveNavdataPath } from '../src/navdata/connection';
+import { upsertNavdataRequest } from '../src/db/navdataRequests';
 import { createScratchDb, destroyScratchDb, type ScratchDb } from './helpers/db';
 
 const TOKEN = 'test-ingest-token';
@@ -188,6 +189,37 @@ describe('GET /demand and POST /state', () => {
     const res = await fetch(`${base}/api/navdata/demand`, { headers: { 'x-ingest-token': TOKEN } });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ v: 1, airports: [], waypoints: [], more: false });
+  });
+
+  it('excludes the idents named in skipAirports and skipWaypoints', async () => {
+    const get = (qs: string, token: string | null = TOKEN) =>
+      fetch(`${base}/api/navdata/demand${qs}`, { headers: token ? { 'x-ingest-token': token } : {} });
+    upsertNavdataRequest('A', 'ZZREQ', null, new Date());
+
+    expect(((await (await get('')).json()) as any).airports).toEqual(['ZZREQ']);
+    const skipped = await get('?skipAirports=zzreq,,ZZREQ&skipWaypoints=ZZFIX');
+    expect(skipped.status).toBe(200);
+    expect(((await skipped.json()) as any).airports).toEqual([]);
+    // The request row survives being skipped.
+    expect(((await (await get('')).json()) as any).airports).toEqual(['ZZREQ']);
+  });
+
+  it('answers a malformed or oversized skip list with 400 NAVDATA_BAD_BATCH', async () => {
+    const get = (qs: string) => fetch(`${base}/api/navdata/demand${qs}`, { headers: { 'x-ingest-token': TOKEN } });
+    const tooMany = Array.from({ length: 201 }, (_, i) => `ZZ${i}`).join(',');
+    for (const qs of ['?skipAirports=ZZ-AA', '?skipWaypoints=ZZAAAAAAA', `?skipAirports=${tooMany}`,
+      '?skipAirports=ZZA&skipAirports=ZZB']) {
+      const res = await get(qs);
+      expect(res.status, qs).toBe(400);
+      const body = (await res.json()) as any;
+      expect(body).toMatchObject({ ok: false, code: 'NAVDATA_BAD_BATCH' });
+      expect(body.message).toMatch(/skip(Airports|Waypoints)/);
+    }
+  });
+
+  it('still requires the ingest token when a skip list is sent', async () => {
+    expect((await fetch(`${base}/api/navdata/demand?skipAirports=ZZAA`)).status).toBe(401);
+    expect((await fetch(`${base}/api/navdata/demand?skipAirports=ZZ-AA`)).status).toBe(401);
   });
 
   it('answers a state report with exactly 204 and stores it', async () => {

@@ -14,7 +14,9 @@ import {
   resolveNavdataPath,
   swapInReplica,
 } from '../src/navdata/connection';
-import { buildDemand, NAVDATA_DEMAND_CAP, NAVDATA_DEMAND_LEG_SCAN } from '../src/navdata/demand';
+import {
+  buildDemand, DemandSkipError, NAVDATA_DEMAND_CAP, NAVDATA_DEMAND_LEG_SCAN, NAVDATA_DEMAND_SKIP_MAX, parseDemandSkip,
+} from '../src/navdata/demand';
 import { listNavdataRequests, upsertNavdataRequest } from '../src/db/navdataRequests';
 import { wptKey } from '../src/navdata/keys';
 import type { NavRow, NavRowType } from '../src/navdata/wire';
@@ -282,5 +284,137 @@ describe('manual requests', () => {
     expect(demand.airports).toEqual([]);
     expect(demand.waypoints).toEqual([{ ident: 'ZZNEW' }]);
     expect(listNavdataRequests(NOW).map(r => r.ident)).toEqual(['ZZNEW']);
+  });
+});
+
+describe('skipping idents the sidecar has parked', () => {
+  const skip = (airports: string[] = [], waypoints: string[] = []) => ({
+    airports: new Set(airports),
+    waypoints: new Set(waypoints),
+  });
+
+  function seedAirportLegs(count: number): string[] {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const idents: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const dep = `ZZ${String(i).padStart(3, '0')}`;
+      const dest = `ZY${String(i).padStart(3, '0')}`;
+      seedLeg({ trip_id: trip, seq: i + 1, departure_ident: dep, destination_ident: dest });
+      idents.push(dep, dest);
+    }
+    return idents;
+  }
+
+  it('does not let parked airports at the head of the list block the tail', () => {
+    const idents = seedAirportLegs(30);
+    setReplica([]);
+    const parked = idents.slice(0, NAVDATA_DEMAND_CAP);
+
+    expect(buildDemand(NOW).airports).toEqual(parked);
+
+    const demand = buildDemand(NOW, skip(parked));
+    expect(demand.airports).toEqual(idents.slice(NAVDATA_DEMAND_CAP));
+    expect(demand.more).toBe(false);
+  });
+
+  it('applies the cap and recomputes more over what is left', () => {
+    const idents = seedAirportLegs(40);
+    setReplica([]);
+    const parked = idents.slice(0, 10);
+
+    const demand = buildDemand(NOW, skip(parked));
+
+    expect(demand.airports).toEqual(idents.slice(10, 10 + NAVDATA_DEMAND_CAP));
+    expect(demand.more).toBe(true);
+
+    // Skipping all but the first cap's worth leaves nothing beyond the cap.
+    expect(buildDemand(NOW, skip(idents.slice(NAVDATA_DEMAND_CAP))).more).toBe(false);
+  });
+
+  it('skips waypoints by ident whatever their region, and keeps kinds apart', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    const leg = seedLeg({ trip_id: trip, departure_is_airport: 0, destination_is_airport: 0 });
+    seedWaypoints(leg, [
+      { ident: 'ZZFIX', region: 'ZA', type: 'WAYPOINT' },
+      { ident: 'ZZFIX', region: 'ZB', type: 'WAYPOINT' },
+      { ident: 'ZZOTH', type: 'WAYPOINT' },
+      { ident: 'ZZAA', type: 'AIRPORT' },
+    ]);
+    setReplica([]);
+
+    // An airport skip does not hide a waypoint of the same ident, or the reverse.
+    expect(buildDemand(NOW, skip(['ZZOTH'], ['ZZFIX']))).toMatchObject({
+      airports: ['ZZAA'],
+      waypoints: [{ ident: 'ZZOTH' }],
+    });
+    expect(buildDemand(NOW, skip(['ZZAA'], [])).waypoints).toHaveLength(3);
+  });
+
+  it('leaves a skipped manual request in place, and still skips it', () => {
+    upsertNavdataRequest('A', 'ZZREQ', null, NOW);
+    upsertNavdataRequest('A', 'ZZHELD', null, NOW);
+    setReplica([airport('ZZHELD', 'detail')]);
+
+    const demand = buildDemand(NOW, skip(['ZZREQ', 'ZZHELD']));
+
+    expect(demand.airports).toEqual([]);
+    expect(listNavdataRequests(NOW).map(r => r.ident).sort()).toEqual(['ZZHELD', 'ZZREQ']);
+
+    // Without the skip the answered request is deleted and the open one is wanted.
+    expect(buildDemand(NOW).airports).toEqual(['ZZREQ']);
+    expect(listNavdataRequests(NOW).map(r => r.ident)).toEqual(['ZZREQ']);
+  });
+
+  it('is byte-identical to the unskipped answer when nothing is skipped', () => {
+    seedAirportLegs(30);
+    setReplica([]);
+    const plain = JSON.stringify(buildDemand(NOW));
+    expect(JSON.stringify(buildDemand(NOW, skip()))).toBe(plain);
+    expect(JSON.stringify(buildDemand(NOW, parseDemandSkip({})))).toBe(plain);
+  });
+});
+
+describe('parseDemandSkip', () => {
+  it('trims, upper-cases, ignores empties and de-duplicates', () => {
+    const parsed = parseDemandSkip({ skipAirports: ' zzaa, ZZAA,,zzab ,', skipWaypoints: 'fix1' });
+    expect([...parsed.airports]).toEqual(['ZZAA', 'ZZAB']);
+    expect([...parsed.waypoints]).toEqual(['FIX1']);
+    expect(parseDemandSkip({}).airports.size).toBe(0);
+    expect(parseDemandSkip({ skipAirports: '' }).airports.size).toBe(0);
+  });
+
+  it('rejects malformed idents and non-string values', () => {
+    for (const bad of ['ZZ-AA', 'ZZAAAAAAA', 'ZZ AA', 'ZZ\u00c9A']) {
+      expect(() => parseDemandSkip({ skipAirports: `ZZAA,${bad}` }), bad).toThrow(DemandSkipError);
+      expect(() => parseDemandSkip({ skipWaypoints: bad }), bad).toThrow(DemandSkipError);
+    }
+    expect(() => parseDemandSkip({ skipAirports: ['ZZAA', 'ZZAB'] })).toThrow(DemandSkipError);
+    expect(() => parseDemandSkip({ skipWaypoints: { a: 'b' } })).toThrow(DemandSkipError);
+  });
+
+  it('accepts exactly the cap and rejects one more', () => {
+    const list = (n: number) => Array.from({ length: n }, (_, i) => `ZZ${i}`).join(',');
+    expect(parseDemandSkip({ skipAirports: list(NAVDATA_DEMAND_SKIP_MAX) }).airports.size).toBe(NAVDATA_DEMAND_SKIP_MAX);
+    expect(() => parseDemandSkip({ skipAirports: list(NAVDATA_DEMAND_SKIP_MAX + 1) })).toThrow(DemandSkipError);
+    expect(() => parseDemandSkip({ skipWaypoints: list(NAVDATA_DEMAND_SKIP_MAX + 1) })).toThrow(DemandSkipError);
+    // Duplicates do not count towards the cap.
+    expect(parseDemandSkip({ skipAirports: Array(300).fill('ZZAA').join(',') }).airports.size).toBe(1);
+  });
+});
+
+describe('an airport the simulator does not have, sent with no coordinates', () => {
+  it('is not demanded, whether or not its absent row has arrived', () => {
+    const trip = seedTrip(scratch.db, { is_active: 1 });
+    seedLeg({ trip_id: trip, departure_ident: 'ZZAB', destination_ident: 'ZZAC' });
+    upsertNavdataRequest('A', 'ZZAB', null, NOW);
+    setReplica([
+      { t: 'airport', r: { rev: 1, ident: 'ZZAB', detail_state: 'absent' } },
+      absent('A', 'ZZAB'),
+    ]);
+    expect(buildDemand(NOW).airports).toEqual(['ZZAC']);
+    expect(listNavdataRequests(NOW)).toHaveLength(0);
+
+    setReplica([{ t: 'airport', r: { rev: 1, ident: 'ZZAB', detail_state: 'absent' } }], 'epoch-2');
+    expect(buildDemand(NOW).airports).toEqual(['ZZAC']);
   });
 });

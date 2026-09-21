@@ -465,6 +465,40 @@ describe('the same merge rules on every other table', () => {
   });
 });
 
+describe('an airport the simulator does not have', () => {
+  const absentAirport: Row = { ident: 'ZZAB', detail_state: 'absent', rev: 3 };
+  const absentRow = (): NavRow =>
+    row('absent', { kind: 'A', ident: 'ZZAB', reason: 'silent', first_seen_at: 1_000, last_checked_at: 1_000, rev: 3 });
+
+  it('is accepted with no coordinates, in either order with its absent row', () => {
+    for (const rows of [
+      [row('airport', absentAirport), absentRow()],
+      [absentRow(), row('airport', absentAirport)],
+    ]) {
+      const db = scratchReplica();
+      apply(db, ...rows);
+      expect(one(db, 'SELECT lat, lon, position_source, detail_state FROM nav_airport WHERE ident = ?', 'ZZAB')).toEqual({
+        lat: null, lon: null, position_source: null, detail_state: 'absent',
+      });
+      expect(one(db, "SELECT 1 AS hit FROM nav_absent WHERE kind = 'A' AND ident = ?", 'ZZAB')).toEqual({ hit: 1 });
+    }
+  });
+
+  it('takes coordinates from a later row, and a null never erases them', () => {
+    const db = scratchReplica();
+    apply(db, row('airport', absentAirport), absentRow());
+    apply(db, row('airport', { ident: 'ZZAB', lat: 11.5, lon: 21.25, position_source: 'list', rev: 4 }));
+    expect(one(db, 'SELECT lat, lon, position_source, detail_state FROM nav_airport WHERE ident = ?', 'ZZAB')).toEqual({
+      lat: 11.5, lon: 21.25, position_source: 'list', detail_state: 'absent',
+    });
+
+    apply(db, row('airport', { ident: 'ZZAB', lat: null, lon: null, position_source: null, detail_state: 'absent', rev: 5 }));
+    expect(one(db, 'SELECT lat, lon, position_source FROM nav_airport WHERE ident = ?', 'ZZAB')).toEqual({
+      lat: 11.5, lon: 21.25, position_source: 'list',
+    });
+  });
+});
+
 describe('row validation', () => {
   it('refuses an unknown table, an unknown column and a missing rev', () => {
     const db = scratchReplica();

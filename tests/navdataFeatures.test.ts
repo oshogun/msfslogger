@@ -15,6 +15,7 @@ import { applyNavdataSchema } from '../src/navdata/schema';
 import { closeNavDb, openNavdata } from '../src/navdata/connection';
 import { runwayDesignation, totalCells, lonRanges, parseBbox } from '../src/navdata/query';
 import { listNavdataRequests } from '../src/db/navdataRequests';
+import { applyNavRows } from '../src/navdata/store';
 import { createScratchDb, destroyScratchDb, type ScratchDb } from './helpers/db';
 
 const savedEnv = process.env.NAVDATA_DB_PATH;
@@ -321,5 +322,43 @@ describe('POST /request', () => {
     const res = await post({ kind: 'A', ident: 'ZZA1' }, { origin: 'https://evil.example' });
     expect(res.status).toBe(403);
     expect(listNavdataRequests()).toHaveLength(0);
+  });
+});
+
+describe('an airport the simulator does not have, sent with no coordinates', () => {
+  const ABSENT_ROWS = [
+    { t: 'airport', r: { ident: 'ZZAB', detail_state: 'absent', rev: 2 } },
+    { t: 'absent', r: { kind: 'A', ident: 'ZZAB', region: '', reason: 'silent', first_seen_at: 1, last_checked_at: 1, rev: 2 } },
+  ] as const;
+
+  const seed = () => buildReplica(db => {
+    insert(db, 'nav_airport', ap('ZZHELD', 10, 20, { detail_state: 'detail' }));
+    applyNavRows(db, ABSENT_ROWS as any);
+  });
+
+  it('stays out of a wide features query without breaking it', async () => {
+    seed();
+    const res = await get('/api/navdata/features?bbox=-179,-89,179,89&zoom=6');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.airports.map((a: any) => a.ident)).toEqual(['ZZHELD']);
+  });
+
+  it('answers the airport detail with null coordinates and detailState absent', async () => {
+    seed();
+    const res = await get('/api/navdata/airports/zzab');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ident: 'ZZAB', lat: null, lon: null, detailState: 'absent', runways: [], procedures: [] });
+  });
+
+  it('is answered known-absent to a manual request, and nothing is queued', async () => {
+    seed();
+    expect(await (await post({ kind: 'A', ident: 'ZZAB' })).json()).toMatchObject({ ok: true, state: 'known-absent' });
+    expect(listNavdataRequests().some(r => r.ident === 'ZZAB')).toBe(false);
+  });
+
+  it('is reported already-present from the airport row alone, before its absent row arrives', async () => {
+    buildReplica(db => { applyNavRows(db, [ABSENT_ROWS[0]] as any); });
+    expect(await (await post({ kind: 'A', ident: 'ZZAB' })).json()).toMatchObject({ state: 'already-present' });
   });
 });
