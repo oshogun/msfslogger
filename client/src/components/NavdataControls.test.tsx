@@ -94,8 +94,8 @@ describe('NavdataControls', () => {
     });
     renderControls(emptyFeatures({
       airports: [
-        { ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null },
-        { ident: 'ZZBB', lat: 1, lon: 1, name: null, hasDetail: true, runways: 1, procedures: 1 },
+        { ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null },
+        { ident: 'ZZBB', lat: 1, lon: 1, name: null, hasDetail: true, runways: 1, procedures: 1, longestRunwayM: null, surface: null, towered: null },
       ],
     }));
     const buttons = screen.getAllByRole('button', { name: 'Fetch detail' });
@@ -108,7 +108,7 @@ describe('NavdataControls', () => {
   it('shows a failed request instead of throwing, and lets it be retried', async () => {
     mockFetchRoutes({ '/api/navdata/request': { POST: [500, { error: 'nope' }] } });
     renderControls(emptyFeatures({
-      airports: [{ ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null }],
+      airports: [{ ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null }],
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Fetch detail' }));
     await waitFor(() => expect(screen.getByText('Request failed: nope')).toBeInTheDocument());
@@ -117,7 +117,7 @@ describe('NavdataControls', () => {
 
   it('never offers fetch detail for an ident that is not airport-shaped', () => {
     renderControls(emptyFeatures({
-      airports: [{ ident: 'ZZ-BAD!', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null }],
+      airports: [{ ident: 'ZZ-BAD!', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null }],
     }));
     expect(screen.queryByRole('button', { name: 'Fetch detail' })).toBeNull();
   });

@@ -2,7 +2,7 @@ import { Fragment, useMemo, type ReactNode } from 'react';
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { unwrapLonChain } from '../utils/geo';
-import type { FeaturesResponse } from '../types';
+import type { FeatureAirport, FeaturesResponse } from '../types';
 
 export const NAVDATA_PANE = 'navdata';
 export const NAVDATA_MARKER_PANE = 'navdata-markers';
@@ -130,6 +130,105 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 }
 
+/** What the airport symbol claims, one property per knowledge axis.
+ *  Exported so a test can assert the claim without parsing inline CSS. */
+export interface AirportGlyph {
+  /** 'disc' = the longest-runway length is known and sized it.
+   *  'diamond' = length unknown; the symbol makes no size claim. */
+  shape: 'disc' | 'diamond';
+  /** Outer box of the symbol in px (the ring, when present, sits outside it). */
+  sizePx: 8 | 9 | 13 | 18;
+  /** Fill of the symbol. 'transparent' only on a diamond. */
+  fill: string;
+  /** Tower claim. 'none' means "known untowered", never "don't know". */
+  ring: 'towered' | 'unknown' | 'none';
+  /** Left offset of the ident label from the airport position, px. */
+  labelLeftPx: 11 | 12 | 14 | 16;
+}
+
+const AIRPORT_TIER_LARGE_M = 2500;
+const AIRPORT_TIER_MEDIUM_M = 1200;
+
+const AIRPORT_SURFACE_FILL = {
+  paved: '#334155', // slate-700, "pavement"
+  soft: '#65a30d',  // lime-600, "grass/dirt"
+  water: '#0369a1', // sky-700, deep water; not the navaid sky-400 #38bdf8
+} as const;
+const AIRPORT_FILL_SURFACE_UNKNOWN = '#f8fafc'; // blank disc: size known, surface not
+const AIRPORT_UNKNOWN_STROKE = '#475569';       // slate-600, the diamond's outline
+const AIRPORT_RING_TOWERED = '#0f172a';         // solid outer ring
+const AIRPORT_RING_UNKNOWN = '#64748b';         // dashed outer ring
+const AIRPORT_RIM = '#0f172a';
+const AIRPORT_HALO = 'rgba(255,255,255,.85)';
+
+const AIRPORT_TIER = {
+  18: { ring: 26, label: 16 },
+  13: { ring: 21, label: 14 },
+  9: { ring: 17, label: 12 },
+  8: { ring: 16, label: 11 },
+} as const;
+
+/** The whole decision, in one pure function. No other rule sets these. */
+export function airportGlyph(a: FeatureAirport): AirportGlyph {
+  const sizePx =
+    a.longestRunwayM === null ? 8
+      : a.longestRunwayM >= AIRPORT_TIER_LARGE_M ? 18
+        : a.longestRunwayM >= AIRPORT_TIER_MEDIUM_M ? 13
+          : 9;
+  const shape = a.longestRunwayM === null ? 'diamond' : 'disc';
+  // The index-airport case (nothing known at all) gets the plain diamond and
+  // no ring: it is the majority of every viewport, so it stays the quietest
+  // mark on the map, and a ring there would claim a tower fact we do not have.
+  const nothingKnown = a.longestRunwayM === null && a.surface === null && a.towered === null;
+  const ring: AirportGlyph['ring'] =
+    nothingKnown ? 'none' : a.towered === true ? 'towered' : a.towered === null ? 'unknown' : 'none';
+  const fill =
+    shape === 'diamond' ? 'transparent'
+      : a.surface === null ? AIRPORT_FILL_SURFACE_UNKNOWN
+        : AIRPORT_SURFACE_FILL[a.surface];
+  return { shape, sizePx, fill, ring, labelLeftPx: AIRPORT_TIER[sizePx].label };
+}
+
+/** Frozen markup for one airport glyph, `ident` already escaped by the caller. */
+function airportIconHtml(g: AirportGlyph, ident: string): string {
+  const half = g.sizePx / 2;
+  const r = AIRPORT_TIER[g.sizePx].ring;
+  const rot = g.shape === 'diamond' ? 'transform:rotate(45deg);' : 'border-radius:50%;';
+  const ring = g.ring === 'none' ? ''
+    : `<span style="position:absolute;left:${-r / 2}px;top:${-r / 2}px;width:${r}px;height:${r}px;` +
+      `box-sizing:border-box;${rot}border:2px ${g.ring === 'towered' ? 'solid' : 'dashed'} ` +
+      `${g.ring === 'towered' ? AIRPORT_RING_TOWERED : AIRPORT_RING_UNKNOWN}"></span>`;
+  const body = g.shape === 'disc'
+    ? `border-radius:50%;background:${g.fill};border:1px solid ${AIRPORT_RIM};box-shadow:0 0 0 1.5px ${AIRPORT_HALO}`
+    : `transform:rotate(45deg);background:transparent;border:1.5px solid ${AIRPORT_UNKNOWN_STROKE};filter:drop-shadow(0 0 1.5px #fff)`;
+  return (
+    `<div data-glyph="${g.shape}" data-size="${g.sizePx}" data-ring="${g.ring}" data-fill="${g.fill}" ` +
+    `style="position:relative;width:0;height:0;pointer-events:none">${ring}` +
+    `<span style="position:absolute;left:${-half}px;top:${-half}px;width:${g.sizePx}px;height:${g.sizePx}px;` +
+    `box-sizing:border-box;${body}"></span>` +
+    `<span style="position:absolute;left:${g.labelLeftPx}px;top:-7px;line-height:14px;font:600 10px system-ui;` +
+    `color:#e2e8f0;text-shadow:0 0 3px #000,0 0 3px #000">${ident}</span></div>`
+  );
+}
+
+/**
+ * The airport marker icon: a size/shape claim (longestRunwayM), a fill claim
+ * (surface) and a ring claim (towered), each with its own distinct "unknown"
+ * rendering so a missing fact can never be read as a known one. Self-positioning
+ * like runwayLabelIcon(): iconSize/iconAnchor both [0,0], every child placed
+ * from the airport's own point, so no box-model change can drift it off the
+ * airport.
+ */
+export function airportIcon(a: FeatureAirport): L.DivIcon {
+  const g = airportGlyph(a);
+  return L.divIcon({
+    className: '',
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+    html: airportIconHtml(g, escapeHtml(a.ident)),
+  });
+}
+
 interface LayersProps {
   data: FeaturesResponse;
   anchor: [number, number];
@@ -228,7 +327,7 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
           <Marker
             key={a.ident}
             position={unwrapPoint(anchor, a.lat, a.lon)}
-            icon={labelIcon(escapeHtml(a.ident), a.hasDetail ? '#34d399' : '#fbbf24')}
+            icon={airportIcon(a)}
             pane={NAVDATA_MARKER_PANE}
             interactive={false}
           />

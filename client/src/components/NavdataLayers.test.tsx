@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MapContainer } from 'react-leaflet';
-import { NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint, type NavdataVisibility } from './NavdataLayers';
+import { airportGlyph, NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint, type NavdataVisibility } from './NavdataLayers';
 import { FlightMap } from './FlightMap';
 import { TripMap } from './TripMap';
 import { mockFetchRoutes } from '../test/mockFetch';
 import { absentStatus, emptyFeatures, presentStatus } from '../test/navdataFixtures';
 import { flightFixture } from '../test/fixtures';
-import type { FeatureRunway, FlightPoint } from '../types';
+import type { FeatureAirport, FeatureRunway, FlightPoint } from '../types';
 
 const points: FlightPoint[] = Array.from({ length: 4 }, (_, i) => ({
   id: i, flight_id: 1, ts: '2026-01-01T12:00:00Z', lat: 10 + i * 0.1, lon: 20 + i * 0.1, altitude_ft: 1000,
@@ -162,5 +162,102 @@ describe('runway-end labels', () => {
   it('draws no runway labels at all when runways are hidden', () => {
     const { container } = renderRunways([runway()], false);
     expect(rotatedLabels(container)).toHaveLength(0);
+  });
+});
+
+describe('airport glyphs', () => {
+  const allOff: NavdataVisibility = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
+
+  function airport(over: Partial<FeatureAirport> = {}): FeatureAirport {
+    return {
+      ident: 'ZZAA', lat: 10, lon: 20, name: null, hasDetail: true, runways: 1, procedures: 1,
+      longestRunwayM: null, surface: null, towered: null,
+      ...over,
+    };
+  }
+
+  function renderAirports(airports: FeatureAirport[]) {
+    const data = emptyFeatures({ airports });
+    return render(
+      <MapContainer center={[10, 20]} zoom={13} style={{ height: 300, width: 300 }}>
+        <NavdataPanes>
+          <NavdataLayers data={data} anchor={[10, 20]} visible={{ ...allOff, airports: true }} />
+        </NavdataPanes>
+      </MapContainer>
+    );
+  }
+
+  // The `data-*` attributes are the contract: a test reads the glyph's own
+  // claim off them, never the inline CSS that renders it.
+  function glyphEls(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('div[data-glyph]')).map(el => ({
+      ident: el.textContent,
+      shape: el.getAttribute('data-glyph'),
+      size: el.getAttribute('data-size'),
+      ring: el.getAttribute('data-ring'),
+      fill: el.getAttribute('data-fill'),
+    }));
+  }
+
+  it('renders the unknown diamond with no ring for an index-only airport (nothing known)', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZAA', longestRunwayM: null, surface: null, towered: null })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZAA', shape: 'diamond', size: '8', ring: 'none', fill: 'transparent' });
+  });
+
+  it('is not the same claim as a known small/soft/untowered airport', () => {
+    const indexOnly = airportGlyph(airport({ longestRunwayM: null, surface: null, towered: null }));
+    const smallSoftUntowered = airportGlyph(airport({ longestRunwayM: 900, surface: 'soft', towered: false }));
+    expect(indexOnly).not.toEqual(smallSoftUntowered);
+  });
+
+  it('fills a paved airport with the paved colour', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZPV', longestRunwayM: 3714.5, surface: 'paved', towered: true })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZPV', shape: 'disc', size: '18', ring: 'towered', fill: '#334155' });
+  });
+
+  it('fills a water airport with the water colour', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZWT', longestRunwayM: 1100, surface: 'water', towered: true })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZWT', shape: 'disc', size: '9', ring: 'towered', fill: '#0369a1' });
+  });
+
+  it('fills a soft-field airport with the soft colour', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZSF', longestRunwayM: 1500, surface: 'soft', towered: false })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZSF', shape: 'disc', size: '13', ring: 'none', fill: '#65a30d' });
+  });
+
+  it('differs only by ring between a towered and an untowered airport of the same size and surface', () => {
+    const { container } = renderAirports([
+      airport({ ident: 'ZZTW', longestRunwayM: 1500, surface: 'soft', towered: true }),
+      airport({ ident: 'ZZNT', longestRunwayM: 1500, surface: 'soft', towered: false }),
+    ]);
+    const [towered, untowered] = glyphEls(container);
+    expect(towered).toEqual({ ident: 'ZZTW', shape: 'disc', size: '13', ring: 'towered', fill: '#65a30d' });
+    expect(untowered).toEqual({ ident: 'ZZNT', shape: 'disc', size: '13', ring: 'none', fill: '#65a30d' });
+  });
+
+  it('gives an unknown-towered airport a dashed ring, distinct from both towered and untowered', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZUK', longestRunwayM: 900, surface: 'soft', towered: null })]);
+    const [g] = glyphEls(container);
+    expect(g.ring).toBe('unknown');
+  });
+
+  it('sizes at the large/medium tier boundary, 2500 m', () => {
+    expect(airportGlyph(airport({ longestRunwayM: 2500 })).sizePx).toBe(18);
+    expect(airportGlyph(airport({ longestRunwayM: 2499.99 })).sizePx).toBe(13);
+  });
+
+  it('sizes at the medium/small tier boundary, 1200 m', () => {
+    expect(airportGlyph(airport({ longestRunwayM: 1200 })).sizePx).toBe(13);
+    expect(airportGlyph(airport({ longestRunwayM: 1199.99 })).sizePx).toBe(9);
+  });
+
+  it('gives an unknown length no size claim at all: an 8px diamond, not a small disc', () => {
+    const g = airportGlyph(airport({ longestRunwayM: null }));
+    expect(g.shape).toBe('diamond');
+    expect(g.sizePx).toBe(8);
   });
 });

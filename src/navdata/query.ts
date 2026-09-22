@@ -9,7 +9,7 @@
 import type Database from 'better-sqlite3';
 import { upsertNavdataRequest } from '../db/navdataRequests';
 import type {
-  AirportDetailResponse, AirportProcedureSummary, FeatureAirport, FeatureAirwayLeg, FeatureCoverage,
+  AirportDetailResponse, AirportProcedureSummary, AirportSurface, FeatureAirport, FeatureAirwayLeg, FeatureCoverage,
   FeatureCoverageKind, FeatureNavaid, FeatureRunway, FeatureWaypoint, FeaturesResponse,
   NavdataStatusResponse,
 } from './queryTypes';
@@ -139,6 +139,58 @@ function coverageFor(nav: Database.Database | null, bbox: Bbox): FeatureCoverage
   return { totalCells: total, byKind, airportsComplete };
 }
 
+// Three correlated scalar subqueries appended to an airport row aliased `a`.
+// The two runway subqueries share the same WHERE/ORDER BY/LIMIT so they pick
+// the same row — the surface has to come from the runway that supplied the
+// max length, not from an independent MAX(surface). The `rwy_key` tiebreak
+// makes that row a function of the data when two runways tie on length.
+// MAX(freq_type = 6) answers "towered" in one probe: 1 = a tower frequency
+// exists, 0 = frequencies exist but none is a tower, NULL = no frequency rows
+// at all (an aggregate over the empty set). The CASE gate skips all three
+// probes for an airport whose detail was never fetched.
+const AIRPORT_SYMBOL_COLUMNS = `
+       CASE WHEN a.detail_state = 'detail' THEN (
+         SELECT r.length_m FROM nav_runway r
+          WHERE r.airport_ident = a.ident AND r.length_m IS NOT NULL
+          ORDER BY r.length_m DESC, r.rwy_key ASC LIMIT 1) END AS longest_length_m,
+       CASE WHEN a.detail_state = 'detail' THEN (
+         SELECT r.surface FROM nav_runway r
+          WHERE r.airport_ident = a.ident AND r.length_m IS NOT NULL
+          ORDER BY r.length_m DESC, r.rwy_key ASC LIMIT 1) END AS longest_surface,
+       CASE WHEN a.detail_state = 'detail' THEN (
+         SELECT MAX(f.freq_type = 6) FROM nav_airport_frequency f
+          WHERE f.airport_ident = a.ident) END AS tower_flag`;
+
+const SURFACE_PAVED = new Set([0, 4, 10, 15, 16, 17, 18, 19, 23, 32]);
+const SURFACE_WATER = new Set([2, 26, 27, 28, 29, 30, 31]);
+
+/** Bucket of a raw RUNWAY SURFACE code. null only for a NULL code: an
+ *  unrecognised code is an unpaved surface we cannot name, not an unknown one. */
+export function surfaceBucket(code: number | null): AirportSurface | null {
+  if (code == null) return null;
+  if (SURFACE_PAVED.has(code)) return 'paved';
+  if (SURFACE_WATER.has(code)) return 'water';
+  return 'soft';
+}
+
+/** The three symbol fields for one nav_airport row joined with the aggregates
+ *  above. Every one of them is null unless the airport's detail has actually
+ *  been fetched: an index row knows nothing about runways or frequencies, and
+ *  reporting false/'soft'/0 there would claim a fact the replica does not
+ *  hold. The SQL above already gates on detail_state; this gates again on
+ *  purpose, so the rule holds even if a caller ever queries these columns
+ *  through a different SELECT. */
+function airportSymbolFields(
+  r: Record<string, any>, hasDetail: boolean,
+): { longestRunwayM: number | null; surface: AirportSurface | null; towered: boolean | null } {
+  const longestRunwayM = hasDetail ? r.longest_length_m ?? null : null;
+  return {
+    longestRunwayM,
+    surface: longestRunwayM === null ? null : surfaceBucket(r.longest_surface ?? null),
+    towered: hasDetail && r.tower_flag != null ? r.tower_flag === 1 : null,
+  };
+}
+
 export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): FeaturesResponse {
   const { bbox, zoom, kinds, limit } = q;
   const [w, s, e, n] = bbox;
@@ -170,11 +222,12 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
   const airports = fetch(
     'airports',
     () => nav!.prepare(
-      `SELECT ident, lat, lon, name, detail_state, detail_runways, detail_procedures,
-              n_runways, n_approaches, n_departures, n_arrivals
-         FROM nav_airport
-        WHERE lat BETWEEN ? AND ? AND ${pointClause.clause}
-        ORDER BY ident ASC LIMIT ?`,
+      `SELECT a.*, ${AIRPORT_SYMBOL_COLUMNS}
+         FROM (SELECT ident, lat, lon, name, detail_state, detail_runways, detail_procedures,
+                      n_runways, n_approaches, n_departures, n_arrivals
+                 FROM nav_airport
+                WHERE lat BETWEEN ? AND ? AND ${pointClause.clause}
+                ORDER BY ident ASC LIMIT ?) a`,
     ).all(s, n, ...pointClause.params, limit + 1) as Record<string, any>[],
     (r): FeatureAirport => {
       const hasDetail = r.detail_state === 'detail';
@@ -185,6 +238,7 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
         procedures: hasDetail
           ? r.detail_procedures
           : listed.every(v => v == null) ? null : listed.reduce((a, v) => a + (v ?? 0), 0),
+        ...airportSymbolFields(r, hasDetail),
       };
     },
   );
@@ -318,7 +372,9 @@ export function readAirportDetail(nav: Database.Database | null, rawIdent: strin
   if (!nav) return null;
   const ident = rawIdent.trim().toUpperCase();
   const a = nav.prepare(
-    'SELECT ident, lat, lon, alt_m, name, magvar, detail_state, detail_fetched_at FROM nav_airport WHERE ident = ?',
+    `SELECT a.ident, a.lat, a.lon, a.alt_m, a.name, a.magvar, a.detail_state, a.detail_fetched_at,
+            ${AIRPORT_SYMBOL_COLUMNS}
+       FROM nav_airport a WHERE a.ident = ?`,
   ).get(ident) as Record<string, any> | undefined;
   if (!a) return null;
 
@@ -355,6 +411,7 @@ export function readAirportDetail(nav: Database.Database | null, rawIdent: strin
     ident: a.ident, detailState: a.detail_state as DetailState, detailFetchedAt: a.detail_fetched_at,
     lat: a.lat, lon: a.lon, altM: a.alt_m, name: a.name, magvar: a.magvar,
     runways, frequencies, procedures,
+    ...airportSymbolFields(a, a.detail_state === 'detail'),
   };
 }
 

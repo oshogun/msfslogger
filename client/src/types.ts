@@ -761,9 +761,22 @@ export interface NavdataStatusResponse {
   sidecar: { state: NavdataSidecarState; reason: string | null } | null;
 }
 
+/** Surface class of the airport's LONGEST runway. Never inferred when unknown. */
+export type AirportSurface = 'paved' | 'water' | 'soft';
+
 export interface FeatureAirport {
   ident: string; lat: number; lon: number; name: string | null;
   hasDetail: boolean; runways: number | null; procedures: number | null;
+  /** Length in metres of the airport's longest runway, unrounded, exactly as
+   *  nav_runway.length_m stores it. null = not known; never 0 and never a
+   *  stand-in for "small". */
+  longestRunwayM: number | null;
+  /** Surface class of that same longest runway. null = not known. */
+  surface: AirportSurface | null;
+  /** true = the airport has a TOWER frequency (nav_airport_frequency.freq_type = 6).
+   *  false = detail is present, frequencies are present, none of them is a tower.
+   *  null  = not known. false and null are DIFFERENT and must render differently. */
+  towered: boolean | null;
 }
 export interface FeatureNavaid {
   kind: 'V' | 'N'; ident: string; region: string; lat: number; lon: number;
@@ -809,6 +822,9 @@ export interface AirportDetailResponse {
   runways: FeatureRunway[];
   frequencies: { type: number | null; frequencyHz: number | null; name: string | null }[];
   procedures: AirportProcedureSummary[];
+  longestRunwayM: number | null;
+  surface: AirportSurface | null;
+  towered: boolean | null;
 }
 
 export interface GeometryPoint {
