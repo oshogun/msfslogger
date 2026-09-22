@@ -29,8 +29,8 @@ nvm use
 ## Quickstart
 
 ```bash
-git clone git@github.com:oshogun/msfslogger.git
-cd msfslogger
+git clone git@github.com:oshogun/sabia.git
+cd sabia
 npm install
 cd client && npm install && cd ..
 

@@ -34,8 +34,8 @@ Full table with every variable, default, and description:
 ## Bootstrap from zero
 
 ```bash
-git clone git@github.com:oshogun/msfslogger.git
-cd msfslogger
+git clone git@github.com:oshogun/sabia.git
+cd sabia
 nvm install
 nvm use
 
