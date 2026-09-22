@@ -4,7 +4,6 @@ import type { Map as LeafletMap } from 'leaflet';
 import { useFitBoundsOnChange, pointsSignature } from './useFitBoundsOnChange';
 
 type P = [number, number][];
-type P = [number, number][];
 const route = (): P => [[10, 20], [11, 21], [12, 22]];
 
 const fakeMap = () => {
@@ -13,7 +12,7 @@ const fakeMap = () => {
   const container = document.createElement('div');
   // Like Leaflet's animated moves, a fit raises its start events in a later
   // frame, after fitBounds has already returned.
-  const fitBounds = vi.fn(() => {
+  const fitBounds = vi.fn((_bounds: unknown, _options: { padding: [number, number]; animate: boolean }) => {
     setTimeout(() => emit('movestart zoomstart'), 0);
     setTimeout(() => emit('moveend'), 250);
   });
