@@ -185,6 +185,57 @@ describe('the airport-symbol truth table', () => {
   });
 });
 
+describe('longestRunwayHeadingDeg', () => {
+  it('reports the longest runway\'s own heading when known', async () => {
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZ11', { detail_state: 'detail' }));
+      insert(db, 'nav_runway', rwy('ZZ11|9|1', 'ZZ11', 2000, 4, { primary_number: 9, primary_designator: 1, heading_deg: 93.4 }));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6');
+    expect(body.airports[0]).toMatchObject({ longestRunwayM: 2000, surface: 'paved', longestRunwayHeadingDeg: 93.4 });
+    expect(await detail('ZZ11')).toMatchObject({ longestRunwayHeadingDeg: 93.4 });
+  });
+
+  it('is null when the longest runway\'s own heading_deg column is NULL, even though length and surface are known', async () => {
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZ12', { detail_state: 'detail' }));
+      insert(db, 'nav_runway', rwy('ZZ12|9|1', 'ZZ12', 1800, 4, { primary_number: 9, primary_designator: 1, heading_deg: null }));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6');
+    expect(body.airports[0]).toMatchObject({ longestRunwayM: 1800, surface: 'paved', longestRunwayHeadingDeg: null });
+    expect(await detail('ZZ12')).toMatchObject({ longestRunwayM: 1800, surface: 'paved', longestRunwayHeadingDeg: null });
+  });
+
+  it('returns the LONGEST runway\'s own heading, not MIN/MAX(heading_deg) over all of the airport\'s runways', async () => {
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZ13', { detail_state: 'detail' }));
+      // Longest (3000 m) points 250deg; the two shorter runways point 10deg
+      // and 310deg. Neither MIN(heading_deg) (10) nor MAX(heading_deg) (310)
+      // over all three rows agrees with the correct answer (250, taken from
+      // the longest row alone) — an implementation that mins/maxes the
+      // heading column independently of length_m fails this fixture
+      // regardless of which direction it picks.
+      insert(db, 'nav_runway', rwy('ZZ13|25|0', 'ZZ13', 3000, 4, { primary_number: 25, primary_designator: 0, heading_deg: 250 }));
+      insert(db, 'nav_runway', rwy('ZZ13|1|0', 'ZZ13', 2900, 4, { primary_number: 1, primary_designator: 0, heading_deg: 10 }));
+      insert(db, 'nav_runway', rwy('ZZ13|31|0', 'ZZ13', 1000, 4, { primary_number: 31, primary_designator: 0, heading_deg: 310 }));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6');
+    expect(body.airports[0]).toMatchObject({ longestRunwayM: 3000, longestRunwayHeadingDeg: 250 });
+    expect(await detail('ZZ13')).toMatchObject({ longestRunwayM: 3000, longestRunwayHeadingDeg: 250 });
+  });
+
+  it('is null when the longest row\'s heading is NULL, even though a SHORTER row has a known heading', async () => {
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZ14', { detail_state: 'detail' }));
+      insert(db, 'nav_runway', rwy('ZZ14|9|1', 'ZZ14', 2200, 4, { primary_number: 9, primary_designator: 1, heading_deg: null }));
+      insert(db, 'nav_runway', rwy('ZZ14|18|0', 'ZZ14', 1600, 0, { primary_number: 18, primary_designator: 0, heading_deg: 175 }));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6');
+    expect(body.airports[0]).toMatchObject({ longestRunwayM: 2200, surface: 'paved', longestRunwayHeadingDeg: null });
+    expect(await detail('ZZ14')).toMatchObject({ longestRunwayM: 2200, surface: 'paved', longestRunwayHeadingDeg: null });
+  });
+});
+
 describe('longest runway wins, not an independently-maxed surface', () => {
   it('returns the LONGEST runway\'s surface, not an aggregate over all of the airport\'s runways', async () => {
     buildReplica(db => {

@@ -777,6 +777,10 @@ export interface FeatureAirport {
    *  false = detail is present, frequencies are present, none of them is a tower.
    *  null  = not known. false and null are DIFFERENT and must render differently. */
   towered: boolean | null;
+  /** True heading of the airport's longest runway, taken from that same runway
+   *  row. null = not known — either detail hasn't been fetched, or that row's
+   *  heading_deg column is itself null (independent of length/surface). */
+  longestRunwayHeadingDeg: number | null;
 }
 export interface FeatureNavaid {
   kind: 'V' | 'N'; ident: string; region: string; lat: number; lon: number;
@@ -825,6 +829,7 @@ export interface AirportDetailResponse {
   longestRunwayM: number | null;
   surface: AirportSurface | null;
   towered: boolean | null;
+  longestRunwayHeadingDeg: number | null;
 }
 
 export interface GeometryPoint {

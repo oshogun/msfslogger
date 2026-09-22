@@ -171,7 +171,7 @@ describe('airport glyphs', () => {
   function airport(over: Partial<FeatureAirport> = {}): FeatureAirport {
     return {
       ident: 'ZZAA', lat: 10, lon: 20, name: null, hasDetail: true, runways: 1, procedures: 1,
-      longestRunwayM: null, surface: null, towered: null,
+      longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null,
       ...over,
     };
   }
@@ -194,15 +194,23 @@ describe('airport glyphs', () => {
       ident: el.textContent,
       shape: el.getAttribute('data-glyph'),
       size: el.getAttribute('data-size'),
-      ring: el.getAttribute('data-ring'),
+      color: el.getAttribute('data-color'),
       fill: el.getAttribute('data-fill'),
     }));
   }
 
-  it('renders the unknown diamond with no ring for an index-only airport (nothing known)', () => {
-    const { container } = renderAirports([airport({ ident: 'ZZAA', longestRunwayM: null, surface: null, towered: null })]);
+  function directionLines(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('span[data-direction-line]')).map(el => ({
+      rotateDeg: el.getAttribute('data-rotate-deg'),
+      style: el.getAttribute('style') ?? '',
+    }));
+  }
+
+  it('renders the unknown diamond with no color claim and no line for an index-only airport (nothing known)', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZAA', longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZAA', shape: 'diamond', size: '8', ring: 'none', fill: 'transparent' });
+    expect(g).toEqual({ ident: 'ZZAA', shape: 'diamond', size: '8', color: 'none', fill: 'none' });
+    expect(directionLines(container)).toHaveLength(0);
   });
 
   it('is not the same claim as a known small/soft/untowered airport', () => {
@@ -211,38 +219,89 @@ describe('airport glyphs', () => {
     expect(indexOnly).not.toEqual(smallSoftUntowered);
   });
 
-  it('fills a paved airport with the paved colour', () => {
-    const { container } = renderAirports([airport({ ident: 'ZZPV', longestRunwayM: 3714.5, surface: 'paved', towered: true })]);
+  it('colors a towered airport blue', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZTW', longestRunwayM: 1500, surface: 'soft', towered: true })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZPV', shape: 'disc', size: '18', ring: 'towered', fill: '#334155' });
+    expect(g.color).toBe('#1d4ed8');
   });
 
-  it('fills a water airport with the water colour', () => {
-    const { container } = renderAirports([airport({ ident: 'ZZWT', longestRunwayM: 1100, surface: 'water', towered: true })]);
+  it('colors an uncontrolled airport purple', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZNT', longestRunwayM: 1500, surface: 'soft', towered: false })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZWT', shape: 'disc', size: '9', ring: 'towered', fill: '#0369a1' });
+    expect(g.color).toBe('#c026d3');
   });
 
-  it('fills a soft-field airport with the soft colour', () => {
-    const { container } = renderAirports([airport({ ident: 'ZZSF', longestRunwayM: 1500, surface: 'soft', towered: false })]);
-    const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZSF', shape: 'disc', size: '13', ring: 'none', fill: '#65a30d' });
-  });
-
-  it('differs only by ring between a towered and an untowered airport of the same size and surface', () => {
-    const { container } = renderAirports([
-      airport({ ident: 'ZZTW', longestRunwayM: 1500, surface: 'soft', towered: true }),
-      airport({ ident: 'ZZNT', longestRunwayM: 1500, surface: 'soft', towered: false }),
-    ]);
-    const [towered, untowered] = glyphEls(container);
-    expect(towered).toEqual({ ident: 'ZZTW', shape: 'disc', size: '13', ring: 'towered', fill: '#65a30d' });
-    expect(untowered).toEqual({ ident: 'ZZNT', shape: 'disc', size: '13', ring: 'none', fill: '#65a30d' });
-  });
-
-  it('gives an unknown-towered airport a dashed ring, distinct from both towered and untowered', () => {
+  it('colors a tower-unknown airport gray, distinct from both towered and untowered', () => {
     const { container } = renderAirports([airport({ ident: 'ZZUK', longestRunwayM: 900, surface: 'soft', towered: null })]);
     const [g] = glyphEls(container);
-    expect(g.ring).toBe('unknown');
+    expect(g.color).toBe('#94a3b8');
+    expect(g.color).not.toBe('#1d4ed8');
+    expect(g.color).not.toBe('#c026d3');
+  });
+
+  it('renders a paved airport hollow', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZPV', longestRunwayM: 3714.5, surface: 'paved', towered: true })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZPV', shape: 'disc', size: '18', color: '#1d4ed8', fill: 'hollow' });
+  });
+
+  it('renders a soft-field airport filled', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZSF', longestRunwayM: 1500, surface: 'soft', towered: false })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZSF', shape: 'disc', size: '13', color: '#c026d3', fill: 'filled' });
+  });
+
+  it('renders a water airport filled, same treatment as soft', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZWT', longestRunwayM: 1100, surface: 'water', towered: true })]);
+    const [g] = glyphEls(container);
+    expect(g).toEqual({ ident: 'ZZWT', shape: 'disc', size: '9', color: '#1d4ed8', fill: 'filled' });
+  });
+
+  it('renders a surface-unknown airport as reduced-opacity filled, distinct from both hollow and filled', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZSU', longestRunwayM: 1500, surface: null, towered: true })]);
+    const [g] = glyphEls(container);
+    expect(g.fill).toBe('faded');
+  });
+
+  it('draws a runway-direction line at the mod-180 rotation for a known heading', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZHD', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 70 })]);
+    const lines = directionLines(container);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].rotateDeg).toBe('70');
+  });
+
+  it('draws the same rotation for headings 180 degrees apart, since a line has no direction', () => {
+    const { container } = renderAirports([
+      airport({ ident: 'ZZH1', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 250 }),
+      airport({ ident: 'ZZH2', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 70 }),
+    ]);
+    const lines = directionLines(container);
+    expect(lines).toHaveLength(2);
+    expect(lines[0].rotateDeg).toBe(lines[1].rotateDeg);
+    expect(lines[0].rotateDeg).toBe('70');
+  });
+
+  it('draws no line at all when the heading is unknown', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZNH', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: null })]);
+    expect(directionLines(container)).toHaveLength(0);
+  });
+
+  // The line's own span is a horizontal bar at rest (its long axis lies
+  // along screen bearing 090), so pointing it at a given heading needs a
+  // -90 correction on top of the raw heading — pinning the actual applied
+  // CSS rotation for two cardinal headings catches a constant-90°-off bug
+  // that the mod-180 test above would not (a line 90° off at every heading
+  // still renders N and N+180 identically).
+  it('rotates the CSS transform 90 degrees short of a north heading, since the bar itself rests along bearing 090', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZN', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 0 })]);
+    const [line] = directionLines(container);
+    expect(line.style).toContain('rotate(-90deg)');
+  });
+
+  it('applies no rotation offset for an east heading, which already matches the bar\'s resting axis', () => {
+    const { container } = renderAirports([airport({ ident: 'ZZE', longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 90 })]);
+    const [line] = directionLines(container);
+    expect(line.style).toContain('rotate(0deg)');
   });
 
   it('sizes at the large/medium tier boundary, 2500 m', () => {

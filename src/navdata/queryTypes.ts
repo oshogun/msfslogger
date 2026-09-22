@@ -36,6 +36,10 @@ export interface FeatureAirport {
    *  frequencies are present, none of them is a tower. null = not known.
    *  false and null are different and must be kept distinct by callers. */
   towered: boolean | null;
+  /** Heading in degrees of that same longest runway's primary end. null =
+   *  not known (either the airport's detail wasn't fetched, or the runway
+   *  row itself has no heading recorded). */
+  longestRunwayHeadingDeg: number | null;
 }
 export interface FeatureNavaid {
   kind: 'V' | 'N'; ident: string; region: string; lat: number; lon: number;
@@ -84,6 +88,7 @@ export interface AirportDetailResponse {
   longestRunwayM: number | null;
   surface: AirportSurface | null;
   towered: boolean | null;
+  longestRunwayHeadingDeg: number | null;
 }
 
 export interface GeometryPoint {

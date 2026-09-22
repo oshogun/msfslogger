@@ -139,14 +139,15 @@ function coverageFor(nav: Database.Database | null, bbox: Bbox): FeatureCoverage
   return { totalCells: total, byKind, airportsComplete };
 }
 
-// Three correlated scalar subqueries appended to an airport row aliased `a`.
-// The two runway subqueries share the same WHERE/ORDER BY/LIMIT so they pick
-// the same row — the surface has to come from the runway that supplied the
-// max length, not from an independent MAX(surface). The `rwy_key` tiebreak
-// makes that row a function of the data when two runways tie on length.
+// Four correlated scalar subqueries appended to an airport row aliased `a`.
+// The three runway subqueries share the same WHERE/ORDER BY/LIMIT so they
+// pick the same row — the surface and heading have to come from the runway
+// that supplied the max length, not from independent MAX(surface)/heading
+// aggregates. The `rwy_key` tiebreak makes that row a function of the data
+// when two runways tie on length.
 // MAX(freq_type = 6) answers "towered" in one probe: 1 = a tower frequency
 // exists, 0 = frequencies exist but none is a tower, NULL = no frequency rows
-// at all (an aggregate over the empty set). The CASE gate skips all three
+// at all (an aggregate over the empty set). The CASE gate skips all four
 // probes for an airport whose detail was never fetched.
 const AIRPORT_SYMBOL_COLUMNS = `
        CASE WHEN a.detail_state = 'detail' THEN (
@@ -157,6 +158,10 @@ const AIRPORT_SYMBOL_COLUMNS = `
          SELECT r.surface FROM nav_runway r
           WHERE r.airport_ident = a.ident AND r.length_m IS NOT NULL
           ORDER BY r.length_m DESC, r.rwy_key ASC LIMIT 1) END AS longest_surface,
+       CASE WHEN a.detail_state = 'detail' THEN (
+         SELECT r.heading_deg FROM nav_runway r
+          WHERE r.airport_ident = a.ident AND r.length_m IS NOT NULL
+          ORDER BY r.length_m DESC, r.rwy_key ASC LIMIT 1) END AS longest_heading_deg,
        CASE WHEN a.detail_state = 'detail' THEN (
          SELECT MAX(f.freq_type = 6) FROM nav_airport_frequency f
           WHERE f.airport_ident = a.ident) END AS tower_flag`;
@@ -173,21 +178,28 @@ export function surfaceBucket(code: number | null): AirportSurface | null {
   return 'soft';
 }
 
-/** The three symbol fields for one nav_airport row joined with the aggregates
+/** The four symbol fields for one nav_airport row joined with the aggregates
  *  above. Every one of them is null unless the airport's detail has actually
  *  been fetched: an index row knows nothing about runways or frequencies, and
  *  reporting false/'soft'/0 there would claim a fact the replica does not
  *  hold. The SQL above already gates on detail_state; this gates again on
  *  purpose, so the rule holds even if a caller ever queries these columns
- *  through a different SELECT. */
+ *  through a different SELECT. longestRunwayHeadingDeg has a second, distinct
+ *  reason to be null even when longestRunwayM is known: heading_deg is its
+ *  own independently-nullable column on nav_runway, not just an "unknown
+ *  detail" case. */
 function airportSymbolFields(
   r: Record<string, any>, hasDetail: boolean,
-): { longestRunwayM: number | null; surface: AirportSurface | null; towered: boolean | null } {
+): {
+  longestRunwayM: number | null; surface: AirportSurface | null; towered: boolean | null;
+  longestRunwayHeadingDeg: number | null;
+} {
   const longestRunwayM = hasDetail ? r.longest_length_m ?? null : null;
   return {
     longestRunwayM,
     surface: longestRunwayM === null ? null : surfaceBucket(r.longest_surface ?? null),
     towered: hasDetail && r.tower_flag != null ? r.tower_flag === 1 : null,
+    longestRunwayHeadingDeg: longestRunwayM === null ? null : (r.longest_heading_deg ?? null),
   };
 }
 

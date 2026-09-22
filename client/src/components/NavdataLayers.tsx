@@ -136,12 +136,18 @@ export interface AirportGlyph {
   /** 'disc' = the longest-runway length is known and sized it.
    *  'diamond' = length unknown; the symbol makes no size claim. */
   shape: 'disc' | 'diamond';
-  /** Outer box of the symbol in px (the ring, when present, sits outside it). */
+  /** Outer box of the symbol in px. */
   sizePx: 8 | 9 | 13 | 18;
-  /** Fill of the symbol. 'transparent' only on a diamond. */
-  fill: string;
-  /** Tower claim. 'none' means "known untowered", never "don't know". */
-  ring: 'towered' | 'unknown' | 'none';
+  /** Tower-status color (blue = towered, purple = untowered, gray = unknown).
+   *  null only on the diamond, which makes no tower claim at all. */
+  color: string | null;
+  /** Surface claim, read as fill treatment: 'hollow' = paved (open circle),
+   *  'filled' = soft or water, 'faded' = surface unknown but size known
+   *  (reduced-opacity fill), 'none' = diamond, no surface claim. */
+  fill: 'hollow' | 'filled' | 'faded' | 'none';
+  /** Longest runway's heading, already folded mod 180 (a line has no
+   *  direction). null = not known, or the diamond — no line is drawn. */
+  headingDeg: number | null;
   /** Left offset of the ident label from the airport position, px. */
   labelLeftPx: 11 | 12 | 14 | 16;
 }
@@ -149,24 +155,21 @@ export interface AirportGlyph {
 const AIRPORT_TIER_LARGE_M = 2500;
 const AIRPORT_TIER_MEDIUM_M = 1200;
 
-const AIRPORT_SURFACE_FILL = {
-  paved: '#334155', // slate-700, "pavement"
-  soft: '#65a30d',  // lime-600, "grass/dirt"
-  water: '#0369a1', // sky-700, deep water; not the navaid sky-400 #38bdf8
-} as const;
-const AIRPORT_FILL_SURFACE_UNKNOWN = '#f8fafc'; // blank disc: size known, surface not
+const AIRPORT_COLOR_TOWERED = '#1d4ed8';        // blue, deeper than the navaid sky-400 #38bdf8
+const AIRPORT_COLOR_UNTOWERED = '#c026d3';      // purple/magenta
+const AIRPORT_COLOR_TOWER_UNKNOWN = '#94a3b8';  // gray: detail known, no tower fact either way
+const AIRPORT_HOLLOW_CENTRE = '#f8fafc';        // near-white centre of an open (paved) circle
 const AIRPORT_UNKNOWN_STROKE = '#475569';       // slate-600, the diamond's outline
-const AIRPORT_RING_TOWERED = '#0f172a';         // solid outer ring
-const AIRPORT_RING_UNKNOWN = '#64748b';         // dashed outer ring
-const AIRPORT_RIM = '#0f172a';
 const AIRPORT_HALO = 'rgba(255,255,255,.85)';
 
 const AIRPORT_TIER = {
-  18: { ring: 26, label: 16 },
-  13: { ring: 21, label: 14 },
-  9: { ring: 17, label: 12 },
-  8: { ring: 16, label: 11 },
+  18: { label: 16 },
+  13: { label: 14 },
+  9: { label: 12 },
+  8: { label: 11 },
 } as const;
+
+const mod180 = (deg: number) => ((deg % 180) + 180) % 180;
 
 /** The whole decision, in one pure function. No other rule sets these. */
 export function airportGlyph(a: FeatureAirport): AirportGlyph {
@@ -176,34 +179,72 @@ export function airportGlyph(a: FeatureAirport): AirportGlyph {
         : a.longestRunwayM >= AIRPORT_TIER_MEDIUM_M ? 13
           : 9;
   const shape = a.longestRunwayM === null ? 'diamond' : 'disc';
-  // The index-airport case (nothing known at all) gets the plain diamond and
-  // no ring: it is the majority of every viewport, so it stays the quietest
-  // mark on the map, and a ring there would claim a tower fact we do not have.
-  const nothingKnown = a.longestRunwayM === null && a.surface === null && a.towered === null;
-  const ring: AirportGlyph['ring'] =
-    nothingKnown ? 'none' : a.towered === true ? 'towered' : a.towered === null ? 'unknown' : 'none';
-  const fill =
-    shape === 'diamond' ? 'transparent'
-      : a.surface === null ? AIRPORT_FILL_SURFACE_UNKNOWN
-        : AIRPORT_SURFACE_FILL[a.surface];
-  return { shape, sizePx, fill, ring, labelLeftPx: AIRPORT_TIER[sizePx].label };
+  const color: AirportGlyph['color'] =
+    shape === 'diamond' ? null
+      : a.towered === true ? AIRPORT_COLOR_TOWERED
+        : a.towered === false ? AIRPORT_COLOR_UNTOWERED
+          : AIRPORT_COLOR_TOWER_UNKNOWN;
+  const fill: AirportGlyph['fill'] =
+    shape === 'diamond' ? 'none'
+      : a.surface === 'paved' ? 'hollow'
+        : a.surface === 'soft' || a.surface === 'water' ? 'filled'
+          : 'faded';
+  const headingDeg = shape === 'diamond' || a.longestRunwayHeadingDeg === null
+    ? null
+    : mod180(a.longestRunwayHeadingDeg);
+  return { shape, sizePx, color, fill, headingDeg, labelLeftPx: AIRPORT_TIER[sizePx].label };
+}
+
+function withAlpha(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** The disc's own border+background, given its tower color and surface fill. */
+function airportDiscStyle(color: string, fill: AirportGlyph['fill']): string {
+  switch (fill) {
+    case 'hollow': return `background:${AIRPORT_HOLLOW_CENTRE};border:2px solid ${color}`;
+    case 'filled': return `background:${color};border:1px solid ${color}`;
+    default: return `background:${withAlpha(color, 0.4)};border:1px solid ${color}`; // 'faded'
+  }
+}
+
+/** The short runway-direction tick, through the icon's own (0,0). A line's
+ *  width is fixed up front, so centering it on the anchor is just `left:
+ *  -half; width: 2*half` — the span is already centered before `rotate`
+ *  applies, unlike `runwayLabelIcon()`'s variable-width text, which needs a
+ *  `translate(-50%,-50%)` because its box size isn't known until it renders.
+ *
+ *  The span itself is a horizontal bar at rest — its long axis lies along
+ *  screen +x, bearing 090, not bearing 0. `runwayLabelIcon()`'s `rotate(headingDeg)`
+ *  is correct as-is because text's "up" axis (not its long/reading axis)
+ *  carries the bearing, and that axis already points at bearing 0 by
+ *  default — a different piece of geometry from a bar's long axis, so it
+ *  needs a different offset: `headingDeg - 90` turns the bar's own
+ *  bearing-090 rest axis to point at `headingDeg`. */
+function airportDirectionLineHtml(g: AirportGlyph): string {
+  if (g.headingDeg === null || g.color === null) return '';
+  const len = g.sizePx * 1.75; // 1.5-2x the disc's diameter
+  const half = len / 2;
+  const thickness = 2;
+  return (
+    `<span data-direction-line="" data-rotate-deg="${g.headingDeg}" style="position:absolute;` +
+    `left:${-half}px;top:${-thickness / 2}px;width:${len}px;height:${thickness}px;` +
+    `background:${g.color};transform:rotate(${g.headingDeg - 90}deg);pointer-events:none"></span>`
+  );
 }
 
 /** Frozen markup for one airport glyph, `ident` already escaped by the caller. */
 function airportIconHtml(g: AirportGlyph, ident: string): string {
   const half = g.sizePx / 2;
-  const r = AIRPORT_TIER[g.sizePx].ring;
-  const rot = g.shape === 'diamond' ? 'transform:rotate(45deg);' : 'border-radius:50%;';
-  const ring = g.ring === 'none' ? ''
-    : `<span style="position:absolute;left:${-r / 2}px;top:${-r / 2}px;width:${r}px;height:${r}px;` +
-      `box-sizing:border-box;${rot}border:2px ${g.ring === 'towered' ? 'solid' : 'dashed'} ` +
-      `${g.ring === 'towered' ? AIRPORT_RING_TOWERED : AIRPORT_RING_UNKNOWN}"></span>`;
-  const body = g.shape === 'disc'
-    ? `border-radius:50%;background:${g.fill};border:1px solid ${AIRPORT_RIM};box-shadow:0 0 0 1.5px ${AIRPORT_HALO}`
+  const body = g.shape === 'disc' && g.color !== null
+    ? `border-radius:50%;${airportDiscStyle(g.color, g.fill)};box-shadow:0 0 0 1.5px ${AIRPORT_HALO}`
     : `transform:rotate(45deg);background:transparent;border:1.5px solid ${AIRPORT_UNKNOWN_STROKE};filter:drop-shadow(0 0 1.5px #fff)`;
+  const line = airportDirectionLineHtml(g);
   return (
-    `<div data-glyph="${g.shape}" data-size="${g.sizePx}" data-ring="${g.ring}" data-fill="${g.fill}" ` +
-    `style="position:relative;width:0;height:0;pointer-events:none">${ring}` +
+    `<div data-glyph="${g.shape}" data-size="${g.sizePx}" data-color="${g.color ?? 'none'}" data-fill="${g.fill}" ` +
+    `style="position:relative;width:0;height:0;pointer-events:none">${line}` +
     `<span style="position:absolute;left:${-half}px;top:${-half}px;width:${g.sizePx}px;height:${g.sizePx}px;` +
     `box-sizing:border-box;${body}"></span>` +
     `<span style="position:absolute;left:${g.labelLeftPx}px;top:-7px;line-height:14px;font:600 10px system-ui;` +
@@ -212,11 +253,12 @@ function airportIconHtml(g: AirportGlyph, ident: string): string {
 }
 
 /**
- * The airport marker icon: a size/shape claim (longestRunwayM), a fill claim
- * (surface) and a ring claim (towered), each with its own distinct "unknown"
- * rendering so a missing fact can never be read as a known one. Self-positioning
- * like runwayLabelIcon(): iconSize/iconAnchor both [0,0], every child placed
- * from the airport's own point, so no box-model change can drift it off the
+ * The airport marker icon: a size/shape claim (longestRunwayM), a color claim
+ * (towered), a fill claim (surface) and a direction-line claim
+ * (longestRunwayHeadingDeg), each with its own distinct "unknown" rendering
+ * so a missing fact can never be read as a known one. Self-positioning like
+ * runwayLabelIcon(): iconSize/iconAnchor both [0,0], every child placed from
+ * the airport's own point, so no box-model change can drift it off the
  * airport.
  */
 export function airportIcon(a: FeatureAirport): L.DivIcon {
