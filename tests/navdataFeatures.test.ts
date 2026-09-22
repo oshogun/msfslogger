@@ -217,11 +217,31 @@ describe('GET /features', () => {
     });
     const body = await features('bbox=19,9,21,11&zoom=12&kinds=runways');
     expect(body.runways).toEqual([
-      { airport: 'ZZA1', lat: 10, lon: 20, headingDeg: 90, lengthM: 3000, widthM: 45, designation: '09L' },
+      { airport: 'ZZA1', lat: 10, lon: 20, headingDeg: 90, lengthM: 3000, widthM: 45, designation: '09L', secondaryDesignation: '' },
     ]);
     expect(runwayDesignation(27, 2)).toBe('27R');
     expect(runwayDesignation(38, 0)).toBe('NE');
     expect(runwayDesignation(null, null)).toBe('');
+  });
+
+  it('derives the secondary runway designation alongside the primary, and blanks it when the columns are null', async () => {
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZA1', 10, 20));
+      insert(db, 'nav_runway', {
+        rwy_key: 'ZZA1|9|27', airport_ident: 'ZZA1', lat: 10, lon: 20, heading_deg: 90, length_m: 3000, width_m: 45,
+        primary_number: 9, primary_designator: 1, secondary_number: 27, secondary_designator: 2, rev: 1,
+      });
+      insert(db, 'nav_runway', {
+        rwy_key: 'ZZA1|18', airport_ident: 'ZZA1', lat: 10.1, lon: 20.1, heading_deg: 180, length_m: 2000, width_m: 30,
+        primary_number: 18, primary_designator: 0, secondary_number: null, secondary_designator: null, rev: 1,
+      });
+    });
+    const body = await features('bbox=19,9,21,11&zoom=12&kinds=runways');
+    const runways = body.runways.sort((a: any, b: any) => a.headingDeg - b.headingDeg);
+    expect(runways).toEqual([
+      { airport: 'ZZA1', lat: 10, lon: 20, headingDeg: 90, lengthM: 3000, widthM: 45, designation: '09L', secondaryDesignation: '27R' },
+      { airport: 'ZZA1', lat: 10.1, lon: 20.1, headingDeg: 180, lengthM: 2000, widthM: 30, designation: '18', secondaryDesignation: '' },
+    ]);
   });
 
   it('answers empty with computed coverage when there is no replica, and 400 on bad input', async () => {

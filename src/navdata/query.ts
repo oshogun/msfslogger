@@ -241,7 +241,8 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
   const runways = fetch(
     'runways',
     () => nav!.prepare(
-      `SELECT airport_ident, lat, lon, heading_deg, length_m, width_m, primary_number, primary_designator
+      `SELECT airport_ident, lat, lon, heading_deg, length_m, width_m,
+              primary_number, primary_designator, secondary_number, secondary_designator
          FROM nav_runway
         WHERE lat IS NOT NULL AND lon IS NOT NULL AND lat BETWEEN ? AND ? AND ${pointClause.clause}
         ORDER BY rwy_key ASC LIMIT ?`,
@@ -261,6 +262,7 @@ function runwayFeature(r: Record<string, any>): FeatureRunway {
     airport: r.airport_ident, lat: r.lat, lon: r.lon,
     headingDeg: r.heading_deg, lengthM: r.length_m, widthM: r.width_m,
     designation: runwayDesignation(r.primary_number, r.primary_designator),
+    secondaryDesignation: runwayDesignation(r.secondary_number, r.secondary_designator),
   };
 }
 
@@ -321,7 +323,8 @@ export function readAirportDetail(nav: Database.Database | null, rawIdent: strin
   if (!a) return null;
 
   const runways = (nav.prepare(
-    `SELECT airport_ident, lat, lon, heading_deg, length_m, width_m, primary_number, primary_designator
+    `SELECT airport_ident, lat, lon, heading_deg, length_m, width_m,
+            primary_number, primary_designator, secondary_number, secondary_designator
        FROM nav_runway WHERE airport_ident = ? AND lat IS NOT NULL AND lon IS NOT NULL
       ORDER BY primary_number, primary_designator`,
   ).all(ident) as Record<string, any>[]).map(runwayFeature);

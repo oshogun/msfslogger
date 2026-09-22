@@ -38,6 +38,7 @@ export interface FeatureAirwayLeg {
 export interface FeatureRunway {
   airport: string; lat: number; lon: number;
   headingDeg: number | null; lengthM: number | null; widthM: number | null; designation: string;
+  secondaryDesignation: string;
 }
 export interface FeatureCoverageKind {
   harvestedCells: number; fraction: number;

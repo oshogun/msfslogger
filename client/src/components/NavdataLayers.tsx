@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { Fragment, useMemo, type ReactNode } from 'react';
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { unwrapLonChain } from '../utils/geo';
@@ -94,6 +94,25 @@ function labelIcon(text: string, color: string) {
   });
 }
 
+const mod360 = (deg: number) => ((deg % 360) + 360) % 360;
+
+/**
+ * A runway-end number, drawn bold and upright to the pilot who'd be landing on
+ * that end — rotated to the end's own approach heading, black on white so it
+ * reads against the pavement rather than beside a dot marker like the other
+ * navdata labels.
+ */
+function runwayLabelIcon(text: string, rotateDeg: number) {
+  return L.divIcon({
+    className: '',
+    iconAnchor: [14, 9],
+    html:
+      `<div style="transform:rotate(${mod360(rotateDeg)}deg);text-align:center;white-space:nowrap;` +
+      `pointer-events:none;font:700 13px system-ui;color:#000;` +
+      `text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 2px #fff,0 0 2px #fff">${text}</div>`,
+  });
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 }
@@ -130,15 +149,34 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
         data.runways.map((r, i) => {
           if (r.headingDeg === null || r.lengthM === null) return null;
           const centre = unwrapPoint(anchor, r.lat, r.lon);
+          const ends = runwayEnds(centre, r.headingDeg, r.lengthM);
+          const key = `${r.airport}-${r.designation}-${i}`;
           return (
-            <Polyline
-              renderer={renderer}
-              key={`${r.airport}-${r.designation}-${i}`}
-              positions={runwayEnds(centre, r.headingDeg, r.lengthM)}
-              pathOptions={{ color: RUNWAY_COLOR, weight: 3, opacity: 0.9}}
-            >
-              <Tooltip sticky>{`${r.airport} ${r.designation}`}</Tooltip>
-            </Polyline>
+            <Fragment key={key}>
+              <Polyline
+                renderer={renderer}
+                positions={ends}
+                pathOptions={{ color: RUNWAY_COLOR, weight: 3, opacity: 0.9}}
+              >
+                <Tooltip sticky>{`${r.airport} ${r.designation}`}</Tooltip>
+              </Polyline>
+              {r.designation !== '' && (
+                <Marker
+                  position={ends[0]}
+                  icon={runwayLabelIcon(escapeHtml(r.designation), r.headingDeg)}
+                  pane={NAVDATA_MARKER_PANE}
+                  interactive={false}
+                />
+              )}
+              {r.secondaryDesignation !== '' && (
+                <Marker
+                  position={ends[1]}
+                  icon={runwayLabelIcon(escapeHtml(r.secondaryDesignation), r.headingDeg + 180)}
+                  pane={NAVDATA_MARKER_PANE}
+                  interactive={false}
+                />
+              )}
+            </Fragment>
           );
         })}
       {visible.waypoints &&

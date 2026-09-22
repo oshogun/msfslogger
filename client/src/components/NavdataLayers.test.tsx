@@ -1,12 +1,13 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { unwrapAirwayLeg, unwrapPoint } from './NavdataLayers';
+import { MapContainer } from 'react-leaflet';
+import { NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint, type NavdataVisibility } from './NavdataLayers';
 import { FlightMap } from './FlightMap';
 import { TripMap } from './TripMap';
 import { mockFetchRoutes } from '../test/mockFetch';
-import { absentStatus, presentStatus } from '../test/navdataFixtures';
+import { absentStatus, emptyFeatures, presentStatus } from '../test/navdataFixtures';
 import { flightFixture } from '../test/fixtures';
-import type { FlightPoint } from '../types';
+import type { FeatureRunway, FlightPoint } from '../types';
 
 const points: FlightPoint[] = Array.from({ length: 4 }, (_, i) => ({
   id: i, flight_id: 1, ts: '2026-01-01T12:00:00Z', lat: 10 + i * 0.1, lon: 20 + i * 0.1, altitude_ft: 1000,
@@ -70,5 +71,96 @@ describe('maps without navdata', () => {
     const markers = container.querySelector<HTMLElement>('.leaflet-navdata-markers-pane')!;
     expect(nav.style.zIndex).toBe('350');
     expect(markers.style.zIndex).toBe('360');
+  });
+});
+
+// jsdom has no real <canvas> 2D context, and the runway polyline always draws
+// through Leaflet's own canvas renderer (never the SVG one), so exercising it
+// here needs a context stub — every draw call is a no-op, only property
+// assignment is kept, which is all the renderer needs to not throw.
+function stubCanvasContext() {
+  const fakeCtx = new Proxy(
+    {},
+    {
+      get: (target, prop) => (prop in target ? (target as Record<PropertyKey, unknown>)[prop] : () => undefined),
+      set: (target, prop, value) => {
+        (target as Record<PropertyKey, unknown>)[prop] = value;
+        return true;
+      },
+    }
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx as unknown as CanvasRenderingContext2D);
+}
+
+describe('runway-end labels', () => {
+  const allOff: NavdataVisibility = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
+
+  beforeEach(() => stubCanvasContext());
+
+  function runway(over: Partial<FeatureRunway> = {}): FeatureRunway {
+    return {
+      airport: 'ZZAA', lat: 10, lon: 20, headingDeg: 140, lengthM: 2000, widthM: 45,
+      designation: '14L', secondaryDesignation: '32R',
+      ...over,
+    };
+  }
+
+  function renderRunways(runways: FeatureRunway[], runwaysVisible: boolean) {
+    const data = emptyFeatures({ runways });
+    return render(
+      <MapContainer center={[10, 20]} zoom={13} style={{ height: 300, width: 300 }}>
+        <NavdataPanes>
+          <NavdataLayers data={data} anchor={[10, 20]} visible={{ ...allOff, runways: runwaysVisible }} />
+        </NavdataPanes>
+      </MapContainer>
+    );
+  }
+
+  // Runway-end labels are the only rotated element this layer draws — the
+  // dot-plus-text markers for waypoints/navaids/airports never rotate.
+  function rotatedLabels(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>('div'))
+      .filter(el => (el.getAttribute('style') ?? '').includes('rotate('))
+      .map(el => ({ text: el.textContent, style: el.getAttribute('style') ?? '' }));
+  }
+
+  it('draws both ends, each rotated to its own approach heading', () => {
+    const { container } = renderRunways([runway()], true);
+    const labels = rotatedLabels(container);
+    expect(labels).toHaveLength(2);
+    const primary = labels.find(l => l.text === '14L');
+    const secondary = labels.find(l => l.text === '32R');
+    expect(primary?.style).toContain('rotate(140deg)');
+    expect(secondary?.style).toContain('rotate(320deg)');
+  });
+
+  it('wraps the secondary end past 360 back into 0-360', () => {
+    const { container } = renderRunways([runway({ headingDeg: 250, designation: '25', secondaryDesignation: '07' })], true);
+    const labels = rotatedLabels(container);
+    const primary = labels.find(l => l.text === '25');
+    const secondary = labels.find(l => l.text === '07');
+    expect(primary?.style).toContain('rotate(250deg)');
+    expect(secondary?.style).toContain('rotate(70deg)');
+  });
+
+  it('draws only the primary label when the secondary designation is unknown', () => {
+    const { container } = renderRunways([runway({ secondaryDesignation: '' })], true);
+    const labels = rotatedLabels(container);
+    expect(labels).toHaveLength(1);
+    expect(labels[0].text).toBe('14L');
+    expect(labels[0].style).toContain('rotate(140deg)');
+  });
+
+  it('draws only the secondary label when the primary designation is unknown', () => {
+    const { container } = renderRunways([runway({ designation: '' })], true);
+    const labels = rotatedLabels(container);
+    expect(labels).toHaveLength(1);
+    expect(labels[0].text).toBe('32R');
+    expect(labels[0].style).toContain('rotate(320deg)');
+  });
+
+  it('draws no runway labels at all when runways are hidden', () => {
+    const { container } = renderRunways([runway()], false);
+    expect(rotatedLabels(container)).toHaveLength(0);
   });
 });
