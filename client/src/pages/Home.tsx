@@ -252,7 +252,7 @@ export function Home({ status }: Props) {
               <form className="ground-manual-form edit-form" onSubmit={handleManualEntry}>
                 <div className="section-title">Manual entry (fallback)</div>
                 <p className="flight-plan-status">
-                  msfslogger detects your airport and stand automatically. Use this only when detection could not resolve your position.
+                  Sabiá detects your airport and stand automatically. Use this only when detection could not resolve your position.
                 </p>
                 <div className="edit-field">
                   <label htmlFor="ground-manual-icao">ICAO</label>

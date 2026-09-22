@@ -74,7 +74,7 @@ export function FlightDetail() {
         setFlight(f);
         setEditAircraft(f.aircraft || '');
         setEditNotes(f.notes || '');
-        document.title = `Flight #${f.id} — msfslogger`;
+        document.title = `Flight #${f.id} — Sabiá`;
       })
       .catch(err => setLoadError((err as Error).message));
   }, [id, navigate]);

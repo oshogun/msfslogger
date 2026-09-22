@@ -112,7 +112,7 @@ export function TripDetail() {
         setTrip(t);
         setEditName(t.name);
         setEditNotes(t.notes || '');
-        document.title = `${t.name} — msfslogger`;
+        document.title = `${t.name} — Sabiá`;
       })
       .catch(err => setLoadError((err as Error).message));
 
