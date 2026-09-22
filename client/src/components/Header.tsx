@@ -43,8 +43,8 @@ export function Header({ status, serverError }: Props) {
     <header className="header">
       <h1>
         <Link to="/" className="logo-link" style={{ color: 'inherit', textDecoration: 'none' }}>
-          <img src="/sabia-logo.svg" alt="" className="logo-mark" />
-          Sabiá
+          <img src="/sabianotext.svg" alt="" className="logo-mark" />
+          Sabiá Flight Database
         </Link>
       </h1>
       <div className="header-right">

@@ -2,7 +2,7 @@
 
 ## Logging a flight
 
-1. Start msfslogger (`npm start`, or your process manager of choice — see
+1. Start Sabiá (`npm start`, or your process manager of choice — see
    [operations.md](operations.md)).
 2. On the Windows PC running MSFS, start the [agent](../agent/README.md).
 3. Launch MSFS and load into a flight (or even just the main menu). The

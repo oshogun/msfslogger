@@ -2,7 +2,7 @@
 
 ## Threat model
 
-msfslogger is a self-hosted, single-operator application, typically exposed
+Sabiá is a self-hosted, single-operator application, typically exposed
 on a home LAN (occasionally further, e.g. to reach a remote simulator PC or
 the operator away from home). It has no multi-tenant isolation and doesn't
 attempt any — the `auth_user` table is hard-constrained to exactly one row.
@@ -65,7 +65,7 @@ username existed.
 (not persisted — resets on restart), enforced *before* any database read.
 `X-Forwarded-For` is deliberately ignored (`trust proxy` is not set) so it
 can't be used to reset the throttle key or spoof `req.protocol`; if you run
-msfslogger behind a reverse proxy, be aware the throttle (and same-origin
+Sabiá behind a reverse proxy, be aware the throttle (and same-origin
 check) will key on the proxy's IP, not the real client's, unless you
 configure Express's trust-proxy setting yourself — this repository doesn't.
 

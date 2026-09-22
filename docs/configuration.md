@@ -48,7 +48,7 @@ Set on the Windows machine running MSFS, not on the server. Full detail in
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SERVER_URL` | Yes | — | Base URL of the msfslogger server, e.g. `https://192.168.0.30:3000`. |
+| `SERVER_URL` | Yes | — | Base URL of the Sabiá server, e.g. `https://192.168.0.30:3000`. |
 | `INGEST_TOKEN` | Yes | — | Must match the server's `INGEST_TOKEN` exactly. |
 | `NODE_EXTRA_CA_CERTS` | Only for HTTPS with a self-signed cert | — | Path to the server's certificate file, so Node's `fetch` trusts it. |
 | `TRAFFIC_ENABLED` | No | on | Agent-side opt-out for gathering AI traffic. Same accepted values as the server's variable, read independently. |

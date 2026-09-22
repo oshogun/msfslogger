@@ -1,7 +1,7 @@
-# msfslogger
+# Sabiá
 
 Self-hosted flight logging for Microsoft Flight Simulator 2020/2024 and FSX.
-msfslogger records flight tracks and statistics in a local SQLite database
+Sabiá records flight tracks and statistics in a local SQLite database
 and presents them in a React web application.
 
 The project has three parts:

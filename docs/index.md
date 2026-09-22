@@ -1,4 +1,4 @@
-# msfslogger documentation
+# Sabiá documentation
 
 Self-hosted flight logging for MSFS 2020/2024 and FSX: an Express/TypeScript
 server, a React web client, and a Windows-side SimConnect agent. Start with

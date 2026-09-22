@@ -1,6 +1,6 @@
 # Data model
 
-msfslogger stores everything in a single SQLite database file (`better-sqlite3`,
+Sabiá stores everything in a single SQLite database file (`better-sqlite3`,
 WAL journal mode, foreign keys enforced), opened by `src/db/connection.ts` and
 schema-managed by `src/db/schema.ts` (`CREATE TABLE IF NOT EXISTS` plus
 idempotent `ALTER TABLE` migrations run on every startup — there is no

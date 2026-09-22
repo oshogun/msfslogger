@@ -157,7 +157,7 @@ the DELETE do not, since reporting or clearing a link needs no key. None of
 them ever returns the raw key. Every route in this table is allow-listed
 (six, counting the settings GET above) — see
 [architecture.md](architecture.md#external-integration-points) for why: the
-msfslogger server is the only thing that talks to SayIntentions directly,
+Sabiá server is the only thing that talks to SayIntentions directly,
 and the MCDU app is meant to be a full interface to this feature through the
 server, the same trust level already extended to the ACARS routes above.
 
