@@ -9,7 +9,10 @@ export const NAVDATA_MARKER_PANE = 'navdata-markers';
 
 const AIRWAY_COLOR = '#64748b';
 const NAVAID_COLOR = '#38bdf8';
-const WAYPOINT_COLOR = '#a3a3a3';
+// Same magenta as an uncontrolled airport's symbol — both are the sectional-chart
+// "magenta" convention (uncontrolled airfield / enroute waypoint), so the two
+// features read as one coherent palette rather than two arbitrary purples.
+const WAYPOINT_COLOR = '#c026d3';
 const RUNWAY_COLOR = '#e2e8f0';
 const LABEL_LIMIT = 150;
 
@@ -91,6 +94,26 @@ function labelIcon(text: string, color: string) {
       `<div style="display:flex;align-items:center;gap:3px;white-space:nowrap;pointer-events:none">` +
       `<span style="width:8px;height:8px;border-radius:50%;background:${color};border:1px solid #fff;box-shadow:0 0 3px #000"></span>` +
       `<span style="font:600 10px system-ui;color:#e2e8f0;text-shadow:0 0 3px #000,0 0 3px #000">${text}</span></div>`,
+  });
+}
+
+/**
+ * An enroute waypoint: a small hollow (stroke-only) triangle, apex up, instead
+ * of the filled dot `labelIcon()` draws — the sectional-chart symbol for a
+ * plain named fix, distinct from a navaid's own dot-and-circle. The label
+ * text gets a white halo rather than `labelIcon()`'s black one: that text is
+ * dark magenta, not the light gray/blue `labelIcon()` assumes, so a black
+ * halo would just disappear against a dark basemap tile.
+ */
+function waypointIcon(text: string) {
+  return L.divIcon({
+    className: '',
+    iconAnchor: [5, 4],
+    html:
+      `<div style="display:flex;align-items:center;gap:3px;white-space:nowrap;pointer-events:none">` +
+      `<svg width="10" height="9" viewBox="0 0 10 9" style="flex-shrink:0">` +
+      `<polygon points="5,0 10,9 0,9" fill="none" stroke="${WAYPOINT_COLOR}" stroke-width="1.2"/></svg>` +
+      `<span style="font:600 10px system-ui;color:${WAYPOINT_COLOR};text-shadow:0 0 3px #fff,0 0 3px #fff">${text}</span></div>`,
   });
 }
 
@@ -337,7 +360,7 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
         data.waypoints.map(w => {
           const pos = unwrapPoint(anchor, w.lat, w.lon);
           return labelled ? (
-            <Marker key={w.key} position={pos} icon={labelIcon(escapeHtml(w.ident), WAYPOINT_COLOR)} pane={NAVDATA_MARKER_PANE} interactive={false} />
+            <Marker key={w.key} position={pos} icon={waypointIcon(escapeHtml(w.ident))} pane={NAVDATA_MARKER_PANE} interactive={false} />
           ) : (
             <CircleMarker
               renderer={renderer}

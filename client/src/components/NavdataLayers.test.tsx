@@ -7,7 +7,7 @@ import { TripMap } from './TripMap';
 import { mockFetchRoutes } from '../test/mockFetch';
 import { absentStatus, emptyFeatures, presentStatus } from '../test/navdataFixtures';
 import { flightFixture } from '../test/fixtures';
-import type { FeatureAirport, FeatureRunway, FlightPoint } from '../types';
+import type { FeatureAirport, FeatureNavaid, FeatureRunway, FeatureWaypoint, FeaturesResponse, FlightPoint } from '../types';
 
 const points: FlightPoint[] = Array.from({ length: 4 }, (_, i) => ({
   id: i, flight_id: 1, ts: '2026-01-01T12:00:00Z', lat: 10 + i * 0.1, lon: 20 + i * 0.1, altitude_ft: 1000,
@@ -78,18 +78,20 @@ describe('maps without navdata', () => {
 // through Leaflet's own canvas renderer (never the SVG one), so exercising it
 // here needs a context stub — every draw call is a no-op, only property
 // assignment is kept, which is all the renderer needs to not throw.
-function stubCanvasContext() {
+function stubCanvasContext(): Record<PropertyKey, unknown> {
+  const target: Record<PropertyKey, unknown> = {};
   const fakeCtx = new Proxy(
-    {},
+    target,
     {
-      get: (target, prop) => (prop in target ? (target as Record<PropertyKey, unknown>)[prop] : () => undefined),
-      set: (target, prop, value) => {
-        (target as Record<PropertyKey, unknown>)[prop] = value;
+      get: (t, prop) => (prop in t ? t[prop as PropertyKey] : () => undefined),
+      set: (t, prop, value) => {
+        t[prop as PropertyKey] = value;
         return true;
       },
     }
   );
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx as unknown as CanvasRenderingContext2D);
+  return target;
 }
 
 describe('runway-end labels', () => {
@@ -318,5 +320,69 @@ describe('airport glyphs', () => {
     const g = airportGlyph(airport({ longestRunwayM: null }));
     expect(g.shape).toBe('diamond');
     expect(g.sizePx).toBe(8);
+  });
+});
+
+describe('waypoint markers', () => {
+  const allOff: NavdataVisibility = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
+
+  function waypoint(over: Partial<FeatureWaypoint> = {}): FeatureWaypoint {
+    return { key: 'W1', ident: 'ZAKRO', region: 'ZZ', lat: 10, lon: 20, terminal: null, ...over };
+  }
+
+  function navaid(over: Partial<FeatureNavaid> = {}): FeatureNavaid {
+    return { kind: 'V', ident: 'ZZVR', region: 'ZZ', lat: 10, lon: 20, frequencyHz: null, name: null, navType: null, isDme: null, ...over };
+  }
+
+  function renderNavdata(data: Partial<FeaturesResponse>, visible: Partial<NavdataVisibility>) {
+    const full = emptyFeatures(data);
+    return render(
+      <MapContainer center={[10, 20]} zoom={13} style={{ height: 300, width: 300 }}>
+        <NavdataPanes>
+          <NavdataLayers data={full} anchor={[10, 20]} visible={{ ...allOff, ...visible }} />
+        </NavdataPanes>
+      </MapContainer>
+    );
+  }
+
+  it('draws the labelled waypoint as a hollow magenta triangle, not a filled dot', () => {
+    const { container } = renderNavdata({ waypoints: [waypoint()] }, { waypoints: true });
+    const polygon = container.querySelector('svg polygon');
+    expect(polygon).not.toBeNull();
+    expect(polygon!.getAttribute('fill')).toBe('none');
+    expect(polygon!.getAttribute('stroke')).toBe('#c026d3');
+    // no dot markup like the other labelled navdata markers use
+    expect(container.querySelector('span[style*="border-radius:50%"]')).toBeNull();
+  });
+
+  it('labels the waypoint magenta with a white halo, not the black halo other labels use', () => {
+    renderNavdata({ waypoints: [waypoint({ ident: 'ZAKRO' })] }, { waypoints: true });
+    const label = screen.getByText('ZAKRO');
+    const style = label.getAttribute('style') ?? '';
+    expect(style).toContain('color:#c026d3');
+    expect(style).toContain('text-shadow:0 0 3px #fff');
+  });
+
+  it('keeps the dense fallback a canvas CircleMarker recolored to magenta, not a per-node icon', async () => {
+    const ctx = stubCanvasContext();
+    const dense = Array.from({ length: 151 }, (_, i) => waypoint({ key: `W${i}`, ident: `W${i}`, lat: 10 + i * 0.001 }));
+    const { container } = renderNavdata({ waypoints: dense }, { waypoints: true });
+    // Leaflet's canvas renderer schedules its draw on the next frame.
+    await new Promise(r => setTimeout(r, 50));
+    expect(container.querySelector('svg polygon')).toBeNull();
+    expect(container.querySelector('.leaflet-marker-icon')).toBeNull();
+    expect(ctx.strokeStyle).toBe('#c026d3');
+  });
+
+  it('leaves navaids on their own sky-blue dot-and-label styling, unaffected by the waypoint change', () => {
+    const { container } = renderNavdata({ navaids: [navaid({ ident: 'ZZVR' })] }, { navaids: true });
+    expect(container.querySelector('svg polygon')).toBeNull();
+    const dot = container.querySelector<HTMLElement>('span[style*="border-radius:50%"]');
+    expect(dot).not.toBeNull();
+    expect(dot!.getAttribute('style')).toContain('background:#38bdf8');
+    const label = screen.getByText('ZZVR');
+    const style = label.getAttribute('style') ?? '';
+    expect(style).toContain('color:#e2e8f0');
+    expect(style).toContain('text-shadow:0 0 3px #000');
   });
 });
