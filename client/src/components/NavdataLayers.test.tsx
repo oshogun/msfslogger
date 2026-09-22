@@ -173,7 +173,7 @@ describe('airport glyphs', () => {
   function airport(over: Partial<FeatureAirport> = {}): FeatureAirport {
     return {
       ident: 'ZZAA', lat: 10, lon: 20, name: null, hasDetail: true, runways: 1, procedures: 1,
-      longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null,
+      longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null,
       ...over,
     };
   }
@@ -320,6 +320,85 @@ describe('airport glyphs', () => {
     const g = airportGlyph(airport({ longestRunwayM: null }));
     expect(g.shape).toBe('diamond');
     expect(g.sizePx).toBe(8);
+  });
+});
+
+describe('airport labels', () => {
+  const allOff: NavdataVisibility = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
+
+  function airport(over: Partial<FeatureAirport> = {}): FeatureAirport {
+    return {
+      ident: 'ZZAA', lat: 10, lon: 20, name: null, hasDetail: true, runways: 1, procedures: 1,
+      longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null,
+      ...over,
+    };
+  }
+
+  function renderAirports(airports: FeatureAirport[]) {
+    const data = emptyFeatures({ airports });
+    return render(
+      <MapContainer center={[10, 20]} zoom={13} style={{ height: 300, width: 300 }}>
+        <NavdataPanes>
+          <NavdataLayers data={data} anchor={[10, 20]} visible={{ ...allOff, airports: true }} />
+        </NavdataPanes>
+      </MapContainer>
+    );
+  }
+
+  // 151 airports, one over LABEL_LIMIT (150), so density suppression is live.
+  function denseAirports(over: Partial<FeatureAirport> = {}): FeatureAirport[] {
+    return Array.from({ length: 151 }, (_, i) => airport({ ident: `ZZ${i}`, lat: 10 + i * 0.001, ...over }));
+  }
+
+  it('keeps a large-tier airport labelled above the density limit', () => {
+    const dense = denseAirports({ tier: 'small' });
+    dense[0] = airport({ ident: 'ZZBIG', lat: 10, tier: 'large' });
+    renderAirports(dense);
+    expect(screen.getByText('ZZBIG')).toBeInTheDocument();
+  });
+
+  it('keeps a medium-tier airport labelled above the density limit', () => {
+    const dense = denseAirports({ tier: 'small' });
+    dense[0] = airport({ ident: 'ZZMED', lat: 10, tier: 'medium' });
+    renderAirports(dense);
+    expect(screen.getByText('ZZMED')).toBeInTheDocument();
+  });
+
+  it('suppresses a small-tier airport label above the density limit', () => {
+    renderAirports(denseAirports({ tier: 'small' }));
+    expect(screen.queryByText('ZZ0')).toBeNull();
+  });
+
+  it('suppresses unknown and other tier airport labels above the density limit', () => {
+    const dense = denseAirports({ tier: 'small' });
+    dense[0] = airport({ ident: 'ZZUNK', lat: 10, tier: 'unknown' });
+    dense[1] = airport({ ident: 'ZZOTH', lat: 10.001, tier: 'other' });
+    renderAirports(dense);
+    expect(screen.queryByText('ZZUNK')).toBeNull();
+    expect(screen.queryByText('ZZOTH')).toBeNull();
+  });
+
+  it('labels every airport, tier aside, when under the density limit', () => {
+    renderAirports([
+      airport({ ident: 'ZZS1', tier: 'small' }),
+      airport({ ident: 'ZZS2', lat: 10.1, tier: 'unknown' }),
+    ]);
+    expect(screen.getByText('ZZS1')).toBeInTheDocument();
+    expect(screen.getByText('ZZS2')).toBeInTheDocument();
+  });
+
+  it('leaves glyph shape, color, fill and the direction line unaffected by label suppression', () => {
+    const dense = denseAirports({
+      longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 70, tier: 'small',
+    });
+    const { container } = renderAirports(dense);
+    const glyphs = container.querySelectorAll<HTMLElement>('div[data-glyph]');
+    expect(glyphs).toHaveLength(151);
+    expect(glyphs[0].getAttribute('data-glyph')).toBe('disc');
+    expect(glyphs[0].getAttribute('data-size')).toBe('13');
+    expect(glyphs[0].getAttribute('data-color')).toBe('#1d4ed8');
+    expect(glyphs[0].getAttribute('data-fill')).toBe('hollow');
+    expect(container.querySelectorAll('span[data-direction-line]')).toHaveLength(151);
   });
 });
 

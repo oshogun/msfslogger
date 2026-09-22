@@ -46,6 +46,26 @@ describe('kindNote', () => {
   it('trusts an empty airport answer because the index is global', () => {
     expect(kindNote('airports', emptyFeatures())).toBe('None here');
   });
+
+  it('names the tier and hidden count when airports are thinned to large', () => {
+    const d = emptyFeatures({ airportThinning: { mode: 'tier', through: 'large', hidden: 12, byTier: null, nextZoom: 7 } });
+    expect(kindNote('airports', d)).toBe('Major airports only — 12 more when you zoom in');
+  });
+
+  it('names the tier and hidden count when airports are thinned to medium', () => {
+    const d = emptyFeatures({ airportThinning: { mode: 'tier', through: 'medium', hidden: 1686, byTier: null, nextZoom: 8 } });
+    expect(kindNote('airports', d)).toBe('Major and regional airports — 1686 more when you zoom in');
+  });
+
+  it('names the hidden count when airports are thinned to small', () => {
+    const d = emptyFeatures({ airportThinning: { mode: 'tier', through: 'small', hidden: 40, byTier: null, nextZoom: 9 } });
+    expect(kindNote('airports', d)).toBe('Hiding 40 unlisted or non-airport fields — zoom in for the rest');
+  });
+
+  it('names the hidden count when airports are thinned to unknown', () => {
+    const d = emptyFeatures({ airportThinning: { mode: 'tier', through: 'unknown', hidden: 3, byTier: null, nextZoom: 10 } });
+    expect(kindNote('airports', d)).toBe('Hiding 3 heliports and closed fields — zoom in for the rest');
+  });
 });
 
 describe('NavdataControls', () => {
@@ -94,8 +114,8 @@ describe('NavdataControls', () => {
     });
     renderControls(emptyFeatures({
       airports: [
-        { ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null },
-        { ident: 'ZZBB', lat: 1, lon: 1, name: null, hasDetail: true, runways: 1, procedures: 1, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null },
+        { ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null },
+        { ident: 'ZZBB', lat: 1, lon: 1, name: null, hasDetail: true, runways: 1, procedures: 1, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null },
       ],
     }));
     const buttons = screen.getAllByRole('button', { name: 'Fetch detail' });
@@ -108,7 +128,7 @@ describe('NavdataControls', () => {
   it('shows a failed request instead of throwing, and lets it be retried', async () => {
     mockFetchRoutes({ '/api/navdata/request': { POST: [500, { error: 'nope' }] } });
     renderControls(emptyFeatures({
-      airports: [{ ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null }],
+      airports: [{ ident: 'ZZAA', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null }],
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Fetch detail' }));
     await waitFor(() => expect(screen.getByText('Request failed: nope')).toBeInTheDocument());
@@ -117,7 +137,7 @@ describe('NavdataControls', () => {
 
   it('never offers fetch detail for an ident that is not airport-shaped', () => {
     renderControls(emptyFeatures({
-      airports: [{ ident: 'ZZ-BAD!', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null }],
+      airports: [{ ident: 'ZZ-BAD!', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null }],
     }));
     expect(screen.queryByRole('button', { name: 'Fetch detail' })).toBeNull();
   });

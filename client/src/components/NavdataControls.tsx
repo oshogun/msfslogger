@@ -22,6 +22,13 @@ export function kindNote(kind: NavdataKind, data: FeaturesResponse): string | nu
   if (data.gated.includes(kind)) return `Zoom in to see ${kind}`;
 
   if (kind === 'airports') {
+    if (data.airportThinning.mode === 'tier') {
+      const { through, hidden } = data.airportThinning;
+      if (through === 'large') return `Major airports only — ${hidden} more when you zoom in`;
+      if (through === 'medium') return `Major and regional airports — ${hidden} more when you zoom in`;
+      if (through === 'small') return `Hiding ${hidden} unlisted or non-airport fields — zoom in for the rest`;
+      if (through === 'unknown') return `Hiding ${hidden} heliports and closed fields — zoom in for the rest`;
+    }
     return data.coverage.airportsComplete && data.airports.length === 0 ? 'None here' : null;
   }
   const cov =

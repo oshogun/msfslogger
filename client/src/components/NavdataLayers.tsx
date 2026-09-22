@@ -258,20 +258,24 @@ function airportDirectionLineHtml(g: AirportGlyph): string {
   );
 }
 
-/** Frozen markup for one airport glyph, `ident` already escaped by the caller. */
-function airportIconHtml(g: AirportGlyph, ident: string): string {
+/** Frozen markup for one airport glyph, `ident` already escaped by the caller.
+ *  `showLabel` omits the ident `<span>` entirely rather than hiding it, so a
+ *  dense view draws fewer DOM nodes, not just fewer visible ones. */
+function airportIconHtml(g: AirportGlyph, ident: string, showLabel: boolean): string {
   const half = g.sizePx / 2;
   const body = g.shape === 'disc' && g.color !== null
     ? `border-radius:50%;${airportDiscStyle(g.color, g.fill)};box-shadow:0 0 0 1.5px ${AIRPORT_HALO}`
     : `transform:rotate(45deg);background:transparent;border:1.5px solid ${AIRPORT_UNKNOWN_STROKE};filter:drop-shadow(0 0 1.5px #fff)`;
   const line = airportDirectionLineHtml(g);
+  const label = showLabel
+    ? `<span style="position:absolute;left:${g.labelLeftPx}px;top:-7px;line-height:14px;font:600 10px system-ui;` +
+      `color:#e2e8f0;text-shadow:0 0 3px #000,0 0 3px #000">${ident}</span>`
+    : '';
   return (
     `<div data-glyph="${g.shape}" data-size="${g.sizePx}" data-color="${g.color ?? 'none'}" data-fill="${g.fill}" ` +
     `style="position:relative;width:0;height:0;pointer-events:none">${line}` +
     `<span style="position:absolute;left:${-half}px;top:${-half}px;width:${g.sizePx}px;height:${g.sizePx}px;` +
-    `box-sizing:border-box;${body}"></span>` +
-    `<span style="position:absolute;left:${g.labelLeftPx}px;top:-7px;line-height:14px;font:600 10px system-ui;` +
-    `color:#e2e8f0;text-shadow:0 0 3px #000,0 0 3px #000">${ident}</span></div>`
+    `box-sizing:border-box;${body}"></span>${label}</div>`
   );
 }
 
@@ -283,14 +287,18 @@ function airportIconHtml(g: AirportGlyph, ident: string): string {
  * runwayLabelIcon(): iconSize/iconAnchor both [0,0], every child placed from
  * the airport's own point, so no box-model change can drift it off the
  * airport.
+ *
+ * `showLabel` is required, not defaulted, so every call site states whether
+ * this airport's ident should draw — density-based suppression above some
+ * count is a caller decision, not something this glyph guesses on its own.
  */
-export function airportIcon(a: FeatureAirport): L.DivIcon {
+export function airportIcon(a: FeatureAirport, showLabel: boolean): L.DivIcon {
   const g = airportGlyph(a);
   return L.divIcon({
     className: '',
     iconSize: [0, 0],
     iconAnchor: [0, 0],
-    html: airportIconHtml(g, escapeHtml(a.ident)),
+    html: airportIconHtml(g, escapeHtml(a.ident), showLabel),
   });
 }
 
@@ -305,6 +313,7 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
   const map = useMap();
   const renderer = navdataRenderer(map);
   const labelled = data.waypoints.length + data.navaids.length <= LABEL_LIMIT;
+  const airportsLabelled = data.airports.length <= LABEL_LIMIT;
 
   return (
     <>
@@ -392,7 +401,7 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
           <Marker
             key={a.ident}
             position={unwrapPoint(anchor, a.lat, a.lon)}
-            icon={airportIcon(a)}
+            icon={airportIcon(a, airportsLabelled || a.tier === 'large' || a.tier === 'medium')}
             pane={NAVDATA_MARKER_PANE}
             interactive={false}
           />

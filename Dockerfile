@@ -29,5 +29,6 @@ RUN npm ci --omit=dev
 COPY --from=server-builder /app/dist ./dist
 COPY --from=client-builder /app/client/dist ./client/dist
 COPY airports.json ./
+COPY airport-tiers.json ./
 EXPOSE 3000
 CMD ["node", "dist/index.js"]

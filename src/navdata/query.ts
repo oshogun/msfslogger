@@ -8,10 +8,14 @@
 
 import type Database from 'better-sqlite3';
 import { upsertNavdataRequest } from '../db/navdataRequests';
+import {
+  AIRPORT_TIER_BY_CODE, AIRPORT_TIER_LAST_CODE, AIRPORT_TIER_ZOOM_MIN,
+  airportTierFloor, airportTierMapSize, airportTierOf, chooseAirportTier, ensureAirportTierTable,
+} from './airportTiers';
 import type {
-  AirportDetailResponse, AirportProcedureSummary, AirportSurface, FeatureAirport, FeatureAirwayLeg, FeatureCoverage,
-  FeatureCoverageKind, FeatureNavaid, FeatureRunway, FeatureWaypoint, FeaturesResponse,
-  NavdataStatusResponse,
+  AirportDetailResponse, AirportProcedureSummary, AirportSurface, AirportThinning, AirportTier, FeatureAirport,
+  FeatureAirwayLeg, FeatureCoverage, FeatureCoverageKind, FeatureNavaid, FeatureRunway, FeatureWaypoint,
+  FeaturesResponse, NavdataStatusResponse,
 } from './queryTypes';
 import type { SidecarStateRecord } from './sidecarState';
 import type { DetailState, NavdataRequestBody, NavdataRequestResponse } from './wire';
@@ -166,6 +170,49 @@ const AIRPORT_SYMBOL_COLUMNS = `
          SELECT MAX(f.freq_type = 6) FROM nav_airport_frequency f
           WHERE f.airport_ident = a.ident) END AS tower_flag`;
 
+/**
+ * The tier of one nav_airport row, as one expression: the sim's own longest
+ * runway where the detail was fetched, then the OurAirports class, then 4 for
+ * an ident nothing classifies. `alias` is the table reference of the
+ * nav_airport row — `nav_airport` inside the features query's unaliased inner
+ * select, `a` in the histogram — so the filter and the histogram can never
+ * disagree.
+ *
+ * Three things here are load-bearing and must not be tidied away:
+ *  - the outer CASE gates the runway probe on detail_state, so it fires for
+ *    the handful of detail-fetched airports instead of every candidate row;
+ *  - MAX(length_m) is deliberate where the symbol columns use ORDER BY ...
+ *    LIMIT 1 — those need one specific row's surface and heading, this needs
+ *    only the maximum, and MAX avoids a sort;
+ *  - MAX() over no rows is NULL, so a detail-fetched airport with no usable
+ *    runway falls through to the OurAirports class exactly as an unfetched
+ *    one would.
+ */
+export const AIRPORT_TIER_EXPR = (alias: string): string => `COALESCE(
+         CASE WHEN ${alias}.detail_state = 'detail' THEN (
+           SELECT CASE WHEN MAX(r.length_m) >= 2500 THEN 1
+                       WHEN MAX(r.length_m) >= 1200 THEN 2
+                       WHEN MAX(r.length_m) IS NOT NULL THEN 3 END
+             FROM nav_runway r WHERE r.airport_ident = ${alias}.ident) END,
+         (SELECT ti.tier FROM temp.nav_airport_tier ti WHERE ti.ident = ${alias}.ident),
+         4)`;
+
+/** The one line added to the features query's inner WHERE when a tier filter
+ *  applies. Omitted entirely when the chosen tier is the last one, which
+ *  leaves today's statement character for character. Bound parameter: the
+ *  chosen tier code. */
+const AIRPORT_TIER_FILTER = `AND ${AIRPORT_TIER_EXPR('nav_airport')} <= ?`;
+
+/** Unfiltered per-tier counts for a bbox. No LIMIT on purpose: this is what
+ *  makes `hidden` exact and what the tier choice is made from. `lonClauseSql`
+ *  is the caller's existing longitude fragment, built for the `a.lon`
+ *  column. Parameters: s, n, ...lonClause('a.lon', ranges).params. */
+export const AIRPORT_TIER_HISTOGRAM_SQL = (lonClauseSql: string): string =>
+  `SELECT ${AIRPORT_TIER_EXPR('a')} AS tier, COUNT(*) AS n
+     FROM nav_airport a
+    WHERE a.lat BETWEEN ? AND ? AND ${lonClauseSql}
+    GROUP BY 1`;
+
 const SURFACE_PAVED = new Set([0, 4, 10, 15, 16, 17, 18, 19, 23, 32]);
 const SURFACE_WATER = new Set([2, 26, 27, 28, 29, 30, 31]);
 
@@ -231,26 +278,89 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
 
   const pointClause = lonClause('lon', ranges);
 
-  const airports = fetch(
-    'airports',
-    () => nav!.prepare(
-      `SELECT a.*, ${AIRPORT_SYMBOL_COLUMNS}
+  // Overwritten only when the airports branch actually ran a tier decision;
+  // every other outcome (kind not requested, zoom-gated, no replica, no
+  // classification data loaded) leaves the map's opinion out of it entirely.
+  let airportThinning: AirportThinning = { mode: 'none', through: null, hidden: 0, byTier: null, nextZoom: null };
+
+  const unfilteredAirportsSql = `
+       SELECT a.*, ${AIRPORT_SYMBOL_COLUMNS}
          FROM (SELECT ident, lat, lon, name, detail_state, detail_runways, detail_procedures,
                       n_runways, n_approaches, n_departures, n_arrivals
                  FROM nav_airport
                 WHERE lat BETWEEN ? AND ? AND ${pointClause.clause}
-                ORDER BY ident ASC LIMIT ?) a`,
-    ).all(s, n, ...pointClause.params, limit + 1) as Record<string, any>[],
+                ORDER BY ident ASC LIMIT ?) a`;
+
+  const airports = fetch(
+    'airports',
+    () => {
+      ensureAirportTierTable(nav!);
+
+      // No classification data loaded. The query stays exactly what it is
+      // today, and no tier is ever consulted — a caller that never touches
+      // this feature sees no behaviour change at all.
+      if (airportTierMapSize() === 0) {
+        return nav!.prepare(unfilteredAirportsSql).all(s, n, ...pointClause.params, limit + 1) as Record<string, any>[];
+      }
+
+      const floor = airportTierFloor(zoom);
+      if (floor === AIRPORT_TIER_LAST_CODE) {
+        // The common zoomed-in case: every tier is already admitted by zoom
+        // alone, so no histogram is worth running.
+        return nav!.prepare(unfilteredAirportsSql).all(s, n, ...pointClause.params, limit + 1) as Record<string, any>[];
+      }
+
+      const histClause = lonClause('a.lon', ranges);
+      const histRows = nav!.prepare(AIRPORT_TIER_HISTOGRAM_SQL(histClause.clause)).all(
+        s, n, ...histClause.params,
+      ) as { tier: number; n: number }[];
+      const byCode: Record<number, number> = {};
+      for (const row of histRows) byCode[row.tier] = row.n;
+      const byTier: Record<AirportTier, number> = {
+        large: byCode[1] ?? 0, medium: byCode[2] ?? 0, small: byCode[3] ?? 0,
+        unknown: byCode[4] ?? 0, other: byCode[5] ?? 0,
+      };
+
+      const chosen = chooseAirportTier(byCode, zoom);
+      if (chosen === AIRPORT_TIER_LAST_CODE) {
+        // A quiet viewport with nothing left to filter: report the counts
+        // that were measured, but run the unfiltered query.
+        airportThinning = { mode: 'none', through: null, hidden: 0, byTier, nextZoom: null };
+        return nav!.prepare(unfilteredAirportsSql).all(s, n, ...pointClause.params, limit + 1) as Record<string, any>[];
+      }
+
+      let cumThrough = 0;
+      for (let t = 1; t <= chosen; t++) cumThrough += byCode[t] ?? 0;
+      const total = byTier.large + byTier.medium + byTier.small + byTier.unknown + byTier.other;
+      airportThinning = {
+        mode: 'tier',
+        through: AIRPORT_TIER_BY_CODE[chosen] as AirportTier,
+        hidden: total - cumThrough,
+        byTier,
+        nextZoom: AIRPORT_TIER_ZOOM_MIN[AIRPORT_TIER_BY_CODE[chosen + 1] as AirportTier],
+      };
+      return nav!.prepare(
+        `SELECT a.*, ${AIRPORT_SYMBOL_COLUMNS}
+           FROM (SELECT ident, lat, lon, name, detail_state, detail_runways, detail_procedures,
+                        n_runways, n_approaches, n_departures, n_arrivals
+                   FROM nav_airport
+                  WHERE lat BETWEEN ? AND ? AND ${pointClause.clause}
+                  ${AIRPORT_TIER_FILTER}
+                  ORDER BY ident ASC LIMIT ?) a`,
+      ).all(s, n, ...pointClause.params, chosen, limit + 1) as Record<string, any>[];
+    },
     (r): FeatureAirport => {
       const hasDetail = r.detail_state === 'detail';
       const listed = [r.n_approaches, r.n_departures, r.n_arrivals];
+      const symbolFields = airportSymbolFields(r, hasDetail);
       return {
         ident: r.ident, lat: r.lat, lon: r.lon, name: r.name, hasDetail,
         runways: hasDetail ? r.detail_runways : r.n_runways,
         procedures: hasDetail
           ? r.detail_procedures
           : listed.every(v => v == null) ? null : listed.reduce((a, v) => a + (v ?? 0), 0),
-        ...airportSymbolFields(r, hasDetail),
+        ...symbolFields,
+        tier: airportTierOf(r.ident, symbolFields.longestRunwayM),
       };
     },
   );
@@ -320,6 +430,7 @@ export function queryFeatures(nav: Database.Database | null, q: FeaturesQuery): 
     bbox, zoom, gated, truncated, limit,
     airports, navaids, waypoints, airways, runways,
     coverage: coverageFor(nav, bbox),
+    airportThinning,
   };
 }
 

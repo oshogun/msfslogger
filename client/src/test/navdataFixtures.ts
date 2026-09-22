@@ -22,6 +22,7 @@ export function emptyFeatures(over: Partial<FeaturesResponse> = {}): FeaturesRes
       byKind: { V: cov(4, 1), N: cov(4, 1), W: cov(4, 1) },
       airportsComplete: true,
     },
+    airportThinning: { mode: 'none', through: null, hidden: 0, byTier: null, nextZoom: null },
     ...over,
   };
 }

@@ -14,6 +14,9 @@ import { SidecarStateStore } from '../src/navdata/sidecarState';
 import { applyNavdataSchema } from '../src/navdata/schema';
 import { closeNavDb, openNavdata } from '../src/navdata/connection';
 import { runwayDesignation, totalCells, lonRanges, parseBbox } from '../src/navdata/query';
+import {
+  AIRPORT_VIEWPORT_BUDGET, airportTierFloor, chooseAirportTier, setAirportTiers,
+} from '../src/navdata/airportTiers';
 import { listNavdataRequests } from '../src/db/navdataRequests';
 import { applyNavRows } from '../src/navdata/store';
 import { createScratchDb, destroyScratchDb, type ScratchDb } from './helpers/db';
@@ -86,6 +89,7 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
   if (savedEnv === undefined) delete process.env.NAVDATA_DB_PATH;
   else process.env.NAVDATA_DB_PATH = savedEnv;
+  setAirportTiers([]);
 });
 
 describe('bbox and cells', () => {
@@ -253,6 +257,112 @@ describe('GET /features', () => {
     expect((await get('/api/navdata/features?bbox=1,2,3,4')).status).toBe(400);
     expect((await get('/api/navdata/features?bbox=1,2,3,4&zoom=21')).status).toBe(400);
     expect((await get('/api/navdata/features?bbox=1,2,3,4&zoom=5&kinds=bogus')).status).toBe(400);
+  });
+});
+
+describe('airport tiering', () => {
+  afterEach(() => setAirportTiers([]));
+
+  const runway = (ident: string, lat: number, lon: number, lengthM: number): Row => ({
+    rwy_key: `${ident}|len${lengthM}`, airport_ident: ident, lat, lon, length_m: lengthM, rev: 1,
+  });
+
+  it("prefers the sim's own runway length over the OurAirports label, and reports 'unknown' for an ident neither source knows", async () => {
+    // RJBE is labelled large_airport upstream but its longest fetched runway
+    // (2487 m) is a medium by the sim thresholds — the sim wins.
+    setAirportTiers([['ZZLRG', 1], ['RJBE', 1]]);
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZLRG', 10, 20));
+      insert(db, 'nav_airport', ap('RJBE', 10, 21, { detail_state: 'detail' }));
+      insert(db, 'nav_runway', runway('RJBE', 10, 21, 2487));
+      insert(db, 'nav_airport', ap('ZZUNK', 10, 22));
+    });
+    const body = await features('bbox=19,9,23,11&zoom=9'); // full reveal: no filter runs
+    const tierByIdent = Object.fromEntries(body.airports.map((a: any) => [a.ident, a.tier]));
+    expect(tierByIdent).toEqual({ ZZLRG: 'large', RJBE: 'medium', ZZUNK: 'unknown' });
+    expect(body.airportThinning).toEqual({ mode: 'none', through: null, hidden: 0, byTier: null, nextZoom: null });
+  });
+
+  it('gates an unmatched ident to the full-reveal zoom, never hiding it past that zoom and never promoting it early', async () => {
+    setAirportTiers([['ZZLRG', 1]]);
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZLRG', 10, 20));
+      insert(db, 'nav_airport', ap('ZZUNK', 10, 20.01));
+    });
+    const thin = await features('bbox=19,9,21,11&zoom=6');
+    expect(thin.airports.map((a: any) => a.ident)).toEqual(['ZZLRG']);
+    expect(thin.airportThinning).toMatchObject({ mode: 'tier', hidden: 1, nextZoom: 9 });
+    expect(thin.airportThinning.byTier).toEqual({ large: 1, medium: 0, small: 0, unknown: 1, other: 0 });
+
+    const full = await features('bbox=19,9,21,11&zoom=9');
+    expect(full.airports.map((a: any) => a.ident).sort()).toEqual(['ZZLRG', 'ZZUNK']);
+    expect(full.airportThinning).toEqual({ mode: 'none', through: null, hidden: 0, byTier: null, nextZoom: null });
+  });
+
+  it('filters and histograms by the sim tier, not the label, when a viewport is dense enough that the budget cannot lift the floor', async () => {
+    const fillerCount = AIRPORT_VIEWPORT_BUDGET + 1;
+    const fillerIdent = (i: number): string => `ZZ${String(i).padStart(4, '0')}`;
+    setAirportTiers([
+      ...Array.from({ length: fillerCount }, (_, i) => [fillerIdent(i), 1] as const),
+      ['RJBE', 1], // labelled large upstream; the sim will say medium
+    ]);
+    buildReplica(db => {
+      const insertAirport = db.prepare(
+        "INSERT INTO nav_airport (ident, lat, lon, name, detail_state, rev) VALUES (?, 10, ?, ?, 'index', 1)",
+      );
+      const insertMany = db.transaction((n: number) => {
+        for (let i = 0; i < n; i++) insertAirport.run(fillerIdent(i), 20 + i * 0.0001, `Field ${i}`);
+      });
+      insertMany(fillerCount);
+      insert(db, 'nav_airport', ap('RJBE', 10, 20.5, { detail_state: 'detail' }));
+      insert(db, 'nav_runway', runway('RJBE', 10, 20.5, 2487));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6'); // floor = large; the large bucket alone exceeds the budget
+    expect(body.airportThinning).toMatchObject({ mode: 'tier', through: 'large', hidden: 1, nextZoom: 7 });
+    expect(body.airportThinning.byTier).toEqual({ large: fillerCount, medium: 1, small: 0, unknown: 0, other: 0 });
+    expect(body.airports).toHaveLength(fillerCount);
+    expect(body.airports.some((a: any) => a.ident === 'RJBE')).toBe(false);
+  });
+
+  it("keeps the SQL filter's result identical to a JS post-filter over the unlimited population, for a viewport well under any limit", async () => {
+    setAirportTiers([['ZZL1', 1], ['ZZL2', 1], ['ZZM1', 2], ['ZZM2', 2]]);
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZL1', 10, 20));
+      insert(db, 'nav_airport', ap('ZZL2', 10, 20.01));
+      insert(db, 'nav_airport', ap('ZZM1', 10, 20.02));
+      insert(db, 'nav_airport', ap('ZZM2', 10, 20.03));
+      insert(db, 'nav_airport', ap('ZZQ1', 10, 20.04)); // unmatched -> 'unknown', excluded at zoom 7
+      insert(db, 'nav_airport', ap('ZZQ2', 10, 20.05));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=7&limit=2000');
+    expect(body.truncated).toBe(false);
+    // Nothing here reaches the budget, so the floor (medium) lifts all the way
+    // to small; only the two unmatched idents are excluded.
+    const sqlFiltered = body.airports.map((a: any) => a.ident).sort();
+    const expected = ['ZZL1', 'ZZL2', 'ZZM1', 'ZZM2'].sort();
+    expect(sqlFiltered).toEqual(expected);
+    expect(body.airportThinning).toMatchObject({ mode: 'tier', through: 'small', hidden: 2 });
+  });
+
+  it('runs unfiltered with tier: null when no classification file is loaded, and still classifies a detail-fetched airport from the sim', async () => {
+    // setAirportTiers([]) in the outer afterEach already left the map empty;
+    // no call here at all is the point of this test.
+    buildReplica(db => {
+      insert(db, 'nav_airport', ap('ZZIDX', 10, 20));
+      insert(db, 'nav_airport', ap('ZZDET', 10, 20.01, { detail_state: 'detail' }));
+      insert(db, 'nav_runway', runway('ZZDET', 10, 20.01, 3000));
+    });
+    const body = await features('bbox=19,9,21,11&zoom=6');
+    const tierByIdent = Object.fromEntries(body.airports.map((a: any) => [a.ident, a.tier]));
+    expect(tierByIdent).toEqual({ ZZIDX: null, ZZDET: 'large' });
+    expect(body.airportThinning).toEqual({ mode: 'none', through: null, hidden: 0, byTier: null, nextZoom: null });
+  });
+
+  it('reproduces the frozen reveal-ladder decision for a measured sample viewport (Bogotá, zoom 6)', () => {
+    // cum L/M/S/unk/other = 54/260/976/1903/1946 -> per-tier counts:
+    const byTierCounts = { 1: 54, 2: 260 - 54, 3: 976 - 260, 4: 1903 - 976, 5: 1946 - 1903 };
+    expect(airportTierFloor(6)).toBe(1);
+    expect(chooseAirportTier(byTierCounts, 6)).toBe(2); // 'medium' — matches the frozen table's "shown through medium"
   });
 });
 

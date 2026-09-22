@@ -764,6 +764,33 @@ export interface NavdataStatusResponse {
 /** Surface class of the airport's LONGEST runway. Never inferred when unknown. */
 export type AirportSurface = 'paved' | 'water' | 'soft';
 
+/** An airport's size class, in reveal order: a lower tier is revealed at a
+ *  lower zoom. 'unknown' means the airport has no fetched detail and no
+ *  OurAirports row carries its ident — it is NOT a claim that the airport is
+ *  small. 'other' is a positively classified heliport, seaplane base,
+ *  balloonport or closed field. */
+export type AirportTier = 'large' | 'medium' | 'small' | 'unknown' | 'other';
+
+/** Why the airport list is shorter than the bbox's contents. Separate from
+ *  `truncated`, which reports the `limit` cut on whatever passed the filter. */
+export interface AirportThinning {
+  /** 'none' = no tier filter ran and every airport in the bbox was eligible.
+   *  'tier' = only airports up to `through` were returned. */
+  mode: 'none' | 'tier';
+  /** The last tier included. null iff mode === 'none'. Never 'other': when the
+   *  last tier is admitted nothing is filtered, so mode is 'none'. */
+  through: AirportTier | null;
+  /** Airports inside the bbox the tier filter excluded. 0 iff mode === 'none'. */
+  hidden: number;
+  /** Unfiltered per-tier counts for this bbox, every key present including
+   *  zeros. null when no histogram ran: the airports kind was not requested,
+   *  or was zoom-gated, or the zoom already admits every tier. */
+  byTier: Record<AirportTier, number> | null;
+  /** Lowest zoom at which the tier after `through` is admitted. null iff
+   *  mode === 'none'. */
+  nextZoom: number | null;
+}
+
 export interface FeatureAirport {
   ident: string; lat: number; lon: number; name: string | null;
   hasDetail: boolean; runways: number | null; procedures: number | null;
@@ -781,6 +808,11 @@ export interface FeatureAirport {
    *  row. null = not known — either detail hasn't been fetched, or that row's
    *  heading_deg column is itself null (independent of length/surface). */
   longestRunwayHeadingDeg: number | null;
+  /** This airport's size class. null = neither source could be consulted: no
+   *  fetched runway and no classification data loaded. Distinct from
+   *  'unknown', which is a measured fact about OurAirports' coverage; neither
+   *  may be read as "small". */
+  tier: AirportTier | null;
 }
 export interface FeatureNavaid {
   kind: 'V' | 'N'; ident: string; region: string; lat: number; lon: number;
@@ -813,6 +845,8 @@ export interface FeaturesResponse {
   airports: FeatureAirport[]; navaids: FeatureNavaid[]; waypoints: FeatureWaypoint[];
   airways: FeatureAirwayLeg[]; runways: FeatureRunway[];
   coverage: FeatureCoverage;
+  /** Always present, never null. */
+  airportThinning: AirportThinning;
 }
 
 export interface AirportProcedureSummary {

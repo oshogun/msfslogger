@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { loadConfig, ConfigError } from './config';
 import { initDb, closeDb, getAuthUser, sessionSweep } from './db';
 import { openNavdata, closeNavDb } from './navdata/connection';
+import { loadAirportTiers } from './navdata/airportTiers';
 import { initAirports } from './airports';
 import { ensureFlightPlansDir } from './flightPlans';
 import { FlightManager } from './flightManager';
@@ -39,6 +40,7 @@ try {
 } catch (err) {
   console.warn(`[Navdata] Could not open the replica: ${(err as Error).message}`);
 }
+loadAirportTiers();
 
 // The server refuses to start with no operator account — there is no HTTP
 // setup flow.
