@@ -2,7 +2,7 @@ import { Fragment, useMemo, type ReactNode } from 'react';
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { unwrapLonChain } from '../utils/geo';
-import type { FeatureAirport, FeaturesResponse } from '../types';
+import type { AirportTier, FeatureAirport, FeaturesResponse } from '../types';
 
 export const NAVDATA_PANE = 'navdata';
 export const NAVDATA_MARKER_PANE = 'navdata-markers';
@@ -302,6 +302,100 @@ export function airportIcon(a: FeatureAirport, showLabel: boolean): L.DivIcon {
   });
 }
 
+/** A candidate airport ident placed on screen, ready for the collision pass.
+ *  `priorityRank` is the caller's flattened ordering (tier, then longest
+ *  runway, then ident — see `compareAirportLabelPriority`): lower decides,
+ *  and draws, first. */
+export interface LabelCandidate {
+  key: string;
+  x: number;
+  y: number;
+  priorityRank: number;
+}
+
+/** Roughly an icon plus a short 3-4 letter ident at this file's label font
+ *  sizes/offsets — the screen distance inside which two airport labels are
+ *  judged to overlap. */
+export const AIRPORT_LABEL_COLLISION_PX = 42;
+
+/**
+ * Greedy priority-ordered label suppression: a candidate gets a label iff no
+ * higher-priority (already-labelled) candidate sits within `collisionPx` of
+ * it. Grid-bucketed (cell size = `collisionPx`) so only the ~9 neighbouring
+ * cells are ever checked per candidate, keeping the pass near-linear instead
+ * of the O(n^2) an all-pairs check would be at a full-viewport candidate
+ * count.
+ */
+export function chooseLabelledCandidates(
+  candidates: readonly LabelCandidate[],
+  collisionPx: number
+): Set<string> {
+  const ordered = [...candidates].sort((a, b) => a.priorityRank - b.priorityRank);
+  // Only labelled candidates occupy the grid: a suppressed one has no drawn
+  // text to collide with, so it can never block a later candidate either.
+  const grid = new Map<string, LabelCandidate[]>();
+  const labelled = new Set<string>();
+  const cellOf = (v: number) => Math.floor(v / collisionPx);
+  const cellKey = (cx: number, cy: number) => `${cx}:${cy}`;
+
+  for (const c of ordered) {
+    const cx = cellOf(c.x);
+    const cy = cellOf(c.y);
+    let collides = false;
+    for (let dx = -1; dx <= 1 && !collides; dx++) {
+      for (let dy = -1; dy <= 1 && !collides; dy++) {
+        const bucket = grid.get(cellKey(cx + dx, cy + dy));
+        if (!bucket) continue;
+        for (const other of bucket) {
+          const ddx = c.x - other.x;
+          const ddy = c.y - other.y;
+          if (Math.sqrt(ddx * ddx + ddy * ddy) < collisionPx) {
+            collides = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!collides) {
+      labelled.add(c.key);
+      const key = cellKey(cx, cy);
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(c);
+      else grid.set(key, [c]);
+    }
+  }
+
+  return labelled;
+}
+
+// Same reveal-ladder ordinal as the server's tier classification: a lower
+// number is the more significant airport. An airport with no tier at all
+// (neither the sim nor OurAirports could classify it) ranks below even
+// 'other' — 'other' is still a positive classification, no tier is none.
+const AIRPORT_LABEL_TIER_RANK: Record<AirportTier, number> = {
+  large: 0, medium: 1, small: 2, unknown: 3, other: 4,
+};
+const AIRPORT_LABEL_TIER_RANK_NONE = 5;
+
+/**
+ * Label-priority order for one pair of airports: tier first, then longest
+ * runway descending within a tier (a known length always beats an unknown
+ * one — `null` never wins a tie against a real number), then ident ascending
+ * so the same view chooses the same labels on every re-render. Negative
+ * means `a` decides, and draws, before `b`.
+ */
+export function compareAirportLabelPriority(a: FeatureAirport, b: FeatureAirport): number {
+  const tierRank = (t: AirportTier | null) => (t === null ? AIRPORT_LABEL_TIER_RANK_NONE : AIRPORT_LABEL_TIER_RANK[t]);
+  const tierDiff = tierRank(a.tier) - tierRank(b.tier);
+  if (tierDiff !== 0) return tierDiff;
+  if (a.longestRunwayM !== b.longestRunwayM) {
+    if (a.longestRunwayM === null) return 1;
+    if (b.longestRunwayM === null) return -1;
+    return b.longestRunwayM - a.longestRunwayM;
+  }
+  return a.ident < b.ident ? -1 : a.ident > b.ident ? 1 : 0;
+}
+
 interface LayersProps {
   data: FeaturesResponse;
   anchor: [number, number];
@@ -313,7 +407,17 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
   const map = useMap();
   const renderer = navdataRenderer(map);
   const labelled = data.waypoints.length + data.navaids.length <= LABEL_LIMIT;
-  const airportsLabelled = data.airports.length <= LABEL_LIMIT;
+
+  const labelledAirportIdents = useMemo(() => {
+    if (!visible.airports || data.airports.length === 0) return new Set<string>();
+    const ordered = [...data.airports].sort(compareAirportLabelPriority);
+    const candidates: LabelCandidate[] = ordered.map((a, priorityRank) => {
+      const [lat, lon] = unwrapPoint(anchor, a.lat, a.lon);
+      const { x, y } = map.latLngToContainerPoint([lat, lon]);
+      return { key: a.ident, x, y, priorityRank };
+    });
+    return chooseLabelledCandidates(candidates, AIRPORT_LABEL_COLLISION_PX);
+  }, [data, map, anchor, visible.airports]);
 
   return (
     <>
@@ -401,7 +505,7 @@ export function NavdataLayers({ data, anchor, visible }: LayersProps) {
           <Marker
             key={a.ident}
             position={unwrapPoint(anchor, a.lat, a.lon)}
-            icon={airportIcon(a, airportsLabelled || a.tier === 'large' || a.tier === 'medium')}
+            icon={airportIcon(a, labelledAirportIdents.has(a.ident))}
             pane={NAVDATA_MARKER_PANE}
             interactive={false}
           />

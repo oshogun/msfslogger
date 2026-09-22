@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MapContainer } from 'react-leaflet';
-import { airportGlyph, NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint, type NavdataVisibility } from './NavdataLayers';
+import L from 'leaflet';
+import {
+  AIRPORT_LABEL_COLLISION_PX, airportGlyph, chooseLabelledCandidates, compareAirportLabelPriority,
+  NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint,
+  type LabelCandidate, type NavdataVisibility,
+} from './NavdataLayers';
 import { FlightMap } from './FlightMap';
 import { TripMap } from './TripMap';
 import { mockFetchRoutes } from '../test/mockFetch';
@@ -323,6 +328,117 @@ describe('airport glyphs', () => {
   });
 });
 
+describe('chooseLabelledCandidates', () => {
+  function candidate(over: Partial<LabelCandidate> = {}): LabelCandidate {
+    return { key: 'ZZAA', x: 0, y: 0, priorityRank: 0, ...over };
+  }
+
+  it('labels two candidates well outside the collision radius', () => {
+    const result = chooseLabelledCandidates(
+      [candidate({ key: 'A', x: 0, y: 0 }), candidate({ key: 'B', x: 200, y: 0, priorityRank: 1 })],
+      AIRPORT_LABEL_COLLISION_PX
+    );
+    expect(result).toEqual(new Set(['A', 'B']));
+  });
+
+  it('labels only the higher-priority candidate when two sit within the collision radius', () => {
+    const result = chooseLabelledCandidates(
+      [candidate({ key: 'A', x: 0, y: 0, priorityRank: 0 }), candidate({ key: 'B', x: 10, y: 0, priorityRank: 1 })],
+      AIRPORT_LABEL_COLLISION_PX
+    );
+    expect(result).toEqual(new Set(['A']));
+  });
+
+  it('ignores input order and decides purely by priorityRank', () => {
+    const result = chooseLabelledCandidates(
+      [candidate({ key: 'B', x: 10, y: 0, priorityRank: 1 }), candidate({ key: 'A', x: 0, y: 0, priorityRank: 0 })],
+      AIRPORT_LABEL_COLLISION_PX
+    );
+    expect(result).toEqual(new Set(['A']));
+  });
+
+  it('lets a third candidate through once it clears every already-labelled one, even close to the suppressed loser', () => {
+    // A wins the A/B collision; C sits right next to B (loser, not on the
+    // grid) but far enough from A that it collides with nothing labelled.
+    const result = chooseLabelledCandidates(
+      [
+        candidate({ key: 'A', x: 0, y: 0, priorityRank: 0 }),
+        candidate({ key: 'B', x: 10, y: 0, priorityRank: 1 }),
+        candidate({ key: 'C', x: 60, y: 0, priorityRank: 2 }),
+      ],
+      AIRPORT_LABEL_COLLISION_PX
+    );
+    expect(result).toEqual(new Set(['A', 'C']));
+  });
+
+  it('completes near-linearly over a large synthetic set (grid-bucketing sanity check)', () => {
+    const candidates: LabelCandidate[] = Array.from({ length: 2000 }, (_, i) => ({
+      key: `Z${i}`,
+      x: (i % 100) * 15,
+      y: Math.floor(i / 100) * 15,
+      priorityRank: i,
+    }));
+    const start = performance.now();
+    const result = chooseLabelledCandidates(candidates, AIRPORT_LABEL_COLLISION_PX);
+    const elapsedMs = performance.now() - start;
+    expect(result.size).toBeGreaterThan(0);
+    expect(result.size).toBeLessThan(candidates.length);
+    // Not a strict benchmark — just proof an O(n^2) regression would blow
+    // well past this on 2000 candidates in a unit test.
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+});
+
+describe('compareAirportLabelPriority', () => {
+  function airport(over: Partial<FeatureAirport> = {}): FeatureAirport {
+    return {
+      ident: 'ZZAA', lat: 10, lon: 20, name: null, hasDetail: true, runways: 1, procedures: 1,
+      longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null,
+      ...over,
+    };
+  }
+
+  it('orders large before medium before small before unknown before other', () => {
+    const airports = [
+      airport({ ident: 'S', tier: 'small' }),
+      airport({ ident: 'O', tier: 'other' }),
+      airport({ ident: 'L', tier: 'large' }),
+      airport({ ident: 'U', tier: 'unknown' }),
+      airport({ ident: 'M', tier: 'medium' }),
+    ];
+    expect([...airports].sort(compareAirportLabelPriority).map(a => a.ident)).toEqual(['L', 'M', 'S', 'U', 'O']);
+  });
+
+  it('ranks a null tier below every classified tier, including other', () => {
+    const airports = [airport({ ident: 'NONE', tier: null }), airport({ ident: 'OTHER', tier: 'other' })];
+    expect([...airports].sort(compareAirportLabelPriority).map(a => a.ident)).toEqual(['OTHER', 'NONE']);
+  });
+
+  it('within a tier, ranks the longer runway first', () => {
+    const airports = [
+      airport({ ident: 'SHORT', tier: 'large', longestRunwayM: 2600 }),
+      airport({ ident: 'LONG', tier: 'large', longestRunwayM: 4000 }),
+    ];
+    expect([...airports].sort(compareAirportLabelPriority).map(a => a.ident)).toEqual(['LONG', 'SHORT']);
+  });
+
+  it('never lets a null longestRunwayM win a tie against a known value', () => {
+    const airports = [
+      airport({ ident: 'UNKNOWN_LEN', tier: 'small', longestRunwayM: null }),
+      airport({ ident: 'KNOWN_LEN', tier: 'small', longestRunwayM: 800 }),
+    ];
+    expect([...airports].sort(compareAirportLabelPriority).map(a => a.ident)).toEqual(['KNOWN_LEN', 'UNKNOWN_LEN']);
+  });
+
+  it('breaks a same-tier, same-runway tie by ident ascending', () => {
+    const airports = [
+      airport({ ident: 'ZZB', tier: 'medium', longestRunwayM: 1500 }),
+      airport({ ident: 'ZZA', tier: 'medium', longestRunwayM: 1500 }),
+    ];
+    expect([...airports].sort(compareAirportLabelPriority).map(a => a.ident)).toEqual(['ZZA', 'ZZB']);
+  });
+});
+
 describe('airport labels', () => {
   const allOff: NavdataVisibility = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
 
@@ -345,60 +461,91 @@ describe('airport labels', () => {
     );
   }
 
-  // 151 airports, one over LABEL_LIMIT (150), so density suppression is live.
-  function denseAirports(over: Partial<FeatureAirport> = {}): FeatureAirport[] {
-    return Array.from({ length: 151 }, (_, i) => airport({ ident: `ZZ${i}`, lat: 10 + i * 0.001, ...over }));
+  // The real Leaflet projection is nonlinear and zoom-dependent — unrelated to
+  // what the collision pass itself needs proven. A flat px-per-degree stand-in
+  // makes the on-screen distance between two synthetic airports exactly what
+  // each test says it is, the same way `stubCanvasContext()` above stands in
+  // for a real canvas 2D context.
+  function stubContainerPoint(pxPerDegree: number) {
+    return vi.spyOn(L.Map.prototype, 'latLngToContainerPoint').mockImplementation((latlng => {
+      const { lat, lng } = L.latLng(latlng as L.LatLngExpression);
+      return L.point(lng * pxPerDegree, lat * pxPerDegree);
+    }) as L.Map['latLngToContainerPoint']);
   }
 
-  it('keeps a large-tier airport labelled above the density limit', () => {
-    const dense = denseAirports({ tier: 'small' });
-    dense[0] = airport({ ident: 'ZZBIG', lat: 10, tier: 'large' });
-    renderAirports(dense);
-    expect(screen.getByText('ZZBIG')).toBeInTheDocument();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  it('keeps a medium-tier airport labelled above the density limit', () => {
-    const dense = denseAirports({ tier: 'small' });
-    dense[0] = airport({ ident: 'ZZMED', lat: 10, tier: 'medium' });
-    renderAirports(dense);
-    expect(screen.getByText('ZZMED')).toBeInTheDocument();
-  });
-
-  it('suppresses a small-tier airport label above the density limit', () => {
-    renderAirports(denseAirports({ tier: 'small' }));
-    expect(screen.queryByText('ZZ0')).toBeNull();
-  });
-
-  it('suppresses unknown and other tier airport labels above the density limit', () => {
-    const dense = denseAirports({ tier: 'small' });
-    dense[0] = airport({ ident: 'ZZUNK', lat: 10, tier: 'unknown' });
-    dense[1] = airport({ ident: 'ZZOTH', lat: 10.001, tier: 'other' });
-    renderAirports(dense);
-    expect(screen.queryByText('ZZUNK')).toBeNull();
-    expect(screen.queryByText('ZZOTH')).toBeNull();
-  });
-
-  it('labels every airport, tier aside, when under the density limit', () => {
+  it('labels both airports of a same-tier pair placed well apart on screen', () => {
+    stubContainerPoint(10_000); // 0.01 deg lon apart -> 100px, above the 42px threshold
     renderAirports([
-      airport({ ident: 'ZZS1', tier: 'small' }),
-      airport({ ident: 'ZZS2', lat: 10.1, tier: 'unknown' }),
+      airport({ ident: 'ZZFAR1', lat: 10, lon: 20, tier: 'large' }),
+      airport({ ident: 'ZZFAR2', lat: 10, lon: 20.01, tier: 'large' }),
     ]);
-    expect(screen.getByText('ZZS1')).toBeInTheDocument();
-    expect(screen.getByText('ZZS2')).toBeInTheDocument();
+    expect(screen.getByText('ZZFAR1')).toBeInTheDocument();
+    expect(screen.getByText('ZZFAR2')).toBeInTheDocument();
+  });
+
+  it('labels only the higher-priority airport of a pair placed close together on screen', () => {
+    stubContainerPoint(10_000); // 0.001 deg lon apart -> 10px, inside the 42px threshold
+    renderAirports([
+      airport({ ident: 'ZZSHORT', lat: 10, lon: 20, tier: 'large', longestRunwayM: 2600 }),
+      airport({ ident: 'ZZLONG', lat: 10, lon: 20.001, tier: 'large', longestRunwayM: 4000 }),
+    ]);
+    // ZZLONG has the longer runway within the same tier, so it wins the collision.
+    expect(screen.getByText('ZZLONG')).toBeInTheDocument();
+    expect(screen.queryByText('ZZSHORT')).toBeNull();
+  });
+
+  it('still draws the suppressed airport\'s glyph, just without its ident label', () => {
+    stubContainerPoint(10_000);
+    const { container } = renderAirports([
+      airport({ ident: 'ZZSHORT', lat: 10, lon: 20, tier: 'large', longestRunwayM: 2600 }),
+      airport({ ident: 'ZZLONG', lat: 10, lon: 20.001, tier: 'large', longestRunwayM: 4000 }),
+    ]);
+    expect(container.querySelectorAll('div[data-glyph]')).toHaveLength(2);
+  });
+
+  it('prefers a large-tier airport over a close small-tier one, tier ranking before proximity order', () => {
+    stubContainerPoint(10_000);
+    renderAirports([
+      airport({ ident: 'ZZSMALL', lat: 10, lon: 20, tier: 'small' }),
+      airport({ ident: 'ZZBIG', lat: 10, lon: 20.001, tier: 'large' }),
+    ]);
+    expect(screen.getByText('ZZBIG')).toBeInTheDocument();
+    expect(screen.queryByText('ZZSMALL')).toBeNull();
   });
 
   it('leaves glyph shape, color, fill and the direction line unaffected by label suppression', () => {
-    const dense = denseAirports({
+    stubContainerPoint(10_000);
+    // A tight cluster (10px pitch, well under the 42px threshold) so only the
+    // first-ranked airport keeps its label — the glyph markup for every
+    // other airport must still be present.
+    const cluster = Array.from({ length: 20 }, (_, i) => airport({
+      ident: `ZZ${i}`, lat: 10, lon: 20 + i * 0.001,
       longestRunwayM: 1500, surface: 'paved', towered: true, longestRunwayHeadingDeg: 70, tier: 'small',
-    });
-    const { container } = renderAirports(dense);
+    }));
+    const { container } = renderAirports(cluster);
     const glyphs = container.querySelectorAll<HTMLElement>('div[data-glyph]');
-    expect(glyphs).toHaveLength(151);
+    expect(glyphs).toHaveLength(20);
     expect(glyphs[0].getAttribute('data-glyph')).toBe('disc');
     expect(glyphs[0].getAttribute('data-size')).toBe('13');
     expect(glyphs[0].getAttribute('data-color')).toBe('#1d4ed8');
     expect(glyphs[0].getAttribute('data-fill')).toBe('hollow');
-    expect(container.querySelectorAll('span[data-direction-line]')).toHaveLength(151);
+    expect(container.querySelectorAll('span[data-direction-line]')).toHaveLength(20);
+    // Some, but not all, of the tightly-packed idents keep their label.
+    const labels = container.querySelectorAll('span[style*="text-shadow:0 0 3px #000"]');
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThan(20);
+  });
+
+  it('labels every airport of a sparse set, regardless of tier', () => {
+    stubContainerPoint(10_000); // 0.1 deg apart -> 1000px, far outside the threshold
+    renderAirports([
+      airport({ ident: 'ZZS1', lat: 10, lon: 20, tier: 'small' }),
+      airport({ ident: 'ZZS2', lat: 10, lon: 20.1, tier: 'unknown' }),
+    ]);
+    expect(screen.getByText('ZZS1')).toBeInTheDocument();
+    expect(screen.getByText('ZZS2')).toBeInTheDocument();
   });
 });
 
