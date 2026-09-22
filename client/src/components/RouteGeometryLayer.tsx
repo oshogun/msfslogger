@@ -308,7 +308,7 @@ export function RouteGeometryLayer({ legId, legSeq, geometry, label, note, ancho
             </Polyline>
             {synthetic ? (
               <Marker key={`${legId}-${c.name}-label`} position={c.points[0]} icon={mkComputedIcon()}>
-                <Tooltip permanent direction="top" offset={[0, -6]}>
+                <Tooltip direction="top" offset={[0, -6]}>
                   {c.name === 'approach' ? 'computed straight-in' : 'computed departure'}
                 </Tooltip>
               </Marker>
