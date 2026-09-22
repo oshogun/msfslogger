@@ -101,14 +101,27 @@ const mod360 = (deg: number) => ((deg % 360) + 360) % 360;
  * that end — rotated to the end's own approach heading, black on white so it
  * reads against the pavement rather than beside a dot marker like the other
  * navdata labels.
+ *
+ * The anchor is the icon's own (0,0), never a guessed pixel offset: a fixed
+ * `iconAnchor` assumes a fixed rendered box size, but the label's box varies
+ * with its text ("14" vs "32R") and CSS `rotate` alone pivots around the
+ * box's own center — whichever of those two centers doesn't match the
+ * anchor drags the label off the runway centerline once rotated, in a
+ * direction that flips between the two ends (they rotate ~180° apart),
+ * which is exactly the mirrored left/right drift this fixes. `translate(-50%,-50%)`
+ * (evaluated, per CSS, against the label's own shrink-to-fit box before the
+ * later `rotate` in the same list is applied) recenters the box on the
+ * anchor first, so `rotate` then pivots around that same point regardless of
+ * text length or angle.
  */
 function runwayLabelIcon(text: string, rotateDeg: number) {
   return L.divIcon({
     className: '',
-    iconAnchor: [14, 9],
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
     html:
-      `<div style="transform:rotate(${mod360(rotateDeg)}deg);text-align:center;white-space:nowrap;` +
-      `pointer-events:none;font:700 13px system-ui;color:#000;` +
+      `<div style="display:inline-block;transform:translate(-50%,-50%) rotate(${mod360(rotateDeg)}deg);` +
+      `white-space:nowrap;pointer-events:none;font:700 13px system-ui;color:#000;` +
       `text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 2px #fff,0 0 2px #fff">${text}</div>`,
   });
 }
