@@ -23,7 +23,6 @@ a:hover { text-decoration: underline; }
   z-index: 100;
 }
 .header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
-.header h1 span { color: #60a5fa; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
 
 .header-account {
@@ -967,7 +966,6 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
   text-align: center;
   margin-bottom: 0.5rem;
 }
-.login-form h1 span { color: #60a5fa; }
 
 .login-form label {
   display: flex;

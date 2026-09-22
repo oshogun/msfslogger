@@ -46,7 +46,7 @@ export function Login() {
   return (
     <div className="login-page">
       <form className="login-form" onSubmit={handleSubmit}>
-        <h1>msfs<span>logger</span></h1>
+        <h1>Sabiá</h1>
         {error && <p className="login-error" role="alert">{error}</p>}
         <label>
           Username
