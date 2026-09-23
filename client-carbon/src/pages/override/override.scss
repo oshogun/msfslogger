@@ -1,0 +1,132 @@
+// The Override is deliberately not Carbon-toned: a Tile frame, a hand-built
+// switch (a Carbon Toggle cannot be pulled away from the user) and a fake
+// cursor. Colours come from the Gray 100 tokens.
+
+.override-page,
+.override-page * {
+  cursor: none !important;
+}
+
+.override-page {
+  // Fills the Content region under the 3rem header.
+  min-height: calc(100vh - 3rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+}
+
+.override-frame.cds--tile {
+  width: 100%;
+  max-width: 26rem;
+  padding: 1.5rem 1.5rem 1.25rem;
+  border: 1px solid var(--cds-border-subtle-01, #393939);
+  transition: border-color 0.4s;
+
+  &.is-engaged {
+    border-color: var(--cds-support-warning, #f1c21b);
+  }
+}
+
+.override-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.override-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--cds-text-primary, #f4f4f4);
+}
+
+.override-sub {
+  margin-top: 0.25rem;
+  white-space: nowrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: var(--cds-text-secondary, #c6c6c6);
+}
+
+.override-switch {
+  display: block;
+  margin: 1.6rem auto;
+  background: none;
+  border: none;
+  padding: 0.5rem;
+}
+
+.override-switch:focus-visible {
+  outline: 2px solid var(--cds-focus, #fff);
+  outline-offset: 4px;
+  border-radius: 999px;
+}
+
+.override-switch-track {
+  display: block;
+  position: relative;
+  width: 116px;
+  height: 56px;
+  border-radius: 999px;
+  background: var(--cds-layer-accent-01, #393939);
+  border: 1px solid var(--cds-border-strong-01, #8d8d8d);
+  transition: background 0.35s, border-color 0.35s;
+}
+
+.override-switch.is-engaged .override-switch-track {
+  background: var(--cds-support-success, #42be65);
+  border-color: var(--cds-support-success, #42be65);
+}
+
+.override-switch-knob {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--cds-text-primary, #f4f4f4);
+  transition: transform 0.35s cubic-bezier(0.4, 1.6, 0.5, 1);
+}
+
+.override-switch.is-engaged .override-switch-knob {
+  transform: translateX(60px);
+}
+
+.override-footer {
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--cds-border-subtle-01, #393939);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  color: var(--cds-text-secondary, #c6c6c6);
+  text-align: center;
+}
+
+.ghost-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 999;
+  width: 22px;
+  height: 22px;
+  margin: -2px 0 0 -2px;
+  pointer-events: none;
+  background: var(--cds-icon-primary, #f4f4f4);
+  clip-path: polygon(0 0, 0 70%, 25% 55%, 45% 100%, 60% 92%, 40% 50%, 70% 50%);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.75));
+
+  &.is-auto {
+    background: var(--cds-support-warning, #f1c21b);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .override-frame.cds--tile,
+  .override-switch-track,
+  .override-switch-knob {
+    transition: none;
+  }
+}

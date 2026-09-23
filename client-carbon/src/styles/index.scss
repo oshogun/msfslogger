@@ -66,6 +66,15 @@
 @use '@carbon/react/scss/components/toggle';
 @use '@carbon/react/scss/components/tooltip';
 @use '@carbon/react/scss/components/ui-shell';
+@use '@carbon/react/scss/components/accordion';
+@use '@carbon/react/scss/components/combo-box';
+@use '@carbon/react/scss/components/contained-list';
+@use '@carbon/react/scss/components/multiselect';
+@use '@carbon/react/scss/components/number-input';
+@use '@carbon/react/scss/components/pagination-nav';
+@use '@carbon/react/scss/components/radio-button';
+@use '@carbon/react/scss/components/toggletip';
+@use '@carbon/react/scss/components/progress-indicator';
 
 // ── Theme emission ─────────────────────────────────────────────────────────
 // Gray 100 everywhere. Verified emitted value: --cds-background: #161616,

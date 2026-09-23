@@ -1,9 +1,17 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Button, InlineNotification, PasswordInput, Stack, TextInput, Tile } from '@carbon/react';
+import { Button, Form, InlineLoading, InlineNotification, PasswordInput, Stack, TextInput, Tile } from '@carbon/react';
 import { useSession } from '../shell/SessionContext';
+import './login/login.scss';
 
+interface FromLocation {
+  pathname: string;
+  search?: string;
+  hash?: string;
+}
+
+/** Fake-auth sign-in; lives outside the shell. Redirects to the `from` location RequireAuth carried, else '/'. */
 export function Login() {
   const session = useSession();
   const navigate = useNavigate();
@@ -13,17 +21,19 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname ?? '/';
+  const fromLoc = (location.state as { from?: FromLocation } | null)?.from;
+  const target = fromLoc ? `${fromLoc.pathname}${fromLoc.search ?? ''}${fromLoc.hash ?? ''}` : '/';
 
-  if (session.status === 'authenticated') return <Navigate to={from} replace />;
+  if (session.status === 'authenticated') return <Navigate to={target} replace />;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (submitting) return;
     setSubmitting(true);
     setError(null);
     try {
       await session.login(username, password);
-      navigate(from, { replace: true });
+      navigate(target, { replace: true });
     } catch (err) {
       setError((err as Error).message);
       setSubmitting(false);
@@ -31,20 +41,48 @@ export function Login() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
-      <Tile style={{ width: 'min(24rem, 90vw)' }}>
-        <form onSubmit={onSubmit}>
+    <main className="login-page">
+      <Tile className="login-card">
+        <Form onSubmit={onSubmit} aria-label="Sign in">
           <Stack gap={6}>
-            <img src="/sabianotext.svg" alt="Sabiá" style={{ height: '2rem', justifySelf: 'start' }} />
-            <TextInput id="login-username" labelText="Username" value={username} autoComplete="username"
-              onChange={e => setUsername(e.target.value)} />
-            <PasswordInput id="login-password" labelText="Password" value={password} autoComplete="current-password"
-              onChange={e => setPassword(e.target.value)} />
-            {error && <InlineNotification kind="error" lowContrast hideCloseButton title={error} />}
-            <Button type="submit" disabled={submitting}>{submitting ? 'Signing in…' : 'Sign in'}</Button>
+            <img src="/sabianotext.svg" alt="Sabiá" className="login-logo" />
+            <h1 className="login-title">Sign in</h1>
+            {error && (
+              <InlineNotification
+                kind="error"
+                lowContrast
+                hideCloseButton
+                role="alert"
+                title={error}
+              />
+            )}
+            <TextInput
+              id="login-username"
+              name="username"
+              labelText="Username"
+              value={username}
+              autoComplete="username"
+              autoFocus
+              required
+              disabled={submitting}
+              onChange={e => setUsername(e.target.value)}
+            />
+            <PasswordInput
+              id="login-password"
+              name="password"
+              labelText="Password"
+              value={password}
+              autoComplete="current-password"
+              required
+              disabled={submitting}
+              onChange={e => setPassword(e.target.value)}
+            />
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <InlineLoading description="Signing in…" /> : 'Sign in'}
+            </Button>
           </Stack>
-        </form>
+        </Form>
       </Tile>
-    </div>
+    </main>
   );
 }

@@ -1,0 +1,66 @@
+.device-page {
+  display: flex;
+  justify-content: center;
+  padding: 2rem 0;
+}
+.device-frame {
+  width: 100%;
+  max-width: 420px;
+  background: var(--cds-layer-01);
+  border: 1px solid var(--cds-border-subtle-01);
+  padding: 1.5rem 1.5rem 1.25rem;
+  transition: border-color 0.4s, box-shadow 0.4s;
+}
+.device-frame.is-engaged {
+  border-color: #6b4d1c;
+  box-shadow: 0 0 44px rgba(245, 158, 11, 0.1);
+}
+.device-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.device-title {
+  font-size: 0.95rem; font-weight: 700; letter-spacing: 0.22em;
+  color: var(--cds-text-primary);
+}
+.device-sub {
+  margin-top: 0.25rem;
+  white-space: nowrap;
+  font-size: 0.65rem; letter-spacing: 0.1em; color: var(--cds-text-helper);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.device-state { font-family: 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: 0.14em; margin: 0; }
+
+.device-lamps { display: flex; gap: 0.4rem; margin: 1.4rem 0 1.6rem; }
+.device-lamp {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--cds-layer-accent-01); border: 1px solid var(--cds-border-strong-01);
+  transition: background 0.18s, box-shadow 0.18s;
+}
+.device-lamp.is-lit {
+  background: #f59e0b; border-color: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+
+.device-toggle { display: flex; justify-content: center; margin-bottom: 1.6rem; }
+.device-toggle .cds--toggle { width: auto; }
+
+.device-readout-list.cds--structured-list { margin: 0; border-top: 1px solid var(--cds-border-subtle-01); }
+.device-readout-list .cds--structured-list-row { display: table-row; }
+.device-readout-list .cds--structured-list-td,
+.device-readout-list .cds--structured-list-th {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  padding-block: 0.5rem;
+}
+.device-readout-list .cds--structured-list-th { font-size: 0.65rem; letter-spacing: 0.12em; color: var(--cds-text-helper); }
+.device-readout-list .cds--structured-list-td {
+  font-size: 0.8rem; color: var(--cds-text-secondary);
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.device-frame.is-engaged .device-readout-list .cds--structured-list-td { color: var(--cds-text-primary); }
+
+.device-footer {
+  margin-top: 1.15rem; padding-top: 0.85rem; border-top: 1px solid var(--cds-border-subtle-01);
+  font-size: 0.7rem; letter-spacing: 0.06em; color: var(--cds-text-helper); text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-frame, .device-lamp { transition: none; }
+}
