@@ -3,7 +3,9 @@
  *   npx esbuild src/mock/inspect.ts --bundle --platform=node --format=esm --outfile=$TMPDIR/inspect.mjs && node $TMPDIR/inspect.mjs
  */
 import {
-  getCurrentGroundSession, getFlight, getFlightAcars, getJourney, getNavdataFeatures, getPlannedLeg,
+  getCurrentGroundSession, getSayIntentionsLink, importPlannedLegs, importSayIntentions,
+  importSimbriefLeg, linkSayIntentions, pushClearanceToSayIntentions, requestAcarsPair, setGroundSession,
+  unlinkSayIntentions, linkFlightToLeg, setPlannedLegStatus, getFlight, getFlightAcars, getJourney, getNavdataFeatures, getPlannedLeg,
   getRouteGeometry, getTrip, listCannedMessages, listFlights, listPlannedLegs, listTrips, MOCK_LATENCY_MS,
 } from './api';
 import { altitudeSeries, replayFrames } from './data/tracks';
@@ -68,6 +70,49 @@ async function main() {
   check('>=20 acars, 6 categories, both directions', acars.length >= 20 && counts['acars categories'] >= 6 && counts['acars directions'] === 2);
   check('flight 13 thread and leg 13 linked', thread13.messages.length > 0 && leg13.linked_flight_id === 13);
   check('empty trip journey has no progress pct', journeyEmpty.plannedRouteProgressPct === undefined);
+
+  // Write accessors go through the shared store, so their effects show in the reads.
+  const legsBefore = legs.length;
+  const imp = await importPlannedLegs([
+    new File([''], 'SBGR-SBBR.lnmpln'), new File([''], 'SBCT-SBPA warn.lnmpln'),
+    new File([''], 'notes.txt'), new File([''], 'SBGR-SBBR.lnmpln'),
+  ]);
+  const legsAfter = await listPlannedLegs();
+  const sb = await importSimbriefLeg();
+  const sb2 = await importSimbriefLeg();
+  const threadBefore = (await getFlightAcars(13)).messages.length;
+  const ls1 = await requestAcarsPair({ legId: 13 }, 'loadsheet');
+  const ls2 = await requestAcarsPair({ legId: 13 }, 'loadsheet');
+  await requestAcarsPair({ legId: 13 }, 'clearance');
+  const threadAfter = (await getFlightAcars(13)).messages;
+  const link = await linkSayIntentions(12);
+  const si1 = await importSayIntentions(12);
+  const si2 = await importSayIntentions(12);
+  const siStatus = await getSayIntentionsLink(12);
+  await unlinkSayIntentions(12);
+  const siUnlinked = await getSayIntentionsLink(12);
+  const push = await pushClearanceToSayIntentions(13, 'CLEARED');
+  const g = await setGroundSession({ airport_icao: 'sbgr', parking_position: 'B12' });
+  const g2 = await setGroundSession({ airport_icao: 'SBGR' });
+  const newLeg = imp.imported[0].id;
+  const skipLinked = await setPlannedLegStatus(13, 'skipped').then(() => 'ok', (e: Error) => e.message);
+  const linkTaken = await linkFlightToLeg(1, 13).then(() => 'ok', (e: Error) => e.message);
+  console.log(`legs ${legsBefore} -> ${legsAfter.length}; thread 13 ${threadBefore} -> ${threadAfter.length}; SI imports ${si1.imported}/${si2.imported}`);
+  check('import outcomes: imported, warning, rejected, duplicate, upload ordering',
+    imp.results.map(r => r.status).join() === 'imported,imported,rejected,duplicate'
+    && imp.results[1].warnings?.length === 1 && imp.batch?.ordering === 'upload' && imp.imported.length === 2);
+  check('imported legs visible to listPlannedLegs', legsAfter.length === legsBefore + 2 && legsAfter.some(l => l.id === newLeg));
+  check('simbrief imports once then duplicates', sb.status === 'imported' && sb2.status === 'duplicate' && sb2.planned_leg_id === sb.planned_leg_id);
+  check('loadsheet repeat returns same rows, created=false',
+    ls1.created && !ls2.created && ls1.request.id === ls2.request.id && ls1.reply.id === ls2.reply.id);
+  check('thread 13 grows by exactly 4 with unique ids',
+    threadAfter.length === threadBefore + 4 && new Set(threadAfter.map(m => m.id)).size === threadAfter.length);
+  check('SayIntentions link/import/repeat/unlink round trip',
+    link.pending_messages === 2 && si1.imported === 2 && si2.imported === 0 && siStatus.link?.imported_count === 2 && !siUnlinked.linked);
+  check('push clearance stored on the leg thread', push.planned_leg_id === 13 && push.category === 'pdc');
+  check('ground entry persists and keeps stand when omitted',
+    g.session?.airport_icao === 'SBGR' && g2.session?.parking_position === 'B12' && (await getCurrentGroundSession()).session?.source === 'manual');
+  check('409 texts for linked leg', /cannot have its status changed: linked to flight 13/.test(skipLinked) && /already linked to flight 13/.test(linkTaken));
 
   let failed = 0;
   for (const [name, ok] of checks) {

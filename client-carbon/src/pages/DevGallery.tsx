@@ -6,6 +6,7 @@ import { PageHeader } from '../components/PageHeader';
 import { StatTiles } from '../components/StatTiles';
 import { StatusTag } from '../components/StatusTag';
 import type { StatusKind } from '../components/StatusTag';
+import { LegsGallerySection } from '../components/legs/LegsGallerySection';
 
 const KINDS: StatusKind[] = ['planned', 'flown', 'diverted', 'skipped', 'snippet', 'active-trip', 'error',
   'acars-pdc', 'acars-wx', 'acars-freetext', 'acars-position-report', 'acars-dispatch', 'acars-oooi', 'acars-unknown',
@@ -35,6 +36,7 @@ export function DevGallery() {
       </div>
       <h4 style={{ marginTop: '2rem' }}>EmptyState</h4>
       <EmptyState title="No flights yet" description="Fly something and it will show up here." />
+      <LegsGallerySection />
       <ConfirmModal
         open={open}
         danger

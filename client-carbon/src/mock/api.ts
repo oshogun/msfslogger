@@ -5,8 +5,9 @@
  */
 import type {
   AcarsMessage, CannedAcarsMessage, CurrentGroundSessionResponse, FeaturesResponse, Flight, FlightPoint,
-  Journey, JourneyLeg, NavdataStatusResponse, PlannedLegListItem, PlannedLegWithChildren,
-  RouteGeometryResponse, SayIntentionsLinkStatus, SayIntentionsSettings, SimbriefSettings, Status, Trip,
+  Journey, JourneyLeg, NavdataStatusResponse, PlannedLegImportResponse, PlannedLegListItem, PlannedLegWithChildren,
+  RouteGeometryResponse, SayIntentionsLink, SayIntentionsLinkStatus, SayIntentionsSettings, SimbriefImportResult,
+  SimbriefSettings, Status, Trip,
 } from './types';
 import { SEED_FLIGHTS } from './data/flights';
 import { SEED_PLANNED_LEGS } from './data/plannedLegs';
@@ -17,7 +18,7 @@ import {
   maskKey, SEED_SAYINTENTIONS_KEY, SEED_SI_LINKS, SEED_SIMBRIEF,
 } from './data/settings';
 import { featuresFor, geometryFor, SEED_NAVDATA_STATUS } from './data/navdata';
-import { AIRPORTS } from './data/airports';
+import { AIRPORTS, haversineNm } from './data/airports';
 
 /** Artificial latency for every accessor below, in ms. One constant, one place. */
 export const MOCK_LATENCY_MS = 250;
@@ -36,6 +37,8 @@ const store = {
   nextFlightId: 100,
   nextTripId: 100,
   nextAcarsId: 1000,
+  nextLegId: 1000,
+  nextGroundId: 100,
 };
 
 // ── Failure injection and latency ──────────────────────────────────────────
@@ -395,12 +398,8 @@ export function linkFlightToLeg(flightId: number, legId: number | null): Promise
       return f;
     }
     const leg = findLegRaw(legId);
-    store.flights.forEach(o => {
-      if (o.id !== flightId && o.planned_leg_id === legId) {
-        o.planned_leg_id = null;
-        o.planned_leg_link_source = null;
-      }
-    });
+    const holder = store.flights.find(o => o.id !== flightId && o.planned_leg_id === legId);
+    if (holder) throw new Error(`Planned leg ${legId} is already linked to flight ${holder.id}`);
     f.planned_leg_prev_trip_id = f.trip_id;
     f.planned_leg_id = legId;
     f.planned_leg_link_source = 'manual';
@@ -411,6 +410,8 @@ export function linkFlightToLeg(flightId: number, legId: number | null): Promise
 export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped' | 'flown'): Promise<PlannedLegWithChildren> {
   return respond('legs', 'setPlannedLegStatus', () => {
     const l = findLegRaw(legId);
+    const linked = store.flights.find(f => f.planned_leg_id === legId);
+    if (linked) throw new Error(`Planned leg ${legId} cannot have its status changed: linked to flight ${linked.id}`);
     l.status = status;
     return hydrateLeg(l);
   });
@@ -464,6 +465,220 @@ export function requestWx(scope: Scope, icao: string): Promise<{ request: AcarsM
       correlation_id: request.id, sent_at: new Date(now + 4000).toISOString(),
     });
     return { request, reply };
+  });
+}
+
+// ── Imports, ACARS pairs, SayIntentions and ground entry (all through the store) ──
+
+function buildImportedLeg(dep: string, arr: string, filename: string): PlannedLegWithChildren {
+  const a = AIRPORTS[dep];
+  const b = AIRPORTS[arr];
+  const id = store.nextLegId++;
+  const dist = haversineNm(a.lat, a.lon, b.lat, b.lon);
+  const leg: PlannedLegWithChildren = {
+    ...structuredClone(SEED_PLANNED_LEGS[0]),
+    id, trip_id: null, seq: 1, status: 'planned', is_snippet: 0,
+    departure_ident: a.icao, departure_name: a.name, departure_lat: a.lat, departure_lon: a.lon, departure_is_airport: 1,
+    destination_ident: b.icao, destination_name: b.name, destination_lat: b.lat, destination_lon: b.lon,
+    destination_is_airport: 1,
+    approx_distance_nm: Math.round(dist * 1.04 * 10) / 10,
+    waypoint_count: 4, waypoints: [], alternates: [], alternate_count: 0,
+    arrival_deviation_nm: null, linked_flight_id: null,
+    source_filename: filename, source_sha256: `import${id}`.padEnd(64, '0'),
+    imported_at: new Date().toISOString(),
+  };
+  store.legs.push(leg);
+  return leg;
+}
+
+/**
+ * Filenames of the form `SBGR-SBBR.lnmpln` (two ICAO codes the mock knows)
+ * import; a name containing "warn" imports with a warning; any other name is
+ * rejected as not a flight plan; a name already imported is a duplicate.
+ */
+export function importPlannedLegs(files: File[]): Promise<PlannedLegImportResponse> {
+  return respond('legs', 'importPlannedLegs', () => {
+    const results: PlannedLegImportResponse['results'] = [];
+    const added: PlannedLegWithChildren[] = [];
+    for (const f of files) {
+      const m = /^([A-Za-z]{4})\W+([A-Za-z]{4})/.exec(f.name);
+      const dep = m?.[1].toUpperCase();
+      const arr = m?.[2].toUpperCase();
+      if (!dep || !arr || !AIRPORTS[dep] || !AIRPORTS[arr]) {
+        results.push({ filename: f.name, status: 'rejected',
+          error: 'Not a valid Little Navmap flight plan (could not read departure and destination)' });
+        continue;
+      }
+      const dup = store.legs.find(l => l.source_filename === f.name);
+      if (dup) {
+        results.push({ filename: f.name, status: 'duplicate', planned_leg_id: dup.id,
+          error: `Already imported as leg #${dup.id}` });
+        continue;
+      }
+      const leg = buildImportedLeg(dep, arr, f.name);
+      added.push(leg);
+      results.push({
+        filename: f.name, status: 'imported', planned_leg_id: leg.id,
+        ...(/warn/i.test(f.name)
+          ? { warnings: [{ code: 'UNKNOWN_ALT', message: 'Waypoint TIBAM has no altitude; cruise altitude taken from the header' }] }
+          : {}),
+      });
+    }
+    return {
+      imported: added.map(hydrateLeg),
+      results,
+      ...(added.length > 0
+        ? { batch: added.length > 1
+            ? { ordering: 'upload' as const, reason: 'BROKEN_CHAIN' as const }
+            : { ordering: 'chain' as const, reason: 'SINGLE_LEG' as const } }
+        : {}),
+    };
+  });
+}
+
+const SIMBRIEF_FILENAME = 'simbrief-latest';
+const SIMBRIEF_LABEL = 'SBGR → SBCT';
+
+export function importSimbriefLeg(): Promise<SimbriefImportResult> {
+  return respond('legs', 'importSimbriefLeg', () => {
+    if (!store.simbrief.simbrief_user_id) throw new Error('No SimBrief user id saved');
+    const existing = store.legs.find(l => l.source_filename === SIMBRIEF_FILENAME);
+    if (existing) {
+      return { status: 'duplicate' as const, planned_leg_id: existing.id, label: SIMBRIEF_LABEL, warnings: [],
+        error: 'This SimBrief plan was already imported' };
+    }
+    const leg = buildImportedLeg('SBGR', 'SBCT', SIMBRIEF_FILENAME);
+    return { status: 'imported' as const, planned_leg_id: leg.id, label: SIMBRIEF_LABEL,
+      warnings: [{ code: 'NO_ALTERNATE', message: 'The plan has no alternate airport' }] };
+  });
+}
+
+/**
+ * A load sheet or clearance request. The rows are created once per scope and
+ * kind (found again by dedup key), so a repeat returns the same two rows with
+ * `created: false` and the thread's merge-by-id path stays a no-op.
+ */
+export function requestAcarsPair(
+  scope: Scope, kind: 'loadsheet' | 'clearance',
+): Promise<{ created: boolean; request: AcarsMessage; reply: AcarsMessage }> {
+  return respond('acars', 'requestAcarsPair', () => {
+    const owner = 'flightId' in scope ? `flight${scope.flightId}` : `leg${scope.legId}`;
+    const key = `${kind}:${owner}`;
+    const request = store.acars.find(m => m.dedup_key === `${key}:req`);
+    const reply = store.acars.find(m => m.dedup_key === `${key}:rep`);
+    if (request && reply) return { created: false, request, reply };
+    const isSheet = kind === 'loadsheet';
+    const category = isSheet ? 'dispatch' : 'pdc';
+    const now = Date.now();
+    const req = addMessage({
+      ...scopeFields(scope), direction: 'downlink', category,
+      label: isSheet ? 'REQUEST LOADSHEET' : 'REQUEST CLEARANCE',
+      body: `${isSheet ? 'REQUEST LOADSHEET' : 'REQUEST CLEARANCE'} ${'flightId' in scope ? 'FLIGHT' : 'LEG'} ${'flightId' in scope ? scope.flightId : scope.legId}`,
+      correlation_id: null, sent_at: new Date(now).toISOString(),
+    });
+    req.dedup_key = `${key}:req`;
+    const rep = addMessage({
+      ...scopeFields(scope), direction: 'uplink', category, label: isSheet ? 'LOADSHEET' : 'PDC',
+      body: isSheet
+        ? 'LOADSHEET\nZFW 58200 KG\nFUEL 9800 KG\nTOW 68000 KG\nPAX 142  CARGO 1900 KG'
+        : 'CLEARED AS FILED. CLIMB FL350. SQUAWK 4521.',
+      correlation_id: req.id, sent_at: new Date(now + 5000).toISOString(),
+    });
+    rep.dedup_key = `${key}:rep`;
+    return { created: true, request: req, reply: rep };
+  });
+}
+
+/** The two ATC messages a SayIntentions session has waiting, imported once per flight. */
+const SI_INBOX = [
+  { direction: 'downlink' as const, body: 'Center, checking in level FL370.', dt: 0 },
+  { direction: 'uplink' as const, body: 'Roger, maintain FL370, contact next sector 132.4.', dt: 4000 },
+];
+const siKeyFor = (flightId: number, i: number) => `si:${flightId}:${i}`;
+const siPending = (flightId: number) =>
+  SI_INBOX.filter((_, i) => !store.acars.some(m => m.dedup_key === siKeyFor(flightId, i))).length;
+
+export function linkSayIntentions(flightId: number): Promise<{ link: SayIntentionsLink; pending_messages: number }> {
+  return respond('acars', 'linkSayIntentions', () => {
+    findFlight(flightId);
+    if (store.siKey == null) throw new Error('No SayIntentions API key saved');
+    const link: SayIntentionsLink = {
+      flight_id: flightId, upstream_flight_id: 'SI-PROTO', since_id: null, baseline_comm_id: 0,
+      linked_at: new Date().toISOString(), last_import_at: null, imported_count: 0,
+    };
+    store.siLinks = [...store.siLinks.filter(l => l.flight_id !== flightId), link];
+    return { link, pending_messages: siPending(flightId) };
+  });
+}
+
+export function unlinkSayIntentions(flightId: number): Promise<void> {
+  return respond('acars', 'unlinkSayIntentions', () => {
+    findFlight(flightId);
+    store.siLinks = store.siLinks.filter(l => l.flight_id !== flightId);
+  });
+}
+
+/** The first import brings two ATC messages; a repeat finds nothing new. */
+export function importSayIntentions(flightId: number): Promise<{ imported: number; messages: AcarsMessage[] }> {
+  return respond('acars', 'importSayIntentions', () => {
+    findFlight(flightId);
+    const link = store.siLinks.find(l => l.flight_id === flightId);
+    if (!link) throw new Error('Flight is not linked to a SayIntentions session');
+    const t = Date.now();
+    const messages: AcarsMessage[] = [];
+    SI_INBOX.forEach((m, i) => {
+      if (store.acars.some(x => x.dedup_key === siKeyFor(flightId, i))) return;
+      const row = addMessage({
+        ...scopeFields({ flightId }), direction: m.direction, category: 'freetext', label: 'SAYINTENTIONS',
+        body: m.body, correlation_id: null, sent_at: new Date(t + m.dt).toISOString(),
+      });
+      row.dedup_key = siKeyFor(flightId, i);
+      messages.push(row);
+    });
+    link.last_import_at = new Date().toISOString();
+    link.imported_count += messages.length;
+    return { imported: messages.length, messages };
+  });
+}
+
+export function pushClearanceToSayIntentions(legId: number, body: string): Promise<AcarsMessage> {
+  return respond('acars', 'pushClearanceToSayIntentions', () => {
+    findLegRaw(legId);
+    return addMessage({
+      ...scopeFields({ legId }), direction: 'downlink', category: 'pdc', label: 'PDC TO SAYINTENTIONS',
+      body, correlation_id: null, sent_at: new Date().toISOString(),
+    });
+  });
+}
+
+/**
+ * The manual ground entry. A field left out of `input` keeps the current
+ * session's value, so a blank box cannot clear something detection resolved.
+ */
+export function setGroundSession(input: {
+  airport_icao: string; parking_position?: string | null; planned_leg_id?: number | null;
+}): Promise<CurrentGroundSessionResponse> {
+  return respond('ground', 'setGroundSession', () => {
+    const icao = input.airport_icao.trim().toUpperCase();
+    if (!/^[A-Z0-9]{4}$/.test(icao)) throw new Error('ICAO must be 4 letters or digits');
+    if (input.planned_leg_id != null) findLegRaw(input.planned_leg_id);
+    const base = store.ground.session;
+    const airport = AIRPORTS[icao];
+    const now = new Date().toISOString();
+    const legId = input.planned_leg_id === undefined ? base?.planned_leg_id ?? null : input.planned_leg_id;
+    const parking = input.parking_position === undefined ? base?.parking_position ?? null : input.parking_position?.trim() || null;
+    store.ground = {
+      session: {
+        id: store.nextGroundId++, source: 'manual', airport_icao: icao,
+        airport_name: airport?.name ?? (base?.airport_icao === icao ? base.airport_name : null),
+        lat: airport?.lat ?? null, lon: airport?.lon ?? null,
+        parking_position: parking, parking_position_source: parking ? 'manual' : null,
+        planned_leg_id: legId, planned_leg_link_source: legId != null ? 'manual' : null,
+        aircraft: base?.aircraft ?? null, started_at: now, ended_at: null, ended_reason: null, flight_id: null,
+        created_at: now, updated_at: now,
+      },
+    };
+    return store.ground;
   });
 }
 
