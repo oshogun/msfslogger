@@ -24,7 +24,7 @@ docs/                 This documentation set
 
 A Tauri/MCDU desktop client used to live in this repository at
 `windows-client/`; it has moved to its own repository,
-[`oshogun/msfslogger_mcdu`](https://github.com/oshogun/msfslogger_mcdu), and
+[`oshogun/sabia_mcdu`](https://github.com/oshogun/sabia_mcdu), and
 isn't part of this tree.
 
 ## Setting up

@@ -3,7 +3,7 @@
 MSFS 2024 flight logger. Express + TypeScript + better-sqlite3 server (`src/`),
 React + Vite client (`client/`), a Windows-side SimConnect agent (`agent/`). A
 Tauri/MCDU desktop client used to live here at `windows-client/`; it has moved
-to its own repo, https://github.com/oshogun/msfslogger_mcdu — do not look for
+to its own repo, https://github.com/oshogun/sabia_mcdu — do not look for
 it in this tree.
 `README.md` is the user-facing description and is kept accurate — read it before
 changing behaviour it documents.

@@ -299,7 +299,7 @@ routes fall through to Express's default error response.
 The ingest-scoped routes above (status, ACARS, ground-session-current,
 SimBrief settings, SayIntentions) exist so a non-browser client
 authenticated only by ingest token — the Windows agent, and the separate
-MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) — can read status,
+MCDU/Tauri desktop client (`oshogun/sabia_mcdu`) — can read status,
 exchange ACARS messages, and drive the SayIntentions integration without a
 session login. An MCP client (above) is a third kind of non-browser
 consumer, authenticated independently by its own bearer token rather than

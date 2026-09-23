@@ -26,7 +26,7 @@
 ┌──────────────────────┐                          ┌────────────────────────┐
 │ client/ — React SPA    │                          │ MCDU/Tauri desktop     │
 │ (built into            │                          │ client — separate repo │
-│  client/dist, served   │                          │ oshogun/msfslogger_mcdu│
+│  client/dist, served   │                          │ oshogun/sabia_mcdu     │
 │  by the Express app)   │                          └────────────────────────┘
 └──────────────────────┘
 ```
@@ -122,7 +122,7 @@ in [usage.md](usage.md) and [configuration.md](configuration.md).
 | aviationweather.gov | server calls out | METAR/TAF for ACARS weather requests |
 | SayIntentions.AI SAPI | server calls out (optional) | Pull ATC/CPDLC comms into a flight's ACARS thread; push an on-file PDC as a real CPDLC message — off by default, needs an operator-supplied API key. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
 | OpenStreetMap tile server | browser calls out | Map tiles in the web UI |
-| MCDU/Tauri desktop client (`oshogun/msfslogger_mcdu`) | calls in, via ingest-scoped API | In-sim datalink UI, including the SayIntentions feature above; separate repository, not documented here |
+| MCDU/Tauri desktop client (`oshogun/sabia_mcdu`) | calls in, via ingest-scoped API | In-sim datalink UI, including the SayIntentions feature above; separate repository, not documented here |
 | MCP client (e.g. Claude Desktop/Code) | calls in, via `/mcp` with its own bearer token | Read/edit the logbook through 18 MCP tools — off by default, needs an operator-supplied `MCP_TOKEN`. See [api.md § MCP server](api.md#mcp-server--srcmcp). |
 
 ## Runtime flow

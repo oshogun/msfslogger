@@ -140,7 +140,7 @@ main file. Full backup/restore guidance:
 The Node.js agent in `agent/` is the supported way to connect a simulator on
 a separate Windows PC. A separate, optional Tauri/MCDU-style desktop client
 is developed independently at
-[oshogun/msfslogger_mcdu](https://github.com/oshogun/msfslogger_mcdu).
+[oshogun/sabia_mcdu](https://github.com/oshogun/sabia_mcdu).
 
 ## License
 

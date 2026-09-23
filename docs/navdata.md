@@ -3,7 +3,7 @@
 Navdata puts MSFS navigation data — airports, VORs/NDBs, fixes, airways,
 runways, and the SID/STAR/approach legs a filed plan refers to — under the
 flown track on the maps. The **MCDU/CDU Windows client** (its own repository,
-`msfslogger_mcdu`) extracts it from the simulator over SimConnect and is the
+`sabia_mcdu`) extracts it from the simulator over SimConnect and is the
 source of truth; this server keeps a **replica** and answers map queries from
 it. With no replica, everything else works exactly as before.
 

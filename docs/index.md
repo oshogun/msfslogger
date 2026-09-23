@@ -40,7 +40,7 @@ Operating an existing deployment: [operations.md](operations.md) →
 This documentation covers `src/` (server), `client/` (web UI), and `agent/`
 (Windows SimConnect agent) — the three components of this repository. The
 Tauri/MCDU desktop client is a separate project
-([`oshogun/msfslogger_mcdu`](https://github.com/oshogun/msfslogger_mcdu));
+([`oshogun/sabia_mcdu`](https://github.com/oshogun/sabia_mcdu));
 it's mentioned here only where it touches this repo's API
 ([api.md](api.md), [architecture.md](architecture.md)), not documented in
 full. `agent/README.md` remains the source of truth for the agent's own
