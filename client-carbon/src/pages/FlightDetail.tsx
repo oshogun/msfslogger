@@ -24,8 +24,8 @@ import { buildFlightKml, downloadKml } from '../utils/kml';
 import { PlannedLegSection } from './flightdetail/PlannedLegSection';
 import { newReplayBridge, ReplayMarker, TrackOnTop } from './flightdetail/ReplayMarker';
 
-type View = 'track' | 'altitude' | 'replay';
-const VIEW_LABEL: Record<View, string> = { track: 'Track', altitude: 'Altitude', replay: 'Replay' };
+type View = 'track' | 'replay';
+const VIEW_LABEL: Record<View, string> = { track: 'Track', replay: 'Replay' };
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const coordStr = (lat: number | null, lon: number | null) =>
@@ -115,7 +115,6 @@ export function FlightDetail() {
   const points = flight?.points ?? [];
   const views = useMemo<View[]>(() => {
     const v: View[] = ['track'];
-    if (points.length >= 2) v.push('altitude');
     if (flight?.end_time != null && points.length >= 2) v.push('replay');
     return v;
   }, [flight?.end_time, points.length]);
@@ -283,7 +282,6 @@ export function FlightDetail() {
   const panel = (v: View) => {
     if (v !== view) return null;
     if (v === 'track') return trackMap(false);
-    if (v === 'altitude') return <AltitudeChart points={points} />;
     return (
       <>
         {trackMap(true)}
@@ -351,6 +349,13 @@ export function FlightDetail() {
           {views.map(v => <TabPanel key={v} style={{ padding: 0, paddingTop: '1rem' }}>{panel(v)}</TabPanel>)}
         </TabPanels>
       </Tabs>
+
+      {points.length >= 2 && (
+        <Tile style={{ marginTop: '1rem' }} data-testid="altitude-section">
+          <h2 className="sabia-heading-03" style={{ marginBottom: '0.75rem' }}>Altitude Profile</h2>
+          <AltitudeChart points={points} />
+        </Tile>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
         <Button as={RouterLink} to="/" kind="ghost">← Back</Button>

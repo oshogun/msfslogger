@@ -30,7 +30,7 @@ Fake login: any username, password `sabia`.
 | `/flights` | All flights | Search, paging, combine flights, add to trip, KML export |
 | `/prefiles` | Prefiles | Planned legs table, `.lnmpln` and SimBrief import, skip/link/delete |
 | `/settings` | Settings | SimBrief user id and SayIntentions key |
-| `/flight/1` | Flight detail | 600-point flight: Track, Altitude and Replay tabs |
+| `/flight/1` | Flight detail | 600-point flight: map with the altitude chart beneath, Track and Replay tabs |
 | `/flight/8` | Flight detail | Manually linked to a planned leg: the hand-close gate |
 | `/flight/12` | Flight detail | No recorded points |
 | `/flight/13` | Flight detail | Live, in progress; ACARS at `/flight/13/acars` |
@@ -73,8 +73,8 @@ renders unstyled.
 
 - Print routes (`/print/*`) and PDF export are excluded; the Export PDF buttons are present
   but non-functional.
-- Flight detail uses tabs (Track, Altitude, Replay) where the live page stacks those
-  sections, and Edit is a modal rather than an inline form.
+- Flight detail shows the altitude chart under the map, with Track and Replay as tabs; Edit
+  is a modal rather than an inline form. (The live page stacks Track/Altitude/Replay sections.)
 - The sidebar collapse preference is not persisted (Carbon owns the breakpoint).
 - The SimBrief user id and SayIntentions key live on `/settings`, not on Prefiles.
 - ACARS has a manual Refresh button.
