@@ -11,15 +11,16 @@
   padding: var(--cds-spacing-07);
 }
 
-.login-logo {
-  height: 2rem;
-  justify-self: start;
+.login-title {
+  display: flex;
+  justify-content: center;
+  margin: 0;
 }
 
-.login-title {
-  font-size: 1.25rem;
-  font-weight: 400;
-  color: var(--cds-text-primary);
+.login-logo {
+  width: 200px;
+  max-width: 100%;
+  height: auto;
 }
 
 .login-card .cds--btn {

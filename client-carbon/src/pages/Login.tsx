@@ -45,8 +45,9 @@ export function Login() {
       <Tile className="login-card">
         <Form onSubmit={onSubmit} aria-label="Sign in">
           <Stack gap={6}>
-            <img src="/sabianotext.svg" alt="Sabiá" className="login-logo" />
-            <h1 className="login-title">Sign in</h1>
+            <h1 className="login-title">
+              <img src="/sabia-logo.svg" alt="Sabiá" className="login-logo" />
+            </h1>
             {error && (
               <InlineNotification
                 kind="error"
