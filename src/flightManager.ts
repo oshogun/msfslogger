@@ -2,10 +2,12 @@ import type {
   SimFrame, FlightState, AppState, PlannedLegWithChildren, PlannedLegLiveStatus,
   GroundSession, GroundSessionLiveStatus, GroundSessionEndReason,
 } from './types';
+import type { OpenFlightRow, FlightTrackPoint } from './db';
 import {
   insertFlight, insertPoint, closeFlight, getFlightPlannedLegId,
   getActiveTripId, getPlannedLegCandidatesForActiveTrip, getPlannedLegById,
   linkFlightToPlannedLeg, recordPlannedLegArrival, getTripName,
+  getOpenFlight, getFlightTrackPoints,
 } from './db';
 import {
   insertGroundSession, getOpenGroundSession, closeOpenGroundSession, fillOpenGroundSessionGaps,
@@ -214,6 +216,9 @@ export class FlightManager {
   // Set whenever recording is skipped, so the following gap is known to be an
   // interruption regardless of how short it was.
   private interrupted = false;
+  // The open-flight lookup is attempted exactly once per process, on the first
+  // frame this instance evaluates — not once per takeoff. See checkAirborneDebounce().
+  private openFlightCheckedAtBoot = false;
 
   // Accumulated stats for the current flight
   private distanceNm = 0;
@@ -336,6 +341,24 @@ export class FlightManager {
    * so the two call sites cannot drift apart from each other.
    */
   private checkAirborneDebounce(frame: SimFrame, inSlew: boolean): void {
+    if (!this.openFlightCheckedAtBoot) {
+      // One attempt per process, whatever this frame looks like: a flight that
+      // landed while the server was down never produces an airborne frame
+      // again, so a check gated on the airborne condition would never see it.
+      // The flag is set before the query, not after, so a failing database is
+      // asked once rather than at frame rate.
+      this.openFlightCheckedAtBoot = true;
+      try {
+        const open = getOpenFlight();
+        if (open) {
+          this.resumeFlight(open, frame);
+          return;
+        }
+      } catch (err) {
+        console.warn('[FlightManager] Open-flight check failed; starting fresh if a takeoff follows:', err);
+      }
+    }
+
     if (!inSlew && !frame.onGround && frame.airspeedKnots > 30) {
       this.airborneStreak++;
       if (this.airborneStreak >= AIRBORNE_DEBOUNCE_FRAMES) {
@@ -679,6 +702,121 @@ export class FlightManager {
     console.log(`[FlightManager] Flight #${id} started — ${frame.aircraft}`);
 
     // Record the first point immediately
+    this.writePoint(frame);
+  }
+
+  /**
+   * Adopts an already-open flights row instead of starting a new one: the
+   * server was restarted (or crashed) while this flight was in progress, and
+   * the row it inserted at takeoff is still open. Everything the live
+   * accumulators would have held is rebuilt from the points already recorded
+   * for that flight; the downtime itself is disowned by `interrupted`, exactly
+   * as a pause disowns the gap that spans it.
+   *
+   * Deliberately NOT a branch inside startFlight(): a resume must not insert a
+   * row, must not close a ground session, must not file OUT/OFF, and must not
+   * consume a planned leg — all four of those already happened for this flight,
+   * before the restart.
+   */
+  private resumeFlight(row: OpenFlightRow, frame: SimFrame): void {
+    const points = getFlightTrackPoints(row.id);
+    const n = points.length;
+
+    let pointCount: number;
+    let maxAltitudeFt: number;
+    let maxAirspeedKts: number;
+    let lastPointLat: number;
+    let lastPointLon: number;
+    let distanceNm = 0;
+    let activeMs = 0;
+
+    if (n === 0) {
+      // No point ever made it to disk (a crash between insertFlight() and its
+      // first writePoint(), or a hand-edited row): there is no evidence to
+      // reconstruct maxima from, so they are seeded from the current frame —
+      // the same thing startFlight() does at takeoff. lastPointLat/Lon fall
+      // back to the flight's own departure coordinates, taken together, so
+      // the first post-resume leg measures from where the flight actually
+      // began rather than from Null Island.
+      pointCount = 0;
+      maxAltitudeFt = frame.altitudeFt;
+      maxAirspeedKts = frame.airspeedKnots;
+      const hasDeparture = row.departure_lat !== null && row.departure_lon !== null;
+      lastPointLat = hasDeparture ? (row.departure_lat as number) : frame.lat;
+      lastPointLon = hasDeparture ? (row.departure_lon as number) : frame.lon;
+    } else {
+      pointCount = n;
+      maxAltitudeFt = points[0].altitude_ft;
+      maxAirspeedKts = points[0].airspeed_kts;
+      for (let i = 1; i < n; i++) {
+        if (points[i].altitude_ft > maxAltitudeFt) maxAltitudeFt = points[i].altitude_ft;
+        if (points[i].airspeed_kts > maxAirspeedKts) maxAirspeedKts = points[i].airspeed_kts;
+      }
+      lastPointLat = points[n - 1].lat;
+      lastPointLon = points[n - 1].lon;
+
+      // The same counted/uncounted gap rule writePoint() applies live —
+      // a gap this long means recording had stopped — applied
+      // retroactively across the seeded track, with two additions the live
+      // path never needs: a non-positive or unparseable gap (out-of-order or
+      // hand-edited timestamps) is skipped rather than let corrupt every
+      // later number.
+      for (let i = 1; i < n; i++) {
+        distanceNm += haversineNm(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+        const gap = Date.parse(points[i].ts) - Date.parse(points[i - 1].ts);
+        if (Number.isFinite(gap) && gap > 0 && gap <= MAX_COUNTED_GAP_MS) activeMs += gap;
+      }
+    }
+
+    // start_time is always written by startFlight() as new Date().toISOString(),
+    // but a hand-edited row must not poison the arithmetic below with NaN.
+    const parsedStartMs = Date.parse(row.start_time);
+    const flightStartMs = Number.isNaN(parsedStartMs) ? Date.now() : parsedStartMs;
+
+    this.currentFlightId = row.id;
+    this.state = 'FLYING';
+    this.appState.flightState = 'FLYING';
+    this.appState.currentFlightId = row.id;
+    this.airborneStreak = 0;
+    this.landedStreak = 0;
+    this.groundStreak = 0;
+    this.distanceNm = distanceNm;
+    this.maxAltitudeFt = maxAltitudeFt;
+    this.maxAirspeedKts = maxAirspeedKts;
+    this.pointCount = pointCount;
+    this.lastPointLat = lastPointLat;
+    this.lastPointLon = lastPointLon;
+    // Overwritten by the writePoint() call below; the only thing this value
+    // does first is feed that call's own gap computation, and Date.now() makes
+    // that gap ~0 rather than the whole outage.
+    this.lastPointTime = Date.now();
+    this.flightStartMs = flightStartMs;
+    this.activeMs = activeMs;
+    // The outage is an interruption exactly like a pause or a slew: its time
+    // must not be counted, even though its distance (added by the writePoint()
+    // call below) should be.
+    this.interrupted = true;
+    this.onEventFiled = false;
+    this.positionReportIntervalMs = parsePositionReportIntervalMs(process.env.POSITION_REPORT_INTERVAL_MIN);
+    this.lastPositionReportWindow = 0;
+
+    // Reloaded read-only: this flight's link (if any) was already made at its
+    // real takeoff, and matching again here would consume a leg a second time.
+    this.plannedLegCache = null;
+    try {
+      this.refreshPlannedLegForFlight(row.id);
+    } catch (err) {
+      console.warn(`[FlightManager] Flight #${row.id} planned-leg cache not restored:`, err);
+    }
+
+    console.log(
+      `[FlightManager] Flight #${row.id} resumed after restart — ${pointCount} points, ` +
+      `${distanceNm.toFixed(1)} nm, ${Math.round(activeMs / 1000)}s counted before the interruption`
+    );
+
+    // Same call startFlight() ends with: it adds the outage's distance,
+    // drops its (already-excluded) gap because interrupted is true, and
+    // clears interrupted so the next gap counts normally.
     this.writePoint(frame);
   }
 

@@ -215,7 +215,7 @@ export function useRealClock(): void {
 // The vi.mock() call itself is each consuming test file's job, not this
 // module's — this module only exports the mock objects and the reset.
 
-// All ten functions src/flightManager.ts imports from './db'.
+// All twelve functions src/flightManager.ts imports from './db'.
 export const dbMock = {
   insertFlight: vi.fn(),
   insertPoint: vi.fn(),
@@ -227,6 +227,8 @@ export const dbMock = {
   linkFlightToPlannedLeg: vi.fn(),
   recordPlannedLegArrival: vi.fn(),
   getTripName: vi.fn(),
+  getOpenFlight: vi.fn(),
+  getFlightTrackPoints: vi.fn(),
 };
 
 // The one function (plus initAirports) src/flightManager.ts imports
@@ -269,6 +271,8 @@ function installDbMockDefaults(): void {
   dbMock.linkFlightToPlannedLeg.mockReset().mockImplementation(() => undefined);
   dbMock.recordPlannedLegArrival.mockReset().mockImplementation(() => undefined);
   dbMock.getTripName.mockReset().mockImplementation(() => 'Test Trip');
+  dbMock.getOpenFlight.mockReset().mockImplementation(() => null);
+  dbMock.getFlightTrackPoints.mockReset().mockImplementation(() => []);
 }
 
 function installAirportsMockDefaults(): void {

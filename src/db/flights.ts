@@ -131,6 +131,76 @@ export function deleteFlight(id: number): boolean {
   if (result.changes > 0) deleteFlightPlanFile(id);
   return result.changes > 0;
 }
+
+// ── Resuming an interrupted flight ──────────────────────────────────────────
+
+/** The narrow projection of a flights row that resuming an interrupted flight
+ *  needs: its identity, when it really began, and where it departed from. */
+export interface OpenFlightRow {
+  id: number;
+  aircraft: string | null;
+  start_time: string;
+  departure_lat: number | null;
+  departure_lon: number | null;
+}
+
+/** A strict five-column subset of FlightPoint (src/types.ts:96) — the only
+ *  columns the accumulator reconstruction reads. */
+export interface FlightTrackPoint {
+  lat: number;
+  lon: number;
+  altitude_ft: number;
+  airspeed_kts: number;
+  ts: string;
+}
+
+/**
+ * The flights row still in progress (end_time IS NULL), or null.
+ *
+ * Unlike ground_sessions, the flights table has NO partial unique index
+ * enforcing at most one open row — verified against the schema: the only
+ * unique indexes on flights are idx_flights_planned_leg and (elsewhere)
+ * idx_ground_sessions_open, neither of which constrains end_time. So more
+ * than one open row is possible, and the anomaly is handled here rather than
+ * thrown: the most recently started row is returned and every other open row
+ * is named in a warning and left exactly as it is. Nothing in this function
+ * may throw on that path — a throw here would be able to stop a real takeoff
+ * from ever recording a flight.
+ */
+export function getOpenFlight(): OpenFlightRow | null {
+  const rows = getDb().prepare(`
+    SELECT id, aircraft, start_time, departure_lat, departure_lon
+    FROM flights
+    WHERE end_time IS NULL
+    ORDER BY start_time DESC, id DESC
+  `).all() as OpenFlightRow[];
+
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    const orphans = rows.slice(1).map(r => `#${r.id}`).join(', ');
+    console.warn(
+      `[db/flights] ${rows.length} flights rows are open; adopting #${rows[0].id} ` +
+      `(started ${rows[0].start_time}) and leaving ${orphans} untouched as orphans`
+    );
+  }
+  return rows[0];
+}
+
+/**
+ * Every recorded point of one flight, oldest first, in the five columns the
+ * caller needs to rebuild a flight's accumulators. Raw rows only: distance,
+ * maxima and the gap-summed duration are computed by the caller, never by
+ * SQL. Empty array when the flight has no points.
+ */
+export function getFlightTrackPoints(flightId: number): FlightTrackPoint[] {
+  return getDb().prepare(`
+    SELECT lat, lon, altitude_ft, airspeed_kts, ts
+    FROM flight_points
+    WHERE flight_id = ?
+    ORDER BY ts ASC
+  `).all(flightId) as FlightTrackPoint[];
+}
+
 // ── Combine flights ───────────────────────────────────────────────────────────
 
 type InsertablePoint = Omit<FlightPoint, 'id' | 'flight_id'>;
