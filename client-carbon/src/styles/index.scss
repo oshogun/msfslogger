@@ -1,0 +1,131 @@
+// Gray 100 theme and the Carbon component styles this prototype uses.
+//
+// Rules that are load-bearing, not stylistic:
+//   1. `config` MUST be configured BEFORE anything else loads it, or Sass
+//      raises "This module was already loaded, so it can't be configured
+//      using with" (observed with $css--font-face after @use ...themes).
+//   2. Component styles are imported one by one, not via the `@carbon/react`
+//      barrel: the barrel emits 929 kB of CSS (102 kB gzip), this list emits
+//      527 kB (54.6 kB gzip). Adding a Carbon component to a screen means
+//      adding its line here — the component renders unstyled otherwise.
+//   3. `:root { @include theme.theme(); }` is what actually emits
+//      --cds-* custom properties. Without it the build still works (token
+//      values are inlined as var() fallbacks) but nothing can be themed at
+//      runtime and --cds-color-scheme: dark is never set.
+
+@use '@carbon/react/scss/config' with (
+  // Carbon's own @font-face block references `~@ibm/plex/...`, a webpack-era
+  // specifier Vite does not resolve. It is switched off and three faces are
+  // declared by hand at the bottom of this file instead.
+  $css--font-face: false
+);
+@use '@carbon/react/scss/themes';
+@use '@carbon/react/scss/theme' as theme with ($theme: themes.$g100);
+
+@use '@carbon/react/scss/reset';
+@use '@carbon/react/scss/type';
+@use '@carbon/react/scss/grid';
+// Emits the --cds-layout-* size and density tokens that buttons, inputs and
+// tags read for their height and padding.
+@use '@carbon/react/scss/layout';
+
+// ── Component styles actually used by the prototype ────────────────────────
+// Keep alphabetical. Every entry is a directory under
+// node_modules/@carbon/react/scss/components/.
+@use '@carbon/react/scss/components/breadcrumb';
+@use '@carbon/react/scss/components/button';
+@use '@carbon/react/scss/components/checkbox';
+@use '@carbon/react/scss/components/content-switcher';
+@use '@carbon/react/scss/components/data-table';
+@use '@carbon/react/scss/components/dropdown';
+@use '@carbon/react/scss/components/file-uploader';
+@use '@carbon/react/scss/components/form';
+@use '@carbon/react/scss/components/inline-loading';
+@use '@carbon/react/scss/components/link';
+@use '@carbon/react/scss/components/list';
+@use '@carbon/react/scss/components/list-box'; // required by dropdown/select
+@use '@carbon/react/scss/components/menu'; // required by overflow-menu
+@use '@carbon/react/scss/components/loading';
+@use '@carbon/react/scss/components/modal';
+@use '@carbon/react/scss/components/notification';
+@use '@carbon/react/scss/components/overflow-menu';
+@use '@carbon/react/scss/components/pagination';
+@use '@carbon/react/scss/components/popover';
+@use '@carbon/react/scss/components/progress-bar';
+@use '@carbon/react/scss/components/search';
+@use '@carbon/react/scss/components/select';
+@use '@carbon/react/scss/components/skeleton-styles';
+@use '@carbon/react/scss/components/slider';
+@use '@carbon/react/scss/components/structured-list';
+@use '@carbon/react/scss/components/stack';
+@use '@carbon/react/scss/components/tabs';
+@use '@carbon/react/scss/components/tag';
+@use '@carbon/react/scss/components/text-area';
+@use '@carbon/react/scss/components/text-input';
+@use '@carbon/react/scss/components/tile';
+@use '@carbon/react/scss/components/toggle';
+@use '@carbon/react/scss/components/tooltip';
+@use '@carbon/react/scss/components/ui-shell';
+
+// ── Theme emission ─────────────────────────────────────────────────────────
+// Gray 100 everywhere. Verified emitted value: --cds-background: #161616,
+// --cds-color-scheme: dark.
+:root {
+  @include theme.theme();
+}
+
+// Optional inset zone, for a panel that wants one step of contrast against
+// g100. Verified emitted value: --cds-background: #262626.
+.cds--g90 {
+  @include theme.theme(themes.$g90);
+}
+
+// ── Fonts ──────────────────────────────────────────────────────────────────
+// Self-hosted, three faces only (~180 kB total). Resolved through the
+// `~@ibm/` alias declared in vite.config.ts.
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('~@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('~@ibm/plex-sans/fonts/complete/woff2/IBMPlexSans-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('~@ibm/plex-mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2') format('woff2');
+}
+
+// ── Leaflet ────────────────────────────────────────────────────────────────
+// leaflet/dist/leaflet.css is imported from the map wrapper module, not here,
+// so a screen with no map never pays for it.
+
+// Username and product name in the header: too wide for phones, where the
+// logo and the account action's tooltip carry them.
+.shell-username,
+.shell-name-text {
+  display: none;
+}
+@media (min-width: 42rem) {
+  .shell-username,
+  .shell-name-text {
+    display: inline;
+  }
+}
+
+// Below the docked-nav breakpoint the nav is a hidden overlay, so the content
+// needs no left margin for it.
+@media (max-width: 65.99rem) {
+  .cds--side-nav ~ .cds--content {
+    margin-inline-start: 0;
+  }
+}
