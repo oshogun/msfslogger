@@ -1,0 +1,75 @@
+// Map chrome for Gray 100. Leaflet's own stacking (panes 200-700, controls up
+// to 1000) is contained by `isolation: isolate` so the fixed Carbon header and
+// side nav (z-index 8000) always paint above a map scrolling beneath them.
+.sabia-map {
+  position: relative;
+  width: 100%;
+  isolation: isolate;
+  background: var(--cds-layer-01);
+  border: 1px solid var(--cds-border-subtle-01);
+
+  .leaflet-container {
+    width: 100%;
+    height: 100%;
+    isolation: isolate;
+    background: var(--cds-layer-01);
+    font-family: inherit;
+  }
+
+  // The only dark treatment: one constant filter on the tile pane.
+  .leaflet-tile-pane {
+    filter: var(--sabia-map-tile-filter, none);
+  }
+
+  .leaflet-bar {
+    border: 1px solid var(--cds-border-subtle-01);
+    box-shadow: none;
+
+    a,
+    a:hover {
+      background-color: var(--cds-layer-01);
+      color: var(--cds-text-primary);
+      border-bottom-color: var(--cds-border-subtle-01);
+    }
+
+    a:hover {
+      background-color: var(--cds-layer-hover-01);
+    }
+  }
+
+  .leaflet-control-attribution {
+    background: rgba(22, 22, 22, 0.8);
+    color: var(--cds-text-secondary);
+
+    a {
+      color: var(--cds-link-primary);
+    }
+  }
+
+  .leaflet-tooltip {
+    background: var(--cds-background-inverse);
+    color: var(--cds-text-inverse);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    font-size: 0.75rem;
+  }
+
+  .leaflet-tooltip-top::before {
+    border-top-color: var(--cds-background-inverse);
+  }
+  .leaflet-tooltip-bottom::before {
+    border-bottom-color: var(--cds-background-inverse);
+  }
+  .leaflet-tooltip-left::before {
+    border-left-color: var(--cds-background-inverse);
+  }
+  .leaflet-tooltip-right::before {
+    border-right-color: var(--cds-background-inverse);
+  }
+
+  .leaflet-control-zoom a:focus-visible {
+    outline: 2px solid var(--cds-focus);
+    outline-offset: -2px;
+  }
+}

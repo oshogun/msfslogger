@@ -1,5 +1,5 @@
 import { InlineNotification, Modal } from '@carbon/react';
-import { useLauncherRef } from '../ConfirmModal';
+import { ModalPortal, useLauncherRef } from '../ConfirmModal';
 import type { PlannedLegWithChildren } from '../../mock/types';
 
 /** Props for {@link SkipLegConfirm}. Controlled by the consuming page. */
@@ -19,6 +19,7 @@ export function SkipLegConfirm({ leg, busy = false, error, onConfirm, onCancel }
   const unskip = leg?.status === 'skipped';
   const route = leg ? `${leg.departure_ident} → ${leg.destination_ident}` : '';
   return (
+    <ModalPortal>
     <Modal
       open={leg !== null}
       launcherButtonRef={launcherRef}
@@ -41,5 +42,6 @@ export function SkipLegConfirm({ leg, busy = false, error, onConfirm, onCancel }
           subtitle={error} style={{ maxInlineSize: 'none', marginBlockStart: '1rem' }} />
       )}
     </Modal>
+    </ModalPortal>
   );
 }

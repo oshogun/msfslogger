@@ -1,5 +1,15 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Modal } from '@carbon/react';
+
+/**
+ * Carbon's Modal renders where it is declared, inside the page content, so Tab
+ * leaving its focus sentinels walks through <body> and the shell's own controls
+ * before wrapping back. Mounting it under <body> keeps the trap self-contained.
+ */
+export function ModalPortal({ children }: { children: ReactNode }) {
+  return createPortal(children, document.body);
+}
 
 /**
  * Carbon's Modal returns focus on close only to a launcher it is handed by ref,
@@ -31,6 +41,7 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   const launcherRef = useLauncherRef(open);
   return (
+    <ModalPortal>
     <Modal
       open={open}
       launcherButtonRef={launcherRef}
@@ -45,5 +56,6 @@ export function ConfirmModal({
     >
       <p>{message}</p>
     </Modal>
+    </ModalPortal>
   );
 }

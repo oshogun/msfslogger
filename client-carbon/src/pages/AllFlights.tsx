@@ -10,7 +10,7 @@ import { Add, Export, FolderAdd, Merge } from '@carbon/icons-react';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatusTag } from '../components/StatusTag';
-import { ConfirmModal, useLauncherRef } from '../components/ConfirmModal';
+import { ConfirmModal, ModalPortal, useLauncherRef } from '../components/ConfirmModal';
 import {
   addFlightToTrip, combineFlights, createTrip, listFlights, listTrips,
 } from '../mock/api';
@@ -499,6 +499,7 @@ export function AllFlights() {
         onConfirm={handleCombine}
         onCancel={() => setDialog(null)}
       />
+      <ModalPortal>
       <Modal
         open={dialog === 'newTrip' || dialog === 'blankTrip'}
         size="xs"
@@ -519,6 +520,8 @@ export function AllFlights() {
           onKeyDown={e => { if (e.key === 'Enter') handleTripName(); }}
         />
       </Modal>
+      </ModalPortal>
+      <ModalPortal>
       <Modal
         open={dialog === 'addToTrip'}
         size="xs"
@@ -540,6 +543,7 @@ export function AllFlights() {
           {trips.map(t => <SelectItem key={t.id} value={t.id} text={t.name} />)}
         </Select>
       </Modal>
+      </ModalPortal>
     </>
   );
 }
