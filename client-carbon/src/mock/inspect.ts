@@ -6,7 +6,8 @@ import {
   getCurrentGroundSession, getSayIntentionsLink, importPlannedLegs, importSayIntentions,
   importSimbriefLeg, linkSayIntentions, pushClearanceToSayIntentions, requestAcarsPair, setGroundSession,
   unlinkSayIntentions, linkFlightToLeg, setPlannedLegStatus, getFlight, getFlightAcars, getJourney, getNavdataFeatures, getPlannedLeg,
-  getRouteGeometry, getTrip, listCannedMessages, listFlights, listPlannedLegs, listTrips, MOCK_LATENCY_MS,
+  attachFlightPlan, removeFlightPlan, setFlightPlannedLegStatus,
+  getNavdataStatus, getRouteGeometry, getStoreVersion, getTrip, patchTrip, subscribeStore, listCannedMessages, listFlights, listPlannedLegs, listTrips, MOCK_LATENCY_MS,
 } from './api';
 import { altitudeSeries, replayFrames } from './data/tracks';
 import { SEED_ACARS } from './data/acars';
@@ -113,6 +114,52 @@ async function main() {
   check('ground entry persists and keeps stand when omitted',
     g.session?.airport_icao === 'SBGR' && g2.session?.parking_position === 'B12' && (await getCurrentGroundSession()).session?.source === 'manual');
   check('409 texts for linked leg', /cannot have its status changed: linked to flight 13/.test(skipLinked) && /already linked to flight 13/.test(linkTaken));
+
+  // Flight detail writes: flight 8 is hand-linked and ended, flight 1 is auto-linked.
+  const before8 = (await getPlannedLeg((await getFlight(8)).planned_leg_id!)).status;
+  const target8 = before8 === 'flown' ? 'planned' : 'flown';
+  const wrong8 = await setFlightPlannedLegStatus(8, before8 === 'flown' ? 'flown' : 'planned').then(() => 'ok', (e: Error) => e.message);
+  const marked8 = await setFlightPlannedLegStatus(8, target8);
+  const auto1 = await setFlightPlannedLegStatus(1, 'flown').then(() => 'ok', (e: Error) => e.message);
+  const noLink11 = await setFlightPlannedLegStatus(11, 'flown').then(() => 'ok', (e: Error) => e.message);
+  const badPlan = await attachFlightPlan(12, new File([''], 'x.txt', { type: 'text/plain' })).then(() => 'ok', (e: Error) => e.message);
+  const goodPlan = await attachFlightPlan(12, new File(['%PDF-'], 'plan.pdf', { type: 'application/pdf' }));
+  const removed = await removeFlightPlan(12);
+  check('hand-close: gate 409 texts and status flip on a hand-linked ended flight',
+    marked8.status === target8 && /^Planned leg \d+ is '.*', not '.*': only a/.test(wrong8)
+    && /was not linked to its planned leg by hand/.test(auto1) && /^Flight 11 is not linked to a planned leg$/.test(noLink11));
+  check('flight plan attach validates PDF, attach and remove write the store',
+    badPlan === 'File must be a PDF' && goodPlan.flight_plan_name === 'plan.pdf' && removed.flight_plan_name === null);
+
+  // Trip-scoped imports attach to that trip, appended after its last leg.
+  const tripImp = await importPlannedLegs([new File([''], 'SBBR-SBSV trip.lnmpln'), new File([''], 'SBSV-SBRF trip.lnmpln')], 3);
+  const trip3 = await getTrip(3);
+  const badTrip = await importPlannedLegs([new File([''], 'SBGR-SBCT trip.lnmpln')], 9999).then(() => 'ok', (e: Error) => e.message);
+  check('importPlannedLegs with tripId attaches legs to that trip in order, and is visible in the listing',
+    tripImp.imported.length === 2 && trip3.planned_legs.map(l => l.seq).join() === '1,2'
+    && trip3.planned_legs.every(l => l.trip_id === 3) && (await listPlannedLegs()).filter(l => l.trip_id === 3).length === 2);
+  check('importPlannedLegs rejects an unknown trip', /Trip 9999 not found/.test(badTrip));
+
+  // Store change notification: one call per successful write, none for reads or failed writes.
+  let notified = 0;
+  const unsubscribe = subscribeStore(() => { notified += 1; });
+  const v0 = getStoreVersion();
+  await listTrips();
+  await patchTrip(1, { name: 'Baltic Hop' });
+  await patchTrip(9999, { name: 'x' }).catch(() => undefined);
+  unsubscribe();
+  await patchTrip(1, { name: 'Baltic Hop' });
+  check('subscribeStore: one notification per successful write; none for reads, failures or after unsubscribe',
+    notified === 1 && getStoreVersion() === v0 + 2);
+
+  // Navdata: the replica is reported present and five legs across Brazil and the Baltic draw SID, STAR and approach.
+  const navStatus = await getNavdataStatus();
+  const procLegs = (await listPlannedLegs()).filter(l => l.sid_name && l.star_name && l.approach_name);
+  const geoms = await Promise.all(procLegs.map(l => getRouteGeometry(l.id)));
+  check('navdata: replica present, and at least 3 legs (Brazil and Baltic) have SID+STAR+approach geometry',
+    navStatus.present && procLegs.length >= 3 && geoms.every(g => g.sid.points.length > 0 && g.star.points.length > 0 && g.approach.points.length > 0)
+    && procLegs.some(l => l.departure_ident.startsWith('EF') || l.departure_ident.startsWith('EE'))
+    && procLegs.some(l => l.departure_ident.startsWith('SB')));
 
   let failed = 0;
   for (const [name, ok] of checks) {

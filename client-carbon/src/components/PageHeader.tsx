@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { Breadcrumb, BreadcrumbItem, Heading, Section } from '@carbon/react';
 
 export interface PageHeaderProps {
   title: string;
   subtitle?: string;
-  /** Optional trail; the last entry is the current page. */
+  /** Optional trail; the last entry is the current page. Hrefs are in-app routes, followed without reloading. */
   breadcrumbs?: { label: string; href?: string }[];
   /** Right-aligned controls. */
   actions?: ReactNode;
@@ -16,8 +17,8 @@ export function PageHeader({ title, subtitle, breadcrumbs, actions }: PageHeader
       {breadcrumbs && (
         <Breadcrumb noTrailingSlash>
           {breadcrumbs.map((b, i) => (
-            <BreadcrumbItem key={b.label} href={b.href} isCurrentPage={i === breadcrumbs.length - 1}>
-              {b.label}
+            <BreadcrumbItem key={`${i}-${b.label}`} isCurrentPage={i === breadcrumbs.length - 1}>
+              {b.href && i < breadcrumbs.length - 1 ? <RouterLink to={b.href}>{b.label}</RouterLink> : b.label}
             </BreadcrumbItem>
           ))}
         </Breadcrumb>

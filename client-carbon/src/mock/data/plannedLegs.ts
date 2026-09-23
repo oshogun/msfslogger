@@ -87,14 +87,32 @@ function makeLeg(s: LegSpec): PlannedLegWithChildren {
   };
 }
 
+/** Procedure names for a leg that should draw SID, STAR and approach geometry. */
+function procedures(sid: string, sidRwy: string, star: string, starRwy: string, appr: string, apprRwy: string, type: string, arinc: string): Partial<PlannedLegWithChildren> {
+  return {
+    sid_name: sid, sid_runway: sidRwy, sid_transition: null, sid_type: 'STANDARD',
+    star_name: star, star_runway: starRwy, star_transition: null,
+    approach_name: appr, approach_runway: apprRwy, approach_type: type, approach_arinc: arinc,
+    approach_suffix: null, approach_transition: null,
+  };
+}
+
+/** Legs (beyond ACTIVE_LEG_ID) that carry procedures: two Baltic, two Brazilian. */
+const PROCEDURE_LEGS: Record<number, Partial<PlannedLegWithChildren>> = {
+  1: procedures('HEL4A', '04L', 'TLL2A', '08', 'ILS RWY 08', '08', 'ILS', 'I08'),
+  2: procedures('TLL3B', '26', 'ARL1A', '01L', 'RNAV RWY 01L', '01L', 'RNAV', 'R01L'),
+  4: procedures('GRU1A', '09L', 'BSB2A', '11L', 'ILS RWY 11L', '11L', 'ILS', 'I11L'),
+  5: procedures('BSB4B', '11L', 'SSA1A', '10', 'VOR RWY 10', '10', 'VOR', 'D10'),
+};
+
 const specs: LegSpec[] = [
-  { id: 1, tripId: 1, seq: 1, status: 'flown', dep: 'EFHK', arr: 'EETN' },
-  { id: 2, tripId: 1, seq: 2, status: 'flown', dep: 'EETN', arr: 'ESSA' },
+  { id: 1, tripId: 1, seq: 1, status: 'flown', dep: 'EFHK', arr: 'EETN', overrides: PROCEDURE_LEGS[1] },
+  { id: 2, tripId: 1, seq: 2, status: 'flown', dep: 'EETN', arr: 'ESSA', overrides: PROCEDURE_LEGS[2] },
   { id: 3, tripId: 1, seq: 3, status: 'planned', dep: 'ESSA', arr: 'EFHK' },
 ];
 for (let seq = 1; seq < BRAZIL_CHAIN.length; seq++) {
   const id = 3 + seq;
-  const overrides: Partial<PlannedLegWithChildren> = {};
+  const overrides: Partial<PlannedLegWithChildren> = { ...PROCEDURE_LEGS[id] };
   if (id === ACTIVE_LEG_ID) {
     Object.assign(overrides, {
       sid_name: 'TNOL1A', sid_runway: '15', sid_transition: null, sid_type: 'STANDARD',

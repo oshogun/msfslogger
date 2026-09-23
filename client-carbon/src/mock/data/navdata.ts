@@ -104,6 +104,15 @@ const chain = (source: string | null, points: GeometryPoint[]): GeometryChain =>
 /** Route geometry for a leg: enroute always, procedures only where the plan names them. */
 export function geometryFor(leg: PlannedLegWithChildren): RouteGeometryResponse {
   const wps = leg.waypoints;
+  if (wps.length === 0) {
+    return {
+      legId: leg.id,
+      origin: { ident: leg.departure_ident, lat: leg.departure_lat, lon: leg.departure_lon, isAirport: leg.departure_is_airport === 1 },
+      destination: { ident: leg.destination_ident, lat: leg.destination_lat, lon: leg.destination_lon, isAirport: true },
+      sid: chain(null, []), enroute: chain(null, []), star: chain(null, []), approach: chain(null, []),
+      skippedLegs: 0, skippedByChain: { sid: 0, enroute: 0, star: 0, approach: 0 }, unresolved: [],
+    };
+  }
   const first = wps[0];
   const last = wps[wps.length - 1];
   const second = wps[1] ?? last;
@@ -113,13 +122,13 @@ export function geometryFor(leg: PlannedLegWithChildren): RouteGeometryResponse 
     return pt(lat, lon, ident);
   };
   const sid = leg.sid_name
-    ? chain(leg.sid_name, [pt(first.lat, first.lon, first.ident), along(first, second, 0.3, 'TNOL'), along(first, second, 0.6, 'TNO02')])
+    ? chain(leg.sid_name, [pt(first.lat, first.lon, first.ident), along(first, second, 0.3, leg.sid_name.slice(0, 4)), along(first, second, 0.6, `${leg.sid_name.slice(0, 3)}02`)])
     : chain(null, []);
   const star = leg.star_name
-    ? chain(leg.star_name, [along(beforeLast, last, 0.6, 'ISOB'), along(beforeLast, last, 0.8, 'ISO02'), along(beforeLast, last, 0.92, 'ISO03')])
+    ? chain(leg.star_name, [along(beforeLast, last, 0.6, leg.star_name.slice(0, 4)), along(beforeLast, last, 0.8, `${leg.star_name.slice(0, 3)}02`), along(beforeLast, last, 0.92, `${leg.star_name.slice(0, 3)}03`)])
     : chain(null, []);
   const approach = leg.approach_name
-    ? chain(leg.approach_name, [along(beforeLast, last, 0.92, 'ISO03'), along(beforeLast, last, 0.97, 'FAF11'), pt(last.lat, last.lon, `RW${leg.approach_runway}`)])
+    ? chain(leg.approach_name, [along(beforeLast, last, 0.92, `${(leg.star_name ?? 'APP').slice(0, 3)}03`), along(beforeLast, last, 0.97, `FAF${leg.approach_runway ?? ''}`), pt(last.lat, last.lon, `RW${leg.approach_runway}`)])
     : chain(null, []);
   return {
     legId: leg.id,

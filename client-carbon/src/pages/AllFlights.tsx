@@ -17,9 +17,9 @@ import {
 import type { Flight, Trip } from '../mock/types';
 import './allflights/allflights.scss';
 import { formatAlt, formatDate, formatDistance, formatDuration, formatSpeed } from '../utils/format';
+import { MAX_KML_FLIGHTS, buildFlightsKml, downloadKml } from '../utils/kml';
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
-const MAX_KML_FLIGHTS = 100;
 const PAGE_SIZES = [5, 10, 20];
 const COLUMN_COUNT = 9;
 
@@ -34,16 +34,6 @@ function matches(f: Flight, q: string): boolean {
     f.id, f.aircraft, f.departure_icao, f.arrival_icao, f.departure_name, f.arrival_name,
   ].filter(x => x != null).join(' ').toLowerCase();
   return hay.includes(q);
-}
-
-function buildKml(flights: Flight[]): string {
-  const marks = flights.map(f => {
-    const coords = [
-      [f.departure_lon, f.departure_lat], [f.arrival_lon, f.arrival_lat],
-    ].filter(([lon, lat]) => lon != null && lat != null).map(c => c.join(',')).join(' ');
-    return `<Placemark><name>#${f.id} ${f.aircraft ?? 'Unknown'}</name><LineString><coordinates>${coords}</coordinates></LineString></Placemark>`;
-  });
-  return `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>${marks.join('')}</Document></kml>`;
 }
 
 export function AllFlights() {
@@ -197,12 +187,7 @@ export function AllFlights() {
     try {
       await new Promise(r => setTimeout(r, 300));
       const chosen = allFlights.filter(f => selectedIds.has(f.id));
-      const url = URL.createObjectURL(new Blob([buildKml(chosen)], { type: 'application/vnd.google-earth.kml+xml' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'flights.kml';
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadKml('flights.kml', buildFlightsKml(chosen));
     } catch (err) {
       setActionError('Export failed: ' + (err as Error).message);
     } finally {

@@ -56,18 +56,42 @@ export function failing(name: string): boolean {
   return raw.split(',').map(s => s.trim()).includes(name);
 }
 
-function respond<T>(group: string, accessor: string, fn: () => T): Promise<T> {
+function respond<T>(group: string, accessor: string, fn: () => T, isWrite = false): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     setTimeout(() => {
       const failed = [group, accessor].find(failing);
       if (failed) return reject(new Error(`Mock failure: ${failed}`));
       try {
-        resolve(structuredClone(fn()));
+        const result = structuredClone(fn());
+        if (isWrite) notifyStore();
+        resolve(result);
       } catch (e) {
         reject(e);
       }
     }, MOCK_LATENCY_MS);
   });
+}
+
+/** Same as `respond`, for an accessor that mutates the store: listeners are told once it has succeeded. */
+const respondWrite = <T>(group: string, accessor: string, fn: () => T) => respond(group, accessor, fn, true);
+
+// ── Change notification ────────────────────────────────────────────────────
+
+let storeVersion = 0;
+const storeListeners = new Set<() => void>();
+
+/** Increases by one on every successful write accessor. */
+export const getStoreVersion = () => storeVersion;
+
+/** Calls `onChange` after every successful write. Returns an unsubscribe function. */
+export function subscribeStore(onChange: () => void): () => void {
+  storeListeners.add(onChange);
+  return () => { storeListeners.delete(onChange); };
+}
+
+function notifyStore(): void {
+  storeVersion += 1;
+  storeListeners.forEach(cb => cb());
 }
 
 // ── Derivations ────────────────────────────────────────────────────────────
@@ -301,7 +325,7 @@ export function getRouteGeometry(legId: number): Promise<RouteGeometryResponse> 
 // ── Writes (in-memory; a reload restores the seed) ─────────────────────────
 
 export function patchFlight(id: number, patch: Partial<Pick<Flight, 'aircraft' | 'notes'>>): Promise<Flight> {
-  return respond('flights', 'patchFlight', () => {
+  return respondWrite('flights', 'patchFlight', () => {
     const f = findFlight(id);
     if ('aircraft' in patch) f.aircraft = patch.aircraft ?? null;
     if ('notes' in patch) f.notes = patch.notes ?? null;
@@ -309,7 +333,7 @@ export function patchFlight(id: number, patch: Partial<Pick<Flight, 'aircraft' |
   });
 }
 export function deleteFlight(id: number): Promise<void> {
-  return respond('flights', 'deleteFlight', () => {
+  return respondWrite('flights', 'deleteFlight', () => {
     findFlight(id);
     store.flights = store.flights.filter(f => f.id !== id);
     store.acars = store.acars.filter(m => m.flight_id !== id);
@@ -317,7 +341,7 @@ export function deleteFlight(id: number): Promise<void> {
   });
 }
 export function combineFlights(id1: number, id2: number): Promise<{ id: number }> {
-  return respond('flights', 'combineFlights', () => {
+  return respondWrite('flights', 'combineFlights', () => {
     const a = findFlight(id1);
     const b = findFlight(id2);
     const [first, second] = (a.start_time ?? '') <= (b.start_time ?? '') ? [a, b] : [b, a];
@@ -339,14 +363,14 @@ export function combineFlights(id1: number, id2: number): Promise<{ id: number }
   });
 }
 export function createTrip(name: string): Promise<{ id: number }> {
-  return respond('trips', 'createTrip', () => {
+  return respondWrite('trips', 'createTrip', () => {
     const id = store.nextTripId++;
     store.trips.push({ id, name, notes: null, is_active: 0 });
     return { id };
   });
 }
 export function patchTrip(id: number, patch: Partial<Pick<Trip, 'name' | 'notes'>>): Promise<Trip> {
-  return respond('trips', 'patchTrip', () => {
+  return respondWrite('trips', 'patchTrip', () => {
     const t = findTripBase(id);
     if (patch.name !== undefined) t.name = patch.name;
     if (patch.notes !== undefined) t.notes = patch.notes;
@@ -354,7 +378,7 @@ export function patchTrip(id: number, patch: Partial<Pick<Trip, 'name' | 'notes'
   });
 }
 export function deleteTrip(id: number): Promise<void> {
-  return respond('trips', 'deleteTrip', () => {
+  return respondWrite('trips', 'deleteTrip', () => {
     findTripBase(id);
     const legIds = new Set(store.legs.filter(l => l.trip_id === id).map(l => l.id));
     store.flights.forEach(f => {
@@ -370,25 +394,25 @@ export function deleteTrip(id: number): Promise<void> {
   });
 }
 export function addFlightToTrip(tripId: number, flightId: number): Promise<void> {
-  return respond('trips', 'addFlightToTrip', () => {
+  return respondWrite('trips', 'addFlightToTrip', () => {
     findTripBase(tripId);
     findFlight(flightId).trip_id = tripId;
   });
 }
 export function removeFlightFromTrip(tripId: number, flightId: number): Promise<void> {
-  return respond('trips', 'removeFlightFromTrip', () => {
+  return respondWrite('trips', 'removeFlightFromTrip', () => {
     const f = findFlight(flightId);
     if (f.trip_id === tripId) f.trip_id = null;
   });
 }
 export function setActiveTrip(tripId: number | null): Promise<void> {
-  return respond('trips', 'setActiveTrip', () => {
+  return respondWrite('trips', 'setActiveTrip', () => {
     if (tripId != null) findTripBase(tripId);
     store.trips.forEach(t => { t.is_active = t.id === tripId ? 1 : 0; });
   });
 }
 export function linkFlightToLeg(flightId: number, legId: number | null): Promise<Flight> {
-  return respond('legs', 'linkFlightToLeg', () => {
+  return respondWrite('legs', 'linkFlightToLeg', () => {
     const f = findFlight(flightId);
     if (legId == null) {
       f.trip_id = f.planned_leg_prev_trip_id;
@@ -408,7 +432,7 @@ export function linkFlightToLeg(flightId: number, legId: number | null): Promise
   });
 }
 export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped' | 'flown'): Promise<PlannedLegWithChildren> {
-  return respond('legs', 'setPlannedLegStatus', () => {
+  return respondWrite('legs', 'setPlannedLegStatus', () => {
     const l = findLegRaw(legId);
     const linked = store.flights.find(f => f.planned_leg_id === legId);
     if (linked) throw new Error(`Planned leg ${legId} cannot have its status changed: linked to flight ${linked.id}`);
@@ -417,7 +441,7 @@ export function setPlannedLegStatus(legId: number, status: 'planned' | 'skipped'
   });
 }
 export function reorderPlannedLegs(tripId: number, legIds: number[]): Promise<PlannedLegWithChildren[]> {
-  return respond('legs', 'reorderPlannedLegs', () => {
+  return respondWrite('legs', 'reorderPlannedLegs', () => {
     findTripBase(tripId);
     legIds.forEach((id, i) => {
       const l = findLegRaw(id);
@@ -428,7 +452,7 @@ export function reorderPlannedLegs(tripId: number, legIds: number[]): Promise<Pl
   });
 }
 export function deletePlannedLeg(legId: number): Promise<void> {
-  return respond('legs', 'deletePlannedLeg', () => {
+  return respondWrite('legs', 'deletePlannedLeg', () => {
     findLegRaw(legId);
     store.flights.forEach(f => {
       if (f.planned_leg_id === legId) {
@@ -441,7 +465,7 @@ export function deletePlannedLeg(legId: number): Promise<void> {
   });
 }
 export function sendCannedAcars(scope: Scope, cannedId: string): Promise<AcarsMessage> {
-  return respond('acars', 'sendCannedAcars', () => {
+  return respondWrite('acars', 'sendCannedAcars', () => {
     const c = SEED_CANNED.find(x => x.id === cannedId);
     if (!c) throw new Error(`Unknown canned message ${cannedId}`);
     return addMessage({
@@ -451,7 +475,7 @@ export function sendCannedAcars(scope: Scope, cannedId: string): Promise<AcarsMe
   });
 }
 export function requestWx(scope: Scope, icao: string): Promise<{ request: AcarsMessage; reply: AcarsMessage }> {
-  return respond('acars', 'requestWx', () => {
+  return respondWrite('acars', 'requestWx', () => {
     const code = icao.trim().toUpperCase();
     const now = Date.now();
     const request = addMessage({
@@ -470,20 +494,26 @@ export function requestWx(scope: Scope, icao: string): Promise<{ request: AcarsM
 
 // ── Imports, ACARS pairs, SayIntentions and ground entry (all through the store) ──
 
-function buildImportedLeg(dep: string, arr: string, filename: string): PlannedLegWithChildren {
+function buildImportedLeg(dep: string, arr: string, filename: string, tripId: number | null = null): PlannedLegWithChildren {
   const a = AIRPORTS[dep];
   const b = AIRPORTS[arr];
   const id = store.nextLegId++;
   const dist = haversineNm(a.lat, a.lon, b.lat, b.lon);
   const leg: PlannedLegWithChildren = {
     ...structuredClone(SEED_PLANNED_LEGS[0]),
-    id, trip_id: null, seq: 1, status: 'planned', is_snippet: 0,
+    id, trip_id: tripId,
+    seq: tripId == null ? 1 : Math.max(0, ...store.legs.filter(l => l.trip_id === tripId).map(l => l.seq)) + 1,
+    status: 'planned', is_snippet: 0,
     departure_ident: a.icao, departure_name: a.name, departure_lat: a.lat, departure_lon: a.lon, departure_is_airport: 1,
     destination_ident: b.icao, destination_name: b.name, destination_lat: b.lat, destination_lon: b.lon,
     destination_is_airport: 1,
     approx_distance_nm: Math.round(dist * 1.04 * 10) / 10,
     waypoint_count: 4, waypoints: [], alternates: [], alternate_count: 0,
     arrival_deviation_nm: null, linked_flight_id: null,
+    sid_name: null, sid_runway: null, sid_transition: null, sid_type: null,
+    star_name: null, star_runway: null, star_transition: null,
+    approach_name: null, approach_runway: null, approach_transition: null, approach_type: null,
+    approach_arinc: null, approach_suffix: null, remarks: null,
     source_filename: filename, source_sha256: `import${id}`.padEnd(64, '0'),
     imported_at: new Date().toISOString(),
   };
@@ -495,9 +525,11 @@ function buildImportedLeg(dep: string, arr: string, filename: string): PlannedLe
  * Filenames of the form `SBGR-SBBR.lnmpln` (two ICAO codes the mock knows)
  * import; a name containing "warn" imports with a warning; any other name is
  * rejected as not a flight plan; a name already imported is a duplicate.
+ * With `tripId` the imported legs attach to that trip, appended after its last leg.
  */
-export function importPlannedLegs(files: File[]): Promise<PlannedLegImportResponse> {
-  return respond('legs', 'importPlannedLegs', () => {
+export function importPlannedLegs(files: File[], tripId?: number): Promise<PlannedLegImportResponse> {
+  return respondWrite('legs', 'importPlannedLegs', () => {
+    if (tripId != null) findTripBase(tripId);
     const results: PlannedLegImportResponse['results'] = [];
     const added: PlannedLegWithChildren[] = [];
     for (const f of files) {
@@ -515,7 +547,7 @@ export function importPlannedLegs(files: File[]): Promise<PlannedLegImportRespon
           error: `Already imported as leg #${dup.id}` });
         continue;
       }
-      const leg = buildImportedLeg(dep, arr, f.name);
+      const leg = buildImportedLeg(dep, arr, f.name, tripId ?? null);
       added.push(leg);
       results.push({
         filename: f.name, status: 'imported', planned_leg_id: leg.id,
@@ -539,15 +571,16 @@ export function importPlannedLegs(files: File[]): Promise<PlannedLegImportRespon
 const SIMBRIEF_FILENAME = 'simbrief-latest';
 const SIMBRIEF_LABEL = 'SBGR → SBCT';
 
-export function importSimbriefLeg(): Promise<SimbriefImportResult> {
-  return respond('legs', 'importSimbriefLeg', () => {
+export function importSimbriefLeg(tripId?: number): Promise<SimbriefImportResult> {
+  return respondWrite('legs', 'importSimbriefLeg', () => {
+    if (tripId != null) findTripBase(tripId);
     if (!store.simbrief.simbrief_user_id) throw new Error('No SimBrief user id saved');
     const existing = store.legs.find(l => l.source_filename === SIMBRIEF_FILENAME);
     if (existing) {
       return { status: 'duplicate' as const, planned_leg_id: existing.id, label: SIMBRIEF_LABEL, warnings: [],
         error: 'This SimBrief plan was already imported' };
     }
-    const leg = buildImportedLeg('SBGR', 'SBCT', SIMBRIEF_FILENAME);
+    const leg = buildImportedLeg('SBGR', 'SBCT', SIMBRIEF_FILENAME, tripId ?? null);
     return { status: 'imported' as const, planned_leg_id: leg.id, label: SIMBRIEF_LABEL,
       warnings: [{ code: 'NO_ALTERNATE', message: 'The plan has no alternate airport' }] };
   });
@@ -561,7 +594,7 @@ export function importSimbriefLeg(): Promise<SimbriefImportResult> {
 export function requestAcarsPair(
   scope: Scope, kind: 'loadsheet' | 'clearance',
 ): Promise<{ created: boolean; request: AcarsMessage; reply: AcarsMessage }> {
-  return respond('acars', 'requestAcarsPair', () => {
+  return respondWrite('acars', 'requestAcarsPair', () => {
     const owner = 'flightId' in scope ? `flight${scope.flightId}` : `leg${scope.legId}`;
     const key = `${kind}:${owner}`;
     const request = store.acars.find(m => m.dedup_key === `${key}:req`);
@@ -599,7 +632,7 @@ const siPending = (flightId: number) =>
   SI_INBOX.filter((_, i) => !store.acars.some(m => m.dedup_key === siKeyFor(flightId, i))).length;
 
 export function linkSayIntentions(flightId: number): Promise<{ link: SayIntentionsLink; pending_messages: number }> {
-  return respond('acars', 'linkSayIntentions', () => {
+  return respondWrite('acars', 'linkSayIntentions', () => {
     findFlight(flightId);
     if (store.siKey == null) throw new Error('No SayIntentions API key saved');
     const link: SayIntentionsLink = {
@@ -612,7 +645,7 @@ export function linkSayIntentions(flightId: number): Promise<{ link: SayIntentio
 }
 
 export function unlinkSayIntentions(flightId: number): Promise<void> {
-  return respond('acars', 'unlinkSayIntentions', () => {
+  return respondWrite('acars', 'unlinkSayIntentions', () => {
     findFlight(flightId);
     store.siLinks = store.siLinks.filter(l => l.flight_id !== flightId);
   });
@@ -620,7 +653,7 @@ export function unlinkSayIntentions(flightId: number): Promise<void> {
 
 /** The first import brings two ATC messages; a repeat finds nothing new. */
 export function importSayIntentions(flightId: number): Promise<{ imported: number; messages: AcarsMessage[] }> {
-  return respond('acars', 'importSayIntentions', () => {
+  return respondWrite('acars', 'importSayIntentions', () => {
     findFlight(flightId);
     const link = store.siLinks.find(l => l.flight_id === flightId);
     if (!link) throw new Error('Flight is not linked to a SayIntentions session');
@@ -642,7 +675,7 @@ export function importSayIntentions(flightId: number): Promise<{ imported: numbe
 }
 
 export function pushClearanceToSayIntentions(legId: number, body: string): Promise<AcarsMessage> {
-  return respond('acars', 'pushClearanceToSayIntentions', () => {
+  return respondWrite('acars', 'pushClearanceToSayIntentions', () => {
     findLegRaw(legId);
     return addMessage({
       ...scopeFields({ legId }), direction: 'downlink', category: 'pdc', label: 'PDC TO SAYINTENTIONS',
@@ -658,7 +691,7 @@ export function pushClearanceToSayIntentions(legId: number, body: string): Promi
 export function setGroundSession(input: {
   airport_icao: string; parking_position?: string | null; planned_leg_id?: number | null;
 }): Promise<CurrentGroundSessionResponse> {
-  return respond('ground', 'setGroundSession', () => {
+  return respondWrite('ground', 'setGroundSession', () => {
     const icao = input.airport_icao.trim().toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(icao)) throw new Error('ICAO must be 4 letters or digits');
     if (input.planned_leg_id != null) findLegRaw(input.planned_leg_id);
@@ -690,23 +723,68 @@ function siSettings(): SayIntentionsSettings {
     : { sayintentions_api_key_set: false, sayintentions_api_key_masked: null };
 }
 export function saveSimbriefSettings(userId: string | null): Promise<SimbriefSettings> {
-  return respond('settings', 'saveSimbriefSettings', () => {
+  return respondWrite('settings', 'saveSimbriefSettings', () => {
     const trimmed = userId?.trim() ?? '';
     store.simbrief = { simbrief_user_id: trimmed === '' ? null : trimmed };
     return store.simbrief;
   });
 }
 export function saveSayIntentionsKey(key: string): Promise<SayIntentionsSettings> {
-  return respond('settings', 'saveSayIntentionsKey', () => {
+  return respondWrite('settings', 'saveSayIntentionsKey', () => {
     if (key.trim() === '') throw new Error('API key must not be empty');
     store.siKey = key.trim();
     return siSettings();
   });
 }
 export function clearSayIntentionsKey(): Promise<SayIntentionsSettings> {
-  return respond('settings', 'clearSayIntentionsKey', () => {
+  return respondWrite('settings', 'clearSayIntentionsKey', () => {
     store.siKey = null;
     return siSettings();
+  });
+}
+
+// ── Flight detail writes ───────────────────────────────────────────────────
+
+export function attachFlightPlan(flightId: number, file: File): Promise<Flight> {
+  return respondWrite('flights', 'attachFlightPlan', () => {
+    const f = findFlight(flightId);
+    if (file.type !== 'application/pdf') throw new Error('File must be a PDF');
+    f.flight_plan_name = file.name.slice(0, 255);
+    return f;
+  });
+}
+export function removeFlightPlan(flightId: number): Promise<Flight> {
+  return respondWrite('flights', 'removeFlightPlan', () => {
+    const f = findFlight(flightId);
+    f.flight_plan_name = null;
+    return f;
+  });
+}
+/**
+ * Hand-close of a manually linked leg, with the server's gate and its 409
+ * texts. Marking flown records the distance from the flight's arrival to the
+ * leg's destination; returning to planned clears it.
+ */
+export function setFlightPlannedLegStatus(flightId: number, status: 'flown' | 'planned'): Promise<PlannedLegWithChildren> {
+  return respondWrite('legs', 'setFlightPlannedLegStatus', () => {
+    const f = findFlight(flightId);
+    const leg = f.planned_leg_id == null ? null : findLegRaw(f.planned_leg_id);
+    if (!leg) throw new Error(`Flight ${flightId} is not linked to a planned leg`);
+    if (f.planned_leg_link_source !== 'manual') {
+      throw new Error(`Flight ${flightId} was not linked to its planned leg by hand: only a hand-linked flight's leg can be closed by hand`);
+    }
+    if (f.end_time == null) throw new Error(`Flight ${flightId} has not ended: its planned leg is closed at touchdown`);
+    if (status === 'flown' && leg.status !== 'planned') {
+      throw new Error(`Planned leg ${leg.id} is '${leg.status}', not 'planned': only a planned leg can be marked flown by hand`);
+    }
+    if (status === 'planned' && leg.status !== 'flown') {
+      throw new Error(`Planned leg ${leg.id} is '${leg.status}', not 'flown': only a flown leg can be returned to planned`);
+    }
+    leg.status = status;
+    leg.arrival_deviation_nm = status === 'planned' || f.arrival_lat == null || f.arrival_lon == null
+      ? null
+      : Math.round(haversineNm(f.arrival_lat, f.arrival_lon, leg.destination_lat, leg.destination_lon) * 10) / 10;
+    return hydrateLeg(leg);
   });
 }
 
