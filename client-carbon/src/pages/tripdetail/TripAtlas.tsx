@@ -50,7 +50,7 @@ export function TripAtlas({ journey, mapChildren }: TripAtlasProps) {
 
       {progress !== undefined && (
         <section>
-          <h4 className="tripatlas__section-title">Planned Route Progress</h4>
+          <h2 className="sabia-heading-03 tripatlas__section-title">Planned Route Progress</h2>
           <ProgressBar
             label="Planned route progress"
             hideLabel
@@ -63,9 +63,9 @@ export function TripAtlas({ journey, mapChildren }: TripAtlasProps) {
 
       {journey.countries.length > 0 && (
         <section>
-          <h4 className="tripatlas__section-title">
+          <h2 className="sabia-heading-03 tripatlas__section-title">
             {journey.countries.length === 1 ? 'Country' : `Countries — ${journey.countries.length}`}
-          </h4>
+          </h2>
           <div className="tripatlas__tags">
             {journey.countries.map(c => (
               <Tag key={c.name} type="gray" title={`${c.airports} airport${c.airports === 1 ? '' : 's'}`}>
@@ -88,7 +88,7 @@ export function TripAtlas({ journey, mapChildren }: TripAtlasProps) {
       )}
 
       <section>
-        <h4 className="tripatlas__section-title">Every Leg</h4>
+        <h2 className="sabia-heading-03 tripatlas__section-title">Every Leg</h2>
         <JourneyMap
           legs={journey.legs}
           airports={journey.airports}
@@ -100,7 +100,7 @@ export function TripAtlas({ journey, mapChildren }: TripAtlasProps) {
       </section>
 
       <section>
-        <h4 className="tripatlas__section-title">Route</h4>
+        <h2 className="sabia-heading-03 tripatlas__section-title">Route</h2>
         <div className="tripatlas__route">
           {journey.legs.map(leg => (
             <Link
@@ -127,7 +127,7 @@ export function TripAtlas({ journey, mapChildren }: TripAtlasProps) {
 
       {journey.aircraft.length > 1 && (
         <section>
-          <h4 className="tripatlas__section-title">Aircraft</h4>
+          <h2 className="sabia-heading-03 tripatlas__section-title">Aircraft</h2>
           <div className="tripatlas__fleet">
             {journey.aircraft.map(a => (
               <Tile key={a.name}>

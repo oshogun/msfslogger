@@ -715,7 +715,7 @@ export function setGroundSession(input: {
   });
 }
 
-// ── Settings writes (addition to the frozen contract, for the Settings screen) ──
+// ── Settings writes (for the Settings screen) ──
 
 function siSettings(): SayIntentionsSettings {
   return store.siKey

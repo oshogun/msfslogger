@@ -117,6 +117,13 @@
   src: url('~@ibm/plex-mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2') format('woff2');
 }
 
+// ── Heading type styles ────────────────────────────────────────────────────
+// Heading elements are chosen for document outline (one h1 per page, no level
+// jumps); these classes pin the look independently of the element.
+.sabia-heading-05 { @include type.type-style('heading-05'); }
+.sabia-heading-04 { @include type.type-style('heading-04'); }
+.sabia-heading-03 { @include type.type-style('heading-03'); }
+
 // ── Leaflet ────────────────────────────────────────────────────────────────
 // leaflet/dist/leaflet.css is imported from the map wrapper module, not here,
 // so a screen with no map never pays for it.

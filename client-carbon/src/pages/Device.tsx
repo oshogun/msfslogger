@@ -79,7 +79,7 @@ export function Device() {
       <Tile className={`device-frame${engaged ? ' is-engaged' : ''}`}>
         <div className="device-head">
           <div>
-            <div className="device-title">THE DEVICE</div>
+            <h1 className="device-title">THE DEVICE</h1>
             <div className="device-sub">UNIT 0x7F3A · REV C</div>
             <div className="device-sub">NO SERVICEABLE PARTS</div>
           </div>

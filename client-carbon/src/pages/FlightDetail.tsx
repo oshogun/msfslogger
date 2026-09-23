@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useExportPdf } from '../components/ExportPdfButton';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Button, Checkbox, Column, Grid, InlineLoading, InlineNotification, Link,
-  Tab, TabList, TabPanel, TabPanels, Tabs, Tile, Tooltip,
+  Button, Checkbox, InlineLoading, InlineNotification, Link,
+  Tab, TabList, TabPanel, TabPanels, Tabs, Tile,
 } from '@carbon/react';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { EmptyState } from '../components/EmptyState';
@@ -25,7 +26,6 @@ import { newReplayBridge, ReplayMarker, TrackOnTop } from './flightdetail/Replay
 
 type View = 'track' | 'altitude' | 'replay';
 const VIEW_LABEL: Record<View, string> = { track: 'Track', altitude: 'Altitude', replay: 'Replay' };
-const PRINT_NOTE = 'Print output is not part of the prototype';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const coordStr = (lat: number | null, lon: number | null) =>
@@ -49,7 +49,7 @@ export function FlightDetail() {
   const [uploadError, setUploadError] = useState('');
   const [exportingKml, setExportingKml] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [printNote, setPrintNote] = useState(false);
+  const exportPdf = useExportPdf('ghost');
   const [includePlan, setIncludePlan] = useState(true);
 
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
@@ -267,20 +267,16 @@ export function FlightDetail() {
     { label: 'Distance', value: `${formatDistance(flight.distance_nm)} nm` },
     { label: 'Max Altitude', value: `${formatAlt(flight.max_altitude_ft)} ft` },
     { label: 'Max Airspeed', value: `${formatSpeed(flight.max_airspeed_kts)} kts` },
-  ];
-  const endpoints = [
-    { label: 'Points', value: flight.point_count ?? points.length, sub: '', lg: 4 },
+    { label: 'Points', value: flight.point_count ?? points.length },
     {
       label: 'Departure',
       value: flight.departure_icao || coordStr(flight.departure_lat, flight.departure_lon),
       sub: flight.departure_icao ? (flight.departure_name || coordStr(flight.departure_lat, flight.departure_lon)) : '',
-      lg: 6,
     },
     {
       label: 'Arrival',
       value: flight.arrival_icao || coordStr(flight.arrival_lat, flight.arrival_lon),
       sub: flight.arrival_icao ? (flight.arrival_name || coordStr(flight.arrival_lat, flight.arrival_lon)) : '',
-      lg: 6,
     },
   ];
 
@@ -306,22 +302,11 @@ export function FlightDetail() {
         subtitle={`${formatDate(flight.start_time)}${flight.end_time ? ` → ${formatDate(flight.end_time)}` : ' (in progress)'}`}
       />
 
-      <StatTiles tiles={tiles} />
-      <Grid condensed narrow style={{ padding: 0, marginInline: 0, marginBottom: '1rem' }}>
-        {endpoints.map(e => (
-          <Column key={e.label} sm={2} md={e.lg === 4 ? 2 : 3} lg={e.lg}>
-            <Tile>
-              <div style={{ color: 'var(--cds-text-secondary)', fontSize: '0.875rem' }}>{e.label}</div>
-              <div style={{ fontSize: '2rem', lineHeight: 1.25 }}>{e.value}</div>
-              {e.sub && <div style={{ color: 'var(--cds-text-secondary)', fontSize: '0.875rem' }}>{e.sub}</div>}
-            </Tile>
-          </Column>
-        ))}
-      </Grid>
+      <div style={{ marginBottom: '1rem' }}><StatTiles tiles={tiles} /></div>
 
       {flight.notes && (
         <Tile style={{ marginBottom: '1rem' }}>
-          <h4 style={{ marginBottom: '0.5rem' }}>Notes</h4>
+          <h2 className="sabia-heading-03" style={{ marginBottom: '0.5rem' }}>Notes</h2>
           <p style={{ whiteSpace: 'pre-wrap' }}>{flight.notes}</p>
         </Tile>
       )}
@@ -371,9 +356,7 @@ export function FlightDetail() {
         <Button as={RouterLink} to="/" kind="ghost">← Back</Button>
         <Button kind="ghost" onClick={() => { setSaveError(''); setEditOpen(true); }}>Edit</Button>
         <Button as={RouterLink} to={`/flight/${flight.id}/acars`} kind="ghost">ACARS Messages</Button>
-        <Tooltip description={PRINT_NOTE} align="top">
-          <Button kind="ghost" aria-disabled="true" onClick={() => setPrintNote(true)}>Export PDF</Button>
-        </Tooltip>
+        {exportPdf.button}
         <Button kind="ghost" disabled={exportingKml} onClick={handleExportKml}>
           {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </Button>
@@ -387,15 +370,7 @@ export function FlightDetail() {
         )}
         <Button kind="danger" onClick={() => setConfirm('delete')}>Delete Flight</Button>
       </div>
-      {printNote && (
-        <InlineNotification
-          kind="info"
-          title="Export PDF"
-          subtitle={`${PRINT_NOTE}.`}
-          onCloseButtonClick={() => setPrintNote(false)}
-          lowContrast
-        />
-      )}
+      {exportPdf.note}
       {actionError && (
         <InlineNotification
           kind="error"

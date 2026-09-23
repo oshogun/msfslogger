@@ -54,7 +54,7 @@ export function PlannedLegSection({
 
   return (
     <Tile style={{ marginBottom: '1rem' }} data-testid="planned-leg-section">
-      <h4 style={{ marginBottom: '0.75rem' }}>Planned Leg</h4>
+      <h2 className="sabia-heading-03" style={{ marginBottom: '0.75rem' }}>Planned Leg</h2>
       {loading && <InlineLoading description="Loading planned leg…" />}
       {loadError && <InlineNotification kind="error" title="Planned leg" subtitle={loadError} hideCloseButton lowContrast />}
       {leg && (

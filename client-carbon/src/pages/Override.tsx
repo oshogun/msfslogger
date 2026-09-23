@@ -160,7 +160,7 @@ export function Override() {
       <Tile ref={frameRef} className={`override-frame${on ? ' is-engaged' : ''}`}>
         <div className="override-head">
           <div>
-            <div className="override-title">THE OVERRIDE</div>
+            <h1 className="override-title">THE OVERRIDE</h1>
             <div className="override-sub">UNIT 0x7F3B · REV A</div>
             <div className="override-sub">DOES NOT ACCEPT INSTRUCTION</div>
           </div>

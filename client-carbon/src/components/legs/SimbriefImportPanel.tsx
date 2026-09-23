@@ -15,17 +15,19 @@ export interface SimbriefImportPanelProps {
   error?: string;
   /** Outcome of the last import; a duplicate is informational, not an error. */
   result?: SimbriefImportResult | null;
+  /** Heading element for the panel title, so it can nest under a section of any depth. */
+  headingLevel?: 'h2' | 'h3' | 'h4';
 }
 
 /** SimBrief import action: disabled, with a link to /settings, until a user id is saved. */
-export function SimbriefImportPanel({ userId, importing = false, onImport, error, result }: SimbriefImportPanelProps) {
+export function SimbriefImportPanel({ userId, importing = false, onImport, error, result, headingLevel: H = 'h2' }: SimbriefImportPanelProps) {
   const loading = userId === undefined;
   const unset = userId === null || userId === '';
   const disabled = loading || unset || importing;
 
   return (
     <section aria-label="Import from SimBrief">
-      <h4 style={{ marginBlockEnd: '0.5rem' }}>Import from SimBrief</h4>
+      <H className="sabia-heading-03" style={{ marginBlockEnd: '0.5rem' }}>Import from SimBrief</H>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <Button kind="tertiary" disabled={disabled} onClick={onImport}>Import from SimBrief</Button>
         {importing && <InlineLoading description="Importing from SimBrief…" />}

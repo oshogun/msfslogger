@@ -1,21 +1,23 @@
-import { Column, Grid, Tile } from '@carbon/react';
+import { Tile } from '@carbon/react';
+import './stattiles.scss';
 
 export interface StatTile {
   label: string;
   value: string | number;
+  /** Optional secondary line under the value. */
+  sub?: string;
 }
 
 export function StatTiles({ tiles }: { tiles: StatTile[] }) {
   return (
-    <Grid condensed narrow style={{ padding: 0, marginInline: 0 }}>
+    <div className="stat-tiles">
       {tiles.map(t => (
-        <Column key={t.label} sm={2} md={2} lg={4}>
-          <Tile>
-            <div style={{ color: 'var(--cds-text-secondary)', fontSize: '0.875rem' }}>{t.label}</div>
-            <div style={{ fontSize: '2rem', lineHeight: 1.25, fontWeight: 400 }}>{t.value}</div>
-          </Tile>
-        </Column>
+        <Tile key={t.label} className="stat-tiles__tile">
+          <div className="stat-tiles__label">{t.label}</div>
+          <div className="stat-tiles__value">{t.value}</div>
+          {t.sub && <div className="stat-tiles__label">{t.sub}</div>}
+        </Tile>
       ))}
-    </Grid>
+    </div>
   );
 }

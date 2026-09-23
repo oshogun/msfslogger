@@ -13,7 +13,7 @@ export interface FlightPlanSectionProps {
 export function FlightPlanSection({ flight, uploading, uploadError, onFile, onRemove }: FlightPlanSectionProps) {
   return (
     <Tile style={{ marginBottom: '1rem' }} data-testid="flight-plan-section">
-      <h4 style={{ marginBottom: '0.75rem' }}>Flight Plan</h4>
+      <h2 className="sabia-heading-03" style={{ marginBottom: '0.75rem' }}>Flight Plan</h2>
       {flight.flight_plan_name ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <span data-testid="flight-plan-name">{flight.flight_plan_name}</span>

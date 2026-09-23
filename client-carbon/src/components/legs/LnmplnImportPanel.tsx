@@ -12,10 +12,12 @@ export interface LnmplnImportPanelProps {
   results?: PlannedLegImportResponse['results'] | null;
   /** The response's batch verdict; used to explain an upload-order fallback. */
   batch?: PlannedLegImportResponse['batch'];
+  /** Heading element for the panel title, so it can nest under a section of any depth. */
+  headingLevel?: 'h2' | 'h3' | 'h4';
 }
 
 /** Multi-file .lnmpln import: per-file errors and warnings both listed, plus an ordering notice. */
-export function LnmplnImportPanel({ onFiles, importing = false, error, results, batch }: LnmplnImportPanelProps) {
+export function LnmplnImportPanel({ onFiles, importing = false, error, results, batch, headingLevel: H = 'h2' }: LnmplnImportPanelProps) {
   const rejected = (results ?? []).filter(r => r.status !== 'imported');
   const warned = (results ?? []).filter(r => r.status === 'imported' && r.warnings && r.warnings.length > 0);
   const notice = batch && batch.ordering === 'upload'
@@ -24,7 +26,7 @@ export function LnmplnImportPanel({ onFiles, importing = false, error, results, 
 
   return (
     <section aria-label="Import planned route">
-      <h4 style={{ marginBlockEnd: '0.5rem' }}>Import Planned Route (.lnmpln)</h4>
+      <H className="sabia-heading-03" style={{ marginBlockEnd: '0.5rem' }}>Import Planned Route (.lnmpln)</H>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <FileUploaderButton
           labelText="Choose .lnmpln files"

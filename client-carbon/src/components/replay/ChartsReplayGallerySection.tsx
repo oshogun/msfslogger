@@ -24,9 +24,9 @@ export function ChartsReplayGallerySection() {
       {!error && !points && <InlineLoading description="Loading flight" />}
       {points && (
         <>
-          <h4 style={{ marginTop: '2rem' }}>AltitudeChart</h4>
+          <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>AltitudeChart</h2>
           <AltitudeChart points={points} />
-          <h4 style={{ marginTop: '2rem' }}>ReplayPanel</h4>
+          <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>ReplayPanel</h2>
           <ReplayPanel id="gallery-replay" points={points} onPosition={s => setPos(s)} />
           <p data-testid="replay-position" style={{ marginTop: '0.5rem', fontSize: '0.75rem' }}>
             {pos ? `marker ${pos.lat.toFixed(4)}, ${pos.lon.toFixed(4)} hdg ${Math.round(pos.headingDeg)} pt ${pos.pointIndex + 1}` : ''}

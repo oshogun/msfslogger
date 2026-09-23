@@ -16,10 +16,10 @@ import {
 } from '../mock/api';
 import type { Flight, Trip } from '../mock/types';
 import './allflights/allflights.scss';
+import { legColor } from '../components/maps/palette';
 import { formatAlt, formatDate, formatDistance, formatDuration, formatSpeed } from '../utils/format';
 import { MAX_KML_FLIGHTS, buildFlightsKml, downloadKml } from '../utils/kml';
 
-const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 const PAGE_SIZES = [5, 10, 20];
 const COLUMN_COUNT = 9;
 
@@ -323,7 +323,7 @@ export function AllFlights() {
                           onChange={(_, { checked }) => toggleCheck(f, checked)}
                         />
                       </TableCell>
-                      {aircraftCell(f, LEG_COLORS[trip.flights.findIndex(x => x.id === f.id) % LEG_COLORS.length])}
+                      {aircraftCell(f, legColor(trip.flights.findIndex(x => x.id === f.id)))}
                       {statCells(f)}
                       {viewButton(f)}
                     </TableRow>

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
-import { Breadcrumb, BreadcrumbItem, Heading, Section } from '@carbon/react';
+import { Breadcrumb, BreadcrumbItem } from '@carbon/react';
 
 export interface PageHeaderProps {
   title: string;
@@ -24,9 +24,7 @@ export function PageHeader({ title, subtitle, breadcrumbs, actions }: PageHeader
         </Breadcrumb>
       )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-        <Section>
-          <Heading>{title}</Heading>
-        </Section>
+        <h1 className="sabia-heading-05">{title}</h1>
         {actions && <div style={{ display: 'flex', gap: '0.5rem' }}>{actions}</div>}
       </div>
       {subtitle && (

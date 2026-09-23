@@ -25,18 +25,18 @@ export function DevGallery() {
         breadcrumbs={[{ label: 'Home', href: '/' }, { label: 'Gallery' }]}
         actions={<Button kind="danger" onClick={() => setOpen(true)}>Open confirm modal</Button>}
       />
-      <h4>StatTiles</h4>
+      <h2 className="sabia-heading-03">StatTiles</h2>
       <StatTiles tiles={[
         { label: 'Flights', value: 42 },
         { label: 'Hours', value: '118.4' },
         { label: 'Distance', value: '31,204 nm' },
         { label: 'Airports', value: 17 },
       ]} />
-      <h4 style={{ marginTop: '2rem' }}>StatusTag</h4>
+      <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>StatusTag</h2>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {KINDS.map(k => <StatusTag key={k} kind={k} />)}
       </div>
-      <h4 style={{ marginTop: '2rem' }}>EmptyState</h4>
+      <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>EmptyState</h2>
       <EmptyState title="No flights yet" description="Fly something and it will show up here." />
       <LegsGallerySection />
       <MapsGallerySection />

@@ -90,7 +90,7 @@ export function Settings() {
         <Tile>
           <Form onSubmit={e => { e.preventDefault(); if (sbDirty) void saveSb(); }}>
             <Stack gap={5}>
-              <h3 style={{ font: 'var(--cds-heading-03, inherit)' }}>SimBrief</h3>
+              <h2 className="sabia-heading-03">SimBrief</h2>
               <p style={helper}>The user ID is stored here; importing a SimBrief plan itself stays on Prefiles.</p>
               {loading ? <SkeletonText /> : (
                 <TextInput
@@ -115,7 +115,7 @@ export function Settings() {
         <Tile>
           <Form onSubmit={e => { e.preventDefault(); if (siKey) void saveSi(); }}>
             <Stack gap={5}>
-              <h3 style={{ font: 'var(--cds-heading-03, inherit)' }}>SayIntentions</h3>
+              <h2 className="sabia-heading-03">SayIntentions</h2>
               <p style={helper}>
                 Optional. Enables importing SayIntentions comms into a flight&apos;s ACARS thread and sending a PDC into your live session.
                 The key is write-only and never shown again.

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useExportPdf } from '../components/ExportPdfButton';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Button, ContentSwitcher, InlineNotification, Link, SkeletonText, Switch, Tile,
-  Tooltip,
 } from '@carbon/react';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { EmptyState } from '../components/EmptyState';
@@ -49,6 +49,7 @@ export function TripDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get('view') === 'atlas' ? 'atlas' : 'overview';
 
+  const exportPdf = useExportPdf('tertiary');
   const [trip, setTrip] = useState<Trip | null>(null);
   const [loadError, setLoadError] = useState('');
   const [tracksError, setTracksError] = useState(false);
@@ -595,13 +596,13 @@ export function TripDetail() {
 
           {trip.notes && (
             <Tile>
-              <h4 style={{ marginBlockEnd: '0.5rem' }}>Notes</h4>
+              <h2 className="sabia-heading-03" style={{ marginBlockEnd: '0.5rem' }}>Notes</h2>
               <p style={{ whiteSpace: 'pre-wrap' }}>{trip.notes}</p>
             </Tile>
           )}
 
           <Tile>
-            <h4 style={{ marginBlockEnd: '0.5rem' }}>Combined Route</h4>
+            <h2 className="sabia-heading-03" style={{ marginBlockEnd: '0.5rem' }}>Combined Route</h2>
             {tracksError && (
               <InlineNotification kind="warning" lowContrast hideCloseButton title="Tracks unavailable"
                 subtitle="Some flight tracks could not be loaded, so the map may be incomplete."
@@ -635,7 +636,7 @@ export function TripDetail() {
           </div>
 
           <section aria-label="Legs">
-            <h4 style={{ marginBlockEnd: '0.5rem' }}>Legs</h4>
+            <h2 className="sabia-heading-03" style={{ marginBlockEnd: '0.5rem' }}>Legs</h2>
             {reorderError && (
               <InlineNotification kind="error" lowContrast title="Reorder failed" subtitle={reorderError}
                 onCloseButtonClick={() => setReorderError('')} style={{ maxInlineSize: 'none' }} />
@@ -648,17 +649,13 @@ export function TripDetail() {
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBlockStart: '2rem', alignItems: 'center' }}>
         <Button kind="ghost" as={RouterLink} to="/">Back</Button>
         <Button kind="tertiary" onClick={openEdit}>Edit</Button>
-        <Tooltip label="Print output is not part of the prototype" align="top">
-          <span tabIndex={0} style={{ display: 'inline-block' }}>
-            <Button kind="tertiary" disabled>Export PDF</Button>
-          </span>
-        </Tooltip>
+        {exportPdf.button}
         <Button kind="tertiary" disabled={exportingKml} onClick={handleExportKml}>
           {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </Button>
         <Button kind="danger--tertiary" onClick={() => setConfirm({ kind: 'deleteTrip' })}>Delete Trip</Button>
-        <span style={{ color: 'var(--cds-text-secondary)' }}>Print output is not part of the prototype.</span>
       </div>
+      {exportPdf.note}
 
       <EditTripModal
         open={editOpen}

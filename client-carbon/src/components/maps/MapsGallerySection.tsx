@@ -15,7 +15,7 @@ export function MapsGallerySection() {
 
   return (
     <>
-      <h4 style={{ marginTop: '2rem' }}>FlightMap</h4>
+      <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>FlightMap</h2>
       {error && <p style={{ color: 'var(--cds-text-error)' }}>{error}</p>}
       {!flight && !error && <InlineLoading description="Loading track" />}
       {flight && <FlightMap points={flight.points ?? []} height="20rem" />}

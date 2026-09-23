@@ -161,7 +161,7 @@ export function GroundSection({ status }: { status: Status | null }) {
           <Form onSubmit={handleSubmit} aria-label="Manual ground position entry">
             <Stack gap={5}>
               <div>
-                <h4 style={{ fontSize: '1rem', fontWeight: 600 }}>Manual entry (fallback)</h4>
+                <h2 style={{ fontSize: '1rem', fontWeight: 600, lineHeight: 1.4 }}>Manual entry (fallback)</h2>
                 <p style={{ color: 'var(--cds-text-secondary)', fontSize: '0.875rem' }}>
                   Sabiá detects your airport and stand automatically. Use this only when detection could not resolve your position.
                 </p>

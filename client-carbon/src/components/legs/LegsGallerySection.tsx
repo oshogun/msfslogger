@@ -31,8 +31,9 @@ export function LegsGallerySection() {
 
   return (
     <div id="legs-gallery" style={{ marginTop: '3rem' }}>
-      <h3>Planned-leg rows and import panels</h3>
-      <h4 style={{ marginTop: '1rem' }}>GhostLegRow: one per status, snippet, link picker, skip 409</h4>
+      <h2 className="sabia-heading-04">Planned-leg rows and import panels</h2>
+      <h3 className="sabia-heading-03" style={{ marginTop: '1rem' }}>GhostLegRow: one per status, snippet, link picker, skip 409</h3>
+      <div style={{ overflowX: 'auto' }}>
       <Table size="lg" aria-label="Ghost leg rows">
         <TableHead>
           <TableRow>
@@ -73,6 +74,7 @@ export function LegsGallerySection() {
           />
         </TableBody>
       </Table>
+      </div>
       <div style={{ marginTop: '1rem' }}>
         <Button id="open-skip-confirm" kind="tertiary" onClick={() => setSkipOpen(true)}>Open skip confirm (with 409)</Button>
       </div>
@@ -84,17 +86,18 @@ export function LegsGallerySection() {
       />
 
       <div style={{ marginTop: '2rem' }}><LnmplnImportPanel
+        headingLevel="h4"
         onFiles={() => undefined}
         results={IMPORT_RESULTS}
         batch={{ ordering: 'upload', reason: 'NO_UNIQUE_HEAD' }}
         error="Import failed: network error"
       /></div>
 
-      <h4 style={{ marginTop: '2rem' }}>SimBrief: imported, duplicate, disabled (no user id)</h4>
+      <h3 className="sabia-heading-03" style={{ marginTop: '2rem' }}>SimBrief: imported, duplicate, disabled (no user id)</h3>
       <div style={{ display: 'grid', gap: '1.5rem' }}>
-        <SimbriefImportPanel userId="123456" onImport={() => undefined} result={SB_IMPORTED} />
-        <SimbriefImportPanel userId="123456" onImport={() => undefined} result={SB_DUPLICATE} />
-        <SimbriefImportPanel userId={null} onImport={() => undefined} />
+        <SimbriefImportPanel headingLevel="h4" userId="123456" onImport={() => undefined} result={SB_IMPORTED} />
+        <SimbriefImportPanel headingLevel="h4" userId="123456" onImport={() => undefined} result={SB_DUPLICATE} />
+        <SimbriefImportPanel headingLevel="h4" userId={null} onImport={() => undefined} />
       </div>
     </div>
   );

@@ -24,7 +24,7 @@ export function NavdataGallerySection() {
 
   return (
     <>
-      <h4 style={{ marginTop: '2rem' }}>Navdata layers and route geometry</h4>
+      <h2 className="sabia-heading-03" style={{ marginTop: '2rem' }}>Navdata layers and route geometry</h2>
       {error && <p style={{ color: 'var(--cds-text-error)' }}>{error}</p>}
       {!leg && !error && <InlineLoading description="Loading leg" />}
       {leg && (

@@ -6,7 +6,7 @@ type NavTrips = AppShellProps['trips'];
 type NavLoose = AppShellProps['looseFlights'];
 export interface NavTree { trips: NavTrips; loose: NavLoose }
 
-const route = (dep: string | null, arr: string | null) => `${dep ?? '?'} → ${arr ?? '…'}`;
+const route = (dep: string | null, arr: string | null) => `${dep ?? '???'} → ${arr ?? '???'}`;
 
 /** How long writes are allowed to pile up before the tree is fetched again. */
 const REFETCH_DEBOUNCE_MS = 150;
