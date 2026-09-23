@@ -82,3 +82,5 @@ renders unstyled.
 - Home's ground-position manual entry and the rest of the write paths are mock-backed.
 - The navdata panel is large on phones.
 - The real API is never called.
+
+The header brand text uses self-hosted Montserrat 700 (latin subset) from `@fontsource/montserrat`, licensed under the SIL Open Font License 1.1.

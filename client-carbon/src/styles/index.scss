@@ -128,6 +128,16 @@
 // leaflet/dist/leaflet.css is imported from the map wrapper module, not here,
 // so a screen with no map never pays for it.
 
+// Header brand text only: bold geometric sans close to the wordmark in the
+// logo. The rest of the app stays in IBM Plex.
+.shell-name-text {
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 700;
+  font-size: 1.75rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
 // Username and product name in the header: too wide for phones, where the
 // logo and the account action's tooltip carry them.
 .shell-username,

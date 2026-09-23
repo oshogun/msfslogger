@@ -1,3 +1,4 @@
+import '@fontsource/montserrat/latin-700.css';
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -83,8 +84,11 @@ export function AppShell({
           aria-expanded={isSideNavExpanded}
         />
         <HeaderName as={Link} to="/" prefix="" style={{ display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
-          <img src="/sabianotext.svg" alt="" style={{ height: '1.75rem', marginInlineEnd: '0.75rem' }} />
-          <span className="shell-name-text">Sabiá Flight Database</span>
+          {/* HeaderName wraps its children in an inline span; the inner flex box centres logo and text on one line. */}
+          <span style={{ display: 'flex', alignItems: 'center' }}>
+            <img src="/sabianotext.svg" alt="" style={{ height: '1.75rem', marginInlineEnd: '0.75rem' }} />
+            <span className="shell-name-text">Sabiá Flight Database</span>
+          </span>
         </HeaderName>
         <HeaderGlobalBar>
           <div aria-live="polite" style={{ display: 'flex', alignItems: 'center', height: '100%', marginInlineEnd: '0.5rem' }}>
