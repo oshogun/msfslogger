@@ -19,3 +19,8 @@ navdata.db*
 
 # Run artifacts from the agentic workflow are not source code
 .claude/runs/
+
+# Fresh-clone working trees for the agentic workflow's Implement step.
+# Kept inside the project (not /tmp) so a disk-cleanup pass elsewhere on the
+# machine can't delete uncommitted or unfetched run work out from under it.
+.claude/run-clones/

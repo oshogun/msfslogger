@@ -193,10 +193,20 @@ For tier-3 work only — see Cost discipline rule 6.
   there:
 
   ```
-  RUN_DIR=$(mktemp -d /tmp/msfslogger-run-<run-id>-XXXX)   # or the session scratchpad
+  RUN_DIR=/home/guilherme/msfslogger/.claude/run-clones/<run-id>
+  mkdir -p "$RUN_DIR"
   git clone --local --branch main /home/guilherme/msfslogger "$RUN_DIR/tree"
   git -C "$RUN_DIR/tree" switch -c run/<run-id>
   ```
+
+  `.claude/run-clones/` is gitignored (never committed, never part of `dist/`)
+  but lives inside the project, not `/tmp` or the session scratchpad — a
+  disk-cleanup pass elsewhere on the machine deleted an entire unmerged run's
+  clone on 2026-09-23 (the commit was never fetched into the live repo, so it
+  was unrecoverable) precisely because nothing about a path under `/tmp`
+  signals "don't touch this." Keeping it in-project doesn't make it safe to
+  delete carelessly, but it does keep it out of blast radius from cleanup
+  aimed at generic temp directories.
 
   - The clone is of **committed `main`** — uncommitted or untracked files in
     the live checkout (`.claude/runs/**`, `start.sh`, `flights.db`,
