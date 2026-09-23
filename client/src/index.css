@@ -1079,3 +1079,7 @@ tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
 .replay-value { font-variant-numeric: tabular-nums; color: #e2e8f0; font-size: 0.95rem; font-weight: 600; }
 .replay-readout--gap .replay-value[data-field="state"] { color: #fbbf24; }
 .replay-aircraft { color: #f8fafc; }
+
+/* Leaflet panes/controls use z-index up to 1000; contain them so the map
+   scrolls under the sticky .header instead of over it. */
+.leaflet-container { isolation: isolate; }
