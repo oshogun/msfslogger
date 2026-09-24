@@ -145,21 +145,27 @@ the live server.
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and every pull request (no
-branch filter), on Node 24 (from `.nvmrc`), as two jobs:
+branch filter), on Node 24 (from `.nvmrc`), as three jobs:
 
-- **`build-and-test`**: `npm ci` (root and `client/`), `npm run build`, the
-  print-chunk guard (`cd client && npx vite build --manifest && npm run
-  check:print-chunk` — fails if a Carbon or app module ends up in the
-  `/print/` bundle), `npm run test:types` (root and client), `npm test` (root
-  and client's component suite).
-- **`e2e`** (depends on `build-and-test` passing first): installs the
+- **`build-and-test`**: `npm ci` (root and `client/`), then the same build
+  `npm run build` does, split into steps: `tsc` in `client/` (typecheck),
+  `vite build --manifest`, `npm run build:server`. Then the print-chunk guard
+  (`npm run check:print-chunk` on that same build — fails if a Carbon or app
+  module ends up in the `/print/` bundle), `npm run test:types` (root and
+  client), `npm test` (root and client's component suite).
+- **`docker`**: builds the `Dockerfile` image with Buildx (no push, GitHub
+  Actions layer cache), in parallel with `build-and-test`, so a broken image
+  build fails CI.
+- **`e2e`** (depends on `build-and-test` passing first; the Playwright config
+  retries a failed test once on CI): installs the
   Playwright Chromium browser, runs `cd client && npm run test:e2e` (with
   `MSFSLOGGER_E2E_SCRATCH` pointed at the runner's temp directory), and
   uploads Playwright's HTML report as a build artifact on success and
   failure both (skipped only if the job is cancelled), plus traces/
   screenshots/JUnit XML on failure only.
 
-Both jobs set `IBM_TELEMETRY_DISABLED=true` (as does the `Dockerfile`) so
+`build-and-test` and `e2e` set `IBM_TELEMETRY_DISABLED=true` (the `Dockerfile`
+sets it itself) so
 Carbon's install-time telemetry never runs. There's no separate lint step and no coverage gate configured.
 
 ## Branching and review
