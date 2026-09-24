@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { TripMap } from '../components/TripMap';
-import { FlightMap } from '../components/FlightMap';
-import { AltitudeChart } from '../components/AltitudeChart';
-import { StatsGrid } from '../components/StatsGrid';
+import { TripMap } from './TripMap';
+import { FlightMap } from './FlightMap';
+import { AltitudeChart } from './AltitudeChart';
+import { StatsGrid } from './StatsGrid';
 import { apiFetch } from '../utils/api';
-import { useExportReady } from '../utils/exportReady';
-import { strideSample, lttb, MAP_MAX_POINTS, CHART_MAX_POINTS } from '../utils/downsample';
+import { useExportReady } from './exportReady';
+import { strideSample, lttb, MAP_MAX_POINTS, CHART_MAX_POINTS } from './downsample';
 import { formatDateIn, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
-import { interleaveTripRows, plannedLegBadge } from '../components/PlannedLegRows';
+import { interleaveTripRows, plannedLegBadge } from './tripRows';
 import type { Trip } from '../types';
-import '../print.css';
+// print.css is loaded once by print/entry.tsx, the only entry point that
+// ever mounts this page.
 
 const LEG_COLORS = ['#60a5fa', '#34d399', '#f59e0b', '#a78bfa', '#f87171'];
 

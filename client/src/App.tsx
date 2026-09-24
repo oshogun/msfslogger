@@ -11,8 +11,6 @@ import { TripDetail } from './pages/TripDetail';
 import { Device } from './pages/Device';
 import { Override } from './pages/Override';
 import { Login } from './pages/Login';
-import { PrintFlight } from './pages/PrintFlight';
-import { PrintTrip } from './pages/PrintTrip';
 import { useStatus } from './hooks/useStatus';
 import { SessionProvider } from './hooks/useSession';
 
@@ -47,17 +45,13 @@ export function App() {
     <SessionProvider>
       <Routes>
         {/*
-          /login and the print routes are kept outside AppShell and outside
-          RequireAuth on purpose: Login must not mount Header, whose useStatus
-          hook polls /api/status forever — that would 401-loop on a page
-          shown specifically to an anonymous visitor. The print routes stay
-          public HTML so a mid-render 401 during a PDF export surfaces as
-          window.__EXPORT_ERROR__, never a redirect that would render the
-          login page into the PDF.
+          /login is kept outside AppShell and outside RequireAuth on purpose:
+          Login must not mount Header, whose useStatus hook polls /api/status
+          forever — that would 401-loop on a page shown specifically to an
+          anonymous visitor. The print routes have their own entry point and
+          never mount this component at all (see main.tsx).
         */}
         <Route path="/login" element={<Login />} />
-        <Route path="/print/flight/:id" element={<PrintFlight />} />
-        <Route path="/print/trip/:id" element={<PrintTrip />} />
         <Route
           path="*"
           element={

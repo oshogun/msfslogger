@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { FlightMap } from '../components/FlightMap';
-import { AltitudeChart } from '../components/AltitudeChart';
-import { StatsGrid } from '../components/StatsGrid';
+import { FlightMap } from './FlightMap';
+import { AltitudeChart } from './AltitudeChart';
+import { StatsGrid } from './StatsGrid';
 import { apiFetch } from '../utils/api';
-import { useExportReady } from '../utils/exportReady';
-import { strideSample, lttb, MAP_MAX_POINTS, CHART_MAX_POINTS } from '../utils/downsample';
+import { useExportReady } from './exportReady';
+import { strideSample, lttb, MAP_MAX_POINTS, CHART_MAX_POINTS } from './downsample';
 import { formatDateIn, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
 import type { Flight } from '../types';
-import '../print.css';
+// print.css is loaded once by print/entry.tsx, the only entry point that
+// ever mounts this page.
 
 /**
  * Print-only view of a single flight, rendered headlessly by the PDF export

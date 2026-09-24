@@ -1,11 +1,35 @@
 /*
- * Light, print-optimised theme for the PDF export routes (/print/...).
+ * Light, print-optimised stylesheet for the PDF export routes (/print/...).
  *
- * index.css is imported globally in main.tsx, so everything here is scoped
- * under .print-root to win on specificity regardless of CSS bundle order.
+ * The print entry point (print/entry.tsx) never loads the dashboard's own
+ * stylesheet, so this file carries everything these pages need on its own:
+ * the box-model reset the dashboard stylesheet used to supply for free,
+ * plus the structure (padding, sizing, grid layout, table geometry) and the
+ * light theme for the handful of components these pages reuse (stat cards,
+ * the section heading style, the notes box, the altitude chart, the legs
+ * table), not just theme overrides on top of some other stylesheet. Most of
+ * it is scoped under .print-root to win on specificity regardless of CSS
+ * bundle order; the reset below is deliberately not, see its own comment.
  * Map polylines, leg colours and markers deliberately keep their on-screen
  * colours — they read well on white and preserve the app's visual identity.
  */
+
+/*
+ * The dashboard stylesheet (index.css) zeroes body margin and makes every
+ * box border-box; print/entry.tsx never loads it, so without this the page
+ * carries the browser's 8px default body margin and content-box sizing,
+ * which pushes .print-root (a fixed 703px) past the 794px viewport and
+ * makes Chromium shrink the whole page to fit — every element then sits at
+ * the wrong position and size. Left unscoped (not under .print-root)
+ * because it has to zero the body margin itself, and it is safe to leave
+ * unscoped: print.css is only ever loaded by print/entry.tsx, never by the
+ * dashboard.
+ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 @page {
   size: A4 portrait;
@@ -91,27 +115,73 @@ body:has(.print-root) {
   color: var(--print-muted);
 }
 
-/* ── Re-theme the shared components ── */
-.print-root .section-title { color: var(--print-muted); }
+/* ── Shared components print.css is the only stylesheet for ── */
+.print-root .section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--print-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.6rem;
+}
 
+.print-root .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
 .print-root .stat-card {
   background: var(--print-surface);
-  border-color: var(--print-border);
+  border: 1px solid var(--print-border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
 }
-.print-root .stat-value { color: var(--print-text); }
-.print-root .stat-label,
-.print-root .stat-unit,
-.print-root .stat-sub { color: var(--print-muted); }
+.print-root .stat-label {
+  font-size: 0.72rem;
+  color: var(--print-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.3rem;
+}
+.print-root .stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--print-text);
+}
+.print-root .stat-unit { font-size: 0.75rem; color: var(--print-muted); margin-left: 0.2rem; }
+.print-root .stat-sub  { font-size: 0.72rem; color: var(--print-muted); margin-top: 0.2rem; }
 
 .print-root .notes-text {
   background: var(--print-surface);
-  border-color: var(--print-border);
+  border: 1px solid var(--print-border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
   color: var(--print-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  margin: 0;
 }
 
 .print-root .altitude-chart {
+  width: 100%;
+  height: 140px;
+  display: block;
   background: var(--print-surface);
-  border-color: var(--print-border);
+  border: 1px solid var(--print-border);
+  border-radius: 10px;
+  overflow: visible;
+}
+
+.print-root .leg-color-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  vertical-align: middle;
 }
 
 .print-root #map,
@@ -141,21 +211,41 @@ body:has(.print-root) {
 .print-root .leaflet-container { background: #f1f5f9; }
 
 /* ── Legs table (trip overview) ── */
-.print-root table { font-size: 0.8rem; }
+.print-root table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .print-root thead th {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
   color: var(--print-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   border-bottom: 1px solid var(--print-border);
 }
 .print-root tbody tr { border-bottom: 1px solid var(--print-border); }
 .print-root tbody tr:hover { background: transparent; }
-.print-root .td-aircraft,
-.print-root .td-stat { color: var(--print-text); }
-.print-root .td-date { color: var(--print-muted); }
-.print-root .td-route { color: var(--print-accent); }
+.print-root tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
+.print-root .td-aircraft {
+  font-weight: 500;
+  color: var(--print-text);
+  max-width: 200px;
+  overflow: hidden;
+}
+.print-root .td-stat { color: var(--print-text); font-variant-numeric: tabular-nums; }
+.print-root .td-date { color: var(--print-muted); white-space: nowrap; }
+.print-root .td-route {
+  font-size: 0.75rem;
+  color: var(--print-accent);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* An imported, unflown planned leg — the print equivalent of the app's dashed
-   "ghost row" (see PlannedLegRows.tsx), rendered in muted italic text since
-   this page has no dark badge chips to fall back on. */
+   "ghost row" on the trip page, rendered in muted italic text since this page
+   has no dark badge chips to fall back on. */
 .print-root .td-planned-print { color: var(--print-muted); font-style: italic; }
 
 /* Keep a table from splitting awkwardly across pages */
