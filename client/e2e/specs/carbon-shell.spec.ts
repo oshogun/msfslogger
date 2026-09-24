@@ -161,26 +161,31 @@ test.describe('PDF export round trip', () => {
 
 test.describe('session expiry', () => {
   test('a session lost mid-page bounces once to /login with no visible error banner', async ({ page }) => {
-    // Armed before goto(), so no response can be missed. The live stream
-    // opens and, ~100ms later, its reconnect-refetch fires every registered
-    // handler at once (Home, GroundSection, useNavTree — several requests,
-    // not one). Clearing cookies while any of those is still in flight races
-    // it: its still-valid cookie can restore the session on arrival via its
-    // own rolling Set-Cookie, or it can itself eat the 401 and bounce early —
-    // either way the click below lands on a non-deterministic page. Rather
-    // than naming every endpoint that burst can touch, wait for a quiet
-    // stretch with no new response instead — not page-wide `networkidle`,
-    // which would never fire while the SSE connection stays open, so the one
-    // response it did produce (the initial connect) is excluded by hand.
-    let lastResponseAt = Date.now();
-    page.on('response', res => {
-      if (!res.url().includes('/api/events')) lastResponseAt = Date.now();
+    // Armed before goto(), so nothing can be missed. Clearing cookies while
+    // the stream's reconnect-refetch burst (Home, GroundSection, useNavTree)
+    // is still in flight races it: a still-valid cookie can restore the
+    // session on arrival via its own rolling Set-Cookie, or it can itself eat
+    // the 401 and bounce early — either way the click below lands on a
+    // non-deterministic page. ground-sessions/current's second response is
+    // guaranteed (the provider fires every handler once on open), so it's a
+    // deterministic finish line; every other request still in flight at that
+    // point is then waited out by count, not a fixed delay.
+    let inFlight = 0, eventsOpened = false, groundHits = 0;
+    const isApi = (u: string) => u.includes('/api/') && !u.includes('/api/events');
+    page.on('request', req => { if (isApi(req.url())) inFlight++; });
+    page.on('requestfinished', req => {
+      const url = req.url();
+      if (isApi(url)) inFlight--;
+      if (url.endsWith('/api/ground-sessions/current')) groundHits++;
     });
+    page.on('requestfailed', req => { if (isApi(req.url())) inFlight--; });
+    page.on('response', res => { if (res.url().includes('/api/events')) eventsOpened = true; });
 
     await page.goto('/');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();
-
-    await expect.poll(() => Date.now() - lastResponseAt, { timeout: 5000 }).toBeGreaterThan(500);
+    await expect.poll(
+      () => eventsOpened && groundHits >= 2 && inFlight === 0, { timeout: 5000 }
+    ).toBe(true);
 
     // The server has already dropped the session; the client only finds out
     // on its next gated call. No full reload — a route change is enough to
