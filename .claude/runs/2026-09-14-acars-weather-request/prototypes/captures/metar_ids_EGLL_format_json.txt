@@ -1,2 +1,0 @@
-[{"icaoId":"EGLL","receiptTime":"2026-09-14T21:24:15.541Z","obsTime":1789420800,"reportTime":"2026-09-14T21:20:00.000Z","temp":19,"dewp":17,"wdir":220,"wspd":10,"visib":"6+","altim":1020,"qcField":2,"metarType":"METAR","rawOb":"METAR EGLL 142120Z AUTO 22010KT 9999 OVC008 19/17 Q1020","lat":51.477,"lon":-0.461,"elev":26,"name":"London/Heathrow Intl, EN, GB","cover":"OVC","clouds":[{"cover":"OVC","base":800}],"fltCat":"IFR"}]
-[http 200 ctype=application/json; charset=utf-8 bytes=427 t=1.009320]
