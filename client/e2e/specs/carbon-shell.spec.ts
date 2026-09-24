@@ -138,7 +138,7 @@ test.describe('PDF export round trip', () => {
   });
 });
 
-test.describe('session expiry (RK-4)', () => {
+test.describe('session expiry', () => {
   test('a session lost mid-page bounces once to /login with no visible error banner', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();

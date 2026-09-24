@@ -343,7 +343,11 @@ export function AllFlights() {
   let body;
   if (flights === null && !error) {
     body = <DataTableSkeleton columnCount={COLUMN_COUNT} rowCount={6} showToolbar={false} showHeader={false} />;
-  } else if (flights !== null && flights.length === 0 && !error) {
+  } else if (flights !== null && flights.length === 0) {
+    // Once a load has succeeded with no flights, keep showing this empty
+    // state even if a later background poll fails — a poll failure loses the
+    // fresh data, not the fact that the log is empty, and dropping to the
+    // raw table below would render a blank body with no explanation.
     body = <EmptyState title="No flights recorded yet." description="Start MSFS 2024 and take off to begin logging." />;
   } else {
     const headers = [
@@ -416,7 +420,7 @@ export function AllFlights() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {pageEntries.length === 0 && !error && (
+                {pageEntries.length === 0 && flights !== null && (
                   <TableRow>
                     <TableCell colSpan={COLUMN_COUNT + 1} style={{ textAlign: 'center', padding: '2rem' }}>
                       No flights match “{query.trim()}”.

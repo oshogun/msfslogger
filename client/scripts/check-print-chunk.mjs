@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// RK-1 guard: the print/PDF-export island must stay a small, Carbon-free,
+// Guards the print/PDF-export island: it must stay a small, Carbon-free,
 // app-free bundle. A stray import that re-links it into the dashboard chunk
 // changes the exported PDF's layout (fonts, resets) without failing any
 // functional test — the only thing that reliably catches it is the build

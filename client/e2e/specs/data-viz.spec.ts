@@ -21,10 +21,14 @@ test.describe('Home', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
 
-    await expect(main.getByTestId('stat-total-flights')).toContainText('2');
-    await expect(main.getByTestId('stat-total-trips')).toContainText('1');
-    await expect(main.getByTestId('stat-total-duration')).toContainText('2h 17m');
-    await expect(main.getByTestId('stat-total-distance')).toContainText('248.5');
+    // Guarded on both sides against an extra digit (a tile's label and value
+    // run together with no separator, e.g. "Total flights12", which a plain
+    // substring check for "2" would wrongly pass) so each number is matched
+    // whole, not as part of a longer one.
+    await expect(main.getByTestId('stat-total-flights')).toContainText(/(?<!\d)2(?!\d)/);
+    await expect(main.getByTestId('stat-total-trips')).toContainText(/(?<!\d)1(?!\d)/);
+    await expect(main.getByTestId('stat-total-duration')).toContainText(/(?<!\d)2h 17m$/);
+    await expect(main.getByTestId('stat-total-distance')).toContainText(/(?<!\d)248\.5(?!\d)/);
 
     // Sorted by start_time descending: the Cessna (2026-03-02) before the
     // Airbus (2026-03-01). The recent-flights list is a Carbon structured
@@ -58,6 +62,11 @@ test.describe('AllFlights', () => {
     await expect(main.getByText('Ungrouped Flights')).toBeVisible();
 
     const table = main.getByRole('table', { name: 'Flight log' });
+    // 7 rows within reach of the outer table locator: its own header row, the
+    // trip's expand row, the trip's expanded-content row, the nested legs
+    // table's header row, flight 1's leg row, the "Ungrouped Flights" label
+    // row, and flight 2's row.
+    await expect(table.getByRole('row')).toHaveCount(7);
     await expect(table.getByRole('cell', { name: /Airbus A320neo/ })).toBeVisible();
     await expect(table.getByRole('cell', { name: /EFHK → EETN/ })).toBeVisible();
     await expect(table.getByRole('cell', { name: /Cessna 172/ })).toBeVisible();
@@ -71,12 +80,12 @@ test.describe('FlightDetail', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: /Flight #1.*Airbus A320neo/ })).toBeVisible();
 
-    await expect(main.getByTestId('stat-departure')).toContainText('EFHK');
+    await expect(main.getByTestId('stat-departure')).toContainText(/(?<=Departure)EFHK/);
     await expect(main.getByText('Helsinki-Vantaa')).toBeVisible();
-    await expect(main.getByTestId('stat-arrival')).toContainText('EETN');
+    await expect(main.getByTestId('stat-arrival')).toContainText(/(?<=Arrival)EETN/);
     await expect(main.getByText('Tallinn Lennart Meri')).toBeVisible();
-    await expect(main.getByTestId('stat-points')).toContainText('3');
-    await expect(main.getByTestId('stat-distance')).toContainText('152.4');
+    await expect(main.getByTestId('stat-points')).toContainText(/(?<!\d)3(?!\d)/);
+    await expect(main.getByTestId('stat-distance')).toContainText(/(?<!\d)152\.4(?!\d)/);
 
     const map = main.getByTestId('flight-map');
     await expect(map.locator('.leaflet-container')).toBeVisible();
@@ -88,10 +97,10 @@ test.describe('FlightDetail', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: /Flight #2.*Cessna 172/ })).toBeVisible();
 
-    await expect(main.getByTestId('stat-departure')).toContainText('EETN');
-    await expect(main.getByTestId('stat-arrival')).toContainText('EEPU');
-    await expect(main.getByTestId('stat-points')).toContainText('2');
-    await expect(main.getByTestId('stat-distance')).toContainText('96.1');
+    await expect(main.getByTestId('stat-departure')).toContainText(/(?<=Departure)EETN/);
+    await expect(main.getByTestId('stat-arrival')).toContainText(/(?<=Arrival)EEPU/);
+    await expect(main.getByTestId('stat-points')).toContainText(/(?<!\d)2(?!\d)/);
+    await expect(main.getByTestId('stat-distance')).toContainText(/(?<!\d)96\.1(?!\d)/);
   });
 });
 

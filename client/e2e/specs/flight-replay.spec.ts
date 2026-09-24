@@ -72,8 +72,9 @@ test.describe('Flight replay', () => {
 
   test('Play advances the readout, Pause holds it, seeking moves it directly, and playing to the end offers Restart', async ({ page }) => {
     const errors = collectErrors(page);
-    const { panel } = await openReplay(page);
+    const { main, panel } = await openReplay(page);
     const scrubber = panel.getByRole('slider', { name: 'Replay position' });
+    const replayMarker = main.locator('[data-replay-marker]');
     const elapsed = panel.locator('[data-field="elapsed"]');
     const point = panel.locator('[data-field="point"]');
 
@@ -111,7 +112,25 @@ test.describe('Flight replay', () => {
     await expect(point).toHaveText('3 / 3');
     const max = Number(await scrubber.getAttribute('aria-valuemax'));
     expect(Number(await scrubber.getAttribute('aria-valuenow'))).toBeCloseTo(max, 0);
+    // The marker on the map moves and rotates with the readout, not just the
+    // scrubber and the text fields.
+    const endLat = await replayMarker.getAttribute('data-lat');
+    const endLon = await replayMarker.getAttribute('data-lon');
     await page.keyboard.press('Home');
+    await expect(point).toHaveText('1 / 3');
+    await expect(elapsed).toHaveText('0m 00s');
+    await expect(replayMarker).not.toHaveAttribute('data-lat', endLat ?? '');
+    await expect(replayMarker).not.toHaveAttribute('data-lon', endLon ?? '');
+
+    // Moving the scrubber itself (arrow keys with focus on the Carbon Slider's
+    // own thumb) seeks the same way: four Shift+ArrowRight presses at a step
+    // of 0.1 and a shift multiplier of 5 land exactly on the midpoint of the
+    // 4-second virtual timeline, which is the start of the second point.
+    await scrubber.focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowRight');
+    await expect(point).toHaveText('2 / 3');
+    await expect(elapsed).toHaveText('36m 00s');
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowLeft');
     await expect(point).toHaveText('1 / 3');
     await expect(elapsed).toHaveText('0m 00s');
 
@@ -120,6 +139,7 @@ test.describe('Flight replay', () => {
     const restart = panel.getByRole('button', { name: 'Restart replay' });
     await expect(restart).toBeVisible({ timeout: 15_000 });
     await expect(point).toHaveText('3 / 3');
+    expect(Number(await scrubber.getAttribute('aria-valuenow'))).toBeCloseTo(max, 0);
 
     // Restart goes back to the start and plays again.
     await restart.click();

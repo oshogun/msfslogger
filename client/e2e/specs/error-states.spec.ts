@@ -70,5 +70,8 @@ test.describe('unreachable API', () => {
     // page itself (heading, "New Trip" button) still renders around it.
     await expect(main.getByText('Failed to fetch')).toBeVisible();
     await expect(main.getByRole('button', { name: 'New Trip' })).toBeVisible();
+    // Flights were never loaded, so the table has no "no results" message to
+    // show — that would misleadingly imply a search came up empty.
+    await expect(main.getByText(/No flights match/)).toHaveCount(0);
   });
 });

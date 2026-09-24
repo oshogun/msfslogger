@@ -25,7 +25,7 @@ jobs:
       - name: Build (client + server)
         run: npm run build
 
-      - name: Print/export chunk guard (RK-1)
+      - name: Print/export chunk guard
         run: |
           cd client
           npx vite build --manifest
