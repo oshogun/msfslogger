@@ -2,7 +2,8 @@ import type { ReactElement } from 'react';
 import { render } from '@testing-library/react';
 import type { RenderResult } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { SessionProvider } from '../hooks/useSession';
+import { SessionProvider } from '../shell/SessionContext';
+import { AppShell } from '../shell/AppShell';
 
 interface Options {
   /** The URL the MemoryRouter starts at. Defaults to `path` with its params left literal. */
@@ -13,6 +14,14 @@ interface Options {
    * to '/', for a page that reads no route param.
    */
   path?: string;
+  /**
+   * Wrap `ui` in AppShell with fixed props (idle status, no user, empty nav
+   * tree). Only for a test that needs the shell's own chrome — the header
+   * status tag, the breadcrumb, the nav tree. Default false: a page rendered
+   * inside the shell plus its own `<main>` makes `getByRole('main')`
+   * ambiguous, so a plain page test must not get it.
+   */
+  shell?: boolean;
 }
 
 /**
@@ -26,11 +35,24 @@ interface Options {
 export function renderWithProviders(ui: ReactElement, options: Options = {}): RenderResult {
   const path = options.path ?? '/';
   const route = options.route ?? path;
+  const element = options.shell
+    ? (
+      <AppShell
+        live={{ type: 'gray', label: 'Idle' }}
+        username={null}
+        onLogout={() => {}}
+        trips={[]}
+        looseFlights={[]}
+      >
+        {ui}
+      </AppShell>
+    )
+    : ui;
   return render(
     <MemoryRouter initialEntries={[route]}>
       <SessionProvider>
         <Routes>
-          <Route path={path} element={ui} />
+          <Route path={path} element={element} />
         </Routes>
       </SessionProvider>
     </MemoryRouter>

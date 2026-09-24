@@ -1,22 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import L from 'leaflet';
-import type { FlightPoint } from '../types';
-
-// Counts renders of a component that sits inside the MapContainer, so a test
-// can prove animation frames never re-render the map subtree.
-const polylineRenders = vi.hoisted(() => ({ count: 0 }));
-vi.mock('react-leaflet', async () => {
-  const actual = await vi.importActual<typeof import('react-leaflet')>('react-leaflet');
-  return {
-    ...actual,
-    Polyline: (props: React.ComponentProps<typeof actual.Polyline>) => {
-      polylineRenders.count++;
-      return <actual.Polyline {...props} />;
-    },
-  };
-});
-
+import type { FlightPoint } from '../../types';
 import { ReplayPanel } from './ReplayPanel';
 
 const T0 = Date.parse('2026-01-01T12:00:00.000Z');
@@ -42,10 +26,26 @@ const track = (n: number) => Array.from({ length: n }, (_, i) => pt(i));
 const field = (name: string) =>
   document.querySelector<HTMLElement>(`[data-field="${name}"]`)!.textContent;
 
+// Carbon's Slider is keyboard- and pointer-driven, not a native range input:
+// there is nothing an `input`-style `fireEvent.change` can target. Its own
+// keydown handler moves it by `step` (`shiftKey` multiplies by
+// `stepMultiplier`), which is the same 0.5 s per press this panel wires up.
+const SCRUB_STEP_SEC = 0.5;
+function scrubTo(handle: HTMLElement, deltaSec: number) {
+  const presses = Math.round(deltaSec / SCRUB_STEP_SEC);
+  for (let i = 0; i < presses; i++) {
+    fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true });
+  }
+}
+
+// jsdom has no layout engine, so Carbon's Dropdown can't scroll a highlighted
+// option into view when one is selected via keyboard/click; stub it out so
+// that doesn't throw.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 describe('ReplayPanel', () => {
-  beforeEach(() => {
-    polylineRenders.count = 0;
-  });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -55,7 +55,8 @@ describe('ReplayPanel', () => {
     render(<ReplayPanel points={track(10)} />);
     expect(screen.getByRole('button', { name: 'Play replay' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Replay position' })).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'Replay speed' })).toHaveValue('16');
+    const speed = screen.getByRole('combobox', { name: 'Replay speed' });
+    expect(speed).toHaveTextContent('16×');
     expect(screen.getByRole('checkbox', { name: /Follow aircraft/ })).toBeChecked();
   });
 
@@ -72,7 +73,7 @@ describe('ReplayPanel', () => {
 
   it('updates the readout from the scrubber without starting playback', () => {
     render(<ReplayPanel points={track(10)} />);
-    fireEvent.change(screen.getByRole('slider', { name: 'Replay position' }), { target: { value: '10' } });
+    scrubTo(screen.getByRole('slider', { name: 'Replay position' }), 10);
     expect(field('time')).toBe('12:00:10Z');
     expect(field('alt')).toBe('300 ft');
     expect(field('state')).toBe('Airborne');
@@ -96,7 +97,7 @@ describe('ReplayPanel', () => {
     expect(field('time')).toBe(frozen);
   });
 
-  it('shows Restart after reaching the end and plays again from the start', () => {
+  it('shows Restart after reaching the end, and the same button plays again from the start', () => {
     vi.useFakeTimers();
     render(<ReplayPanel points={track(3)} />);
     fireEvent.click(screen.getByRole('button', { name: 'Play replay' }));
@@ -110,26 +111,54 @@ describe('ReplayPanel', () => {
     expect(field('point')).toBe('1 / 3');
   });
 
-  it('moves the marker imperatively without re-rendering the map', () => {
+  it('shows a status tag that follows the play/pause/end lifecycle', () => {
     vi.useFakeTimers();
-    const setLatLng = vi.spyOn(L.Marker.prototype, 'setLatLng');
-    render(<ReplayPanel points={track(200)} />);
+    render(<ReplayPanel points={track(3)} />);
+    expect(screen.getByText('Idle')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Play replay' }));
-    const rendersAfterPlay = polylineRenders.count;
-    const callsAfterPlay = setLatLng.mock.calls.length;
+    expect(screen.getByText('Playing')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause replay' }));
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Play replay' }));
     act(() => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(5000);
     });
-    expect(setLatLng.mock.calls.length).toBeGreaterThan(callsAfterPlay + 20);
-    expect(polylineRenders.count).toBe(rendersAfterPlay);
+    expect(screen.getByText('Ended')).toBeInTheDocument();
   });
 
-  it('rotates the aircraft to heading - 90 degrees', () => {
-    render(<ReplayPanel points={track(10).map(p => ({ ...p, heading_deg: 180 }))} />);
-    const el = document.querySelector<HTMLElement>('.replay-aircraft')!;
-    expect(el.style.transform).toBe('rotate(90deg)');
-    fireEvent.change(screen.getByRole('slider', { name: 'Replay position' }), { target: { value: '10' } });
-    expect(el.style.transform).toBe('rotate(90deg)');
+  it('picking a faster speed advances the readout further for the same elapsed time', () => {
+    vi.useFakeTimers();
+    render(<ReplayPanel points={track(200)} />);
+    fireEvent.click(screen.getByRole('combobox', { name: 'Replay speed' }));
+    fireEvent.click(screen.getByText('64×'));
+    fireEvent.click(screen.getByRole('button', { name: 'Play replay' }));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    // At the default 16x, one second of wall-clock time only reaches the
+    // track's 4th point (5 s apart); at 64x it must be well past that.
+    const reached = Number(field('point')!.split(' / ')[0]);
+    expect(reached).toBeGreaterThan(8);
+  });
+
+  it('reports every tick through onPosition, and the follow toggle through onFollowChange', () => {
+    const positions: number[] = [];
+    const follows: boolean[] = [];
+    render(
+      <ReplayPanel
+        points={track(10)}
+        onPosition={s => positions.push(s.pointIndex)}
+        onFollowChange={f => follows.push(f)}
+      />
+    );
+    expect(positions).toEqual([0]);
+    expect(follows).toEqual([true]);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Follow aircraft/ }));
+    expect(follows).toEqual([true, false]);
+
+    scrubTo(screen.getByRole('slider', { name: 'Replay position' }), 10);
+    expect(positions.at(-1)).toBe(2);
   });
 
   it('handles Space, ArrowRight, and ignores keys from the scrubber', () => {
@@ -150,7 +179,7 @@ describe('ReplayPanel', () => {
   it('renders a track that is entirely recording gaps without NaN', () => {
     const pts = [0, 1, 2].map(i => pt(i, { ts: new Date(T0 + i * 3600_000).toISOString() }));
     render(<ReplayPanel points={pts} />);
-    fireEvent.change(screen.getByRole('slider', { name: 'Replay position' }), { target: { value: '1' } });
+    scrubTo(screen.getByRole('slider', { name: 'Replay position' }), 1);
     expect(field('state')).toMatch(/^Recording gap — /);
     for (const f of ['alt', 'ias', 'gs', 'vs', 'hdg', 'time']) {
       expect(field(f)).not.toMatch(/NaN/);

@@ -73,12 +73,18 @@ describe('AcarsMessages - SayIntentions link/import section', () => {
       '/api/flights/1/acars-messages': [200, emptyThread],
       '/api/acars/canned-messages': CANNED_ROUTE,
       '/api/flights/1/sayintentions/link': [200, noKeyStatus],
+      '/api/settings/sayintentions': [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }],
     });
 
     renderWithProviders(<AcarsMessages />, ROUTE_OPTS);
 
+    // The paragraph's own text is split across the "Settings" link, so its
+    // full copy has to be read off textContent rather than matched as one
+    // run of text (RTL's getByText only sees a node's direct text children).
     await waitFor(() =>
-      expect(screen.getByText('SayIntentions: no API key saved (Prefiles → SayIntentions).')).toBeInTheDocument()
+      expect(
+        screen.getByText((_, el) => el?.tagName === 'P' && el.textContent === 'SayIntentions: no API key saved. Add one in Settings.')
+      ).toBeInTheDocument()
     );
     expect(screen.queryByRole('button', { name: 'LINK SAYINTENTIONS' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'IMPORT SAYINTENTIONS COMMS' })).not.toBeInTheDocument();
@@ -193,10 +199,10 @@ describe('AcarsMessages - SayIntentions link/import section', () => {
     expect(
       screen.getByText('Ground, Southwest 1451, gate 24, ready to taxi with information Kilo.')
     ).toBeInTheDocument();
-    // Imported rows use the 'atc' category, which has no dedicated badge class
-    // and falls back to the existing neutral badge, same as any other unknown
-    // category this client doesn't recognise.
-    expect(screen.getByText('atc')).toHaveClass('badge-acars-other');
+    // Imported rows use the 'atc' category, which has no dedicated tag colour
+    // and falls back to the same neutral tag as any other unknown category
+    // this client doesn't recognise.
+    expect(screen.getByText('atc').closest('.cds--tag')).toHaveClass('cds--tag--cool-gray');
     await waitFor(() => expect(screen.getByText(/5 imported\./)).toBeInTheDocument());
   });
 
@@ -265,7 +271,7 @@ describe('AcarsMessages - SayIntentions push section', () => {
     // known to be unset, same as the other disabled-reason cases below.
     const pushButton = await screen.findByRole('button', { name: 'SEND TO SAYINTENTIONS' });
     expect(pushButton).toBeDisabled();
-    expect(pushButton).toHaveAttribute('title', 'No SayIntentions key saved (Prefiles → SayIntentions)');
+    expect(pushButton).toHaveAttribute('title', 'No SayIntentions key saved (save it in Settings)');
   });
 
   it('disables the push button when no PDC message exists yet', async () => {
@@ -376,5 +382,35 @@ describe('AcarsMessages - SayIntentions push section', () => {
       expect(screen.getByText('SayIntentions is unreachable right now.')).toBeInTheDocument()
     );
     expect(screen.getByRole('button', { name: 'SEND TO SAYINTENTIONS' })).toBeInTheDocument();
+  });
+});
+
+describe('AcarsMessages - manual refresh', () => {
+  it('re-fetches the thread and merges in a new row when Refresh is clicked', async () => {
+    const user = userEvent.setup();
+    let acarsGetCallCount = 0;
+    mockFetchRoutes({
+      '/api/auth/session': SESSION_ROUTE,
+      '/api/flights/1/acars-messages': () => {
+        acarsGetCallCount++;
+        return acarsGetCallCount === 1 ? [200, emptyThread] : [200, { ...emptyThread, messages: [importedMessage] }];
+      },
+      '/api/acars/canned-messages': CANNED_ROUTE,
+      '/api/flights/1/sayintentions/link': [200, noKeyStatus],
+      '/api/settings/sayintentions': [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }],
+    });
+
+    renderWithProviders(<AcarsMessages />, ROUTE_OPTS);
+
+    await waitFor(() => expect(screen.getByText('No messages yet')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Ground, Southwest 1451, gate 24, ready to taxi with information Kilo.')
+      ).toBeInTheDocument()
+    );
+    expect(acarsGetCallCount).toBe(2);
   });
 });

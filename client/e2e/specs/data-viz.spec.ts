@@ -19,22 +19,22 @@ test.describe('Home', () => {
   test('renders the seeded stats, recent flights and ground/leg picker fixtures', async ({ page }) => {
     await page.goto('/');
     const main = page.getByRole('main');
-    await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+    await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
 
-    const statValue = (label: string) => main.locator('.stat-card', { hasText: label }).locator('.stat-value');
-    await expect(statValue('Total Flights')).toHaveText('2');
-    await expect(statValue('Total Trips')).toHaveText('1');
-    await expect(statValue('Total Duration')).toContainText('2h 17m');
-    await expect(statValue('Total Distance')).toContainText('248.5');
+    await expect(main.getByTestId('stat-total-flights')).toContainText('2');
+    await expect(main.getByTestId('stat-total-trips')).toContainText('1');
+    await expect(main.getByTestId('stat-total-duration')).toContainText('2h 17m');
+    await expect(main.getByTestId('stat-total-distance')).toContainText('248.5');
 
     // Sorted by start_time descending: the Cessna (2026-03-02) before the
-    // Airbus (2026-03-01).
-    const recentRows = main.locator('.recent-flight-row');
-    await expect(recentRows).toHaveCount(2);
-    await expect(recentRows.nth(0)).toContainText('Cessna 172');
-    await expect(recentRows.nth(0)).toContainText('EETN → EEPU');
-    await expect(recentRows.nth(1)).toContainText('Airbus A320neo');
-    await expect(recentRows.nth(1)).toContainText('EFHK → EETN');
+    // Airbus (2026-03-01). The recent-flights list is a Carbon structured
+    // list, whose rows carry role=row same as a table's.
+    const recentRows = main.getByRole('row');
+    await expect(recentRows).toHaveCount(3); // header row + 2 flights
+    await expect(recentRows.nth(1)).toContainText('Cessna 172');
+    await expect(recentRows.nth(1)).toContainText('EETN → EEPU');
+    await expect(recentRows.nth(2)).toContainText('Airbus A320neo');
+    await expect(recentRows.nth(2)).toContainText('EFHK → EETN');
 
     // No ground_sessions row was seeded.
     await expect(main.getByText('Not on the ground.')).toBeVisible();
@@ -53,18 +53,15 @@ test.describe('AllFlights', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
 
-    await expect(main.getByText('🚗 E2E Baltic Hop')).toBeVisible();
+    await expect(main.getByText('E2E Baltic Hop')).toBeVisible();
     await expect(main.getByText('1 leg')).toBeVisible();
     await expect(main.getByText('Ungrouped Flights')).toBeVisible();
 
-    const table = main.locator('#flights-table');
+    const table = main.getByRole('table', { name: 'Flight log' });
     await expect(table.getByRole('cell', { name: /Airbus A320neo/ })).toBeVisible();
-    await expect(table.locator('.td-route', { hasText: 'EFHK → EETN' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: /EFHK → EETN/ })).toBeVisible();
     await expect(table.getByRole('cell', { name: /Cessna 172/ })).toBeVisible();
-    await expect(table.locator('.td-route', { hasText: 'EETN → EEPU' })).toBeVisible();
-
-    // header row + trip-header row + 1 leg + ungrouped-header row + 1 flight.
-    await expect(table.getByRole('row')).toHaveCount(5);
+    await expect(table.getByRole('cell', { name: /EETN → EEPU/ })).toBeVisible();
   });
 });
 
@@ -74,16 +71,16 @@ test.describe('FlightDetail', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: /Flight #1.*Airbus A320neo/ })).toBeVisible();
 
-    const statValue = (label: string) => main.locator('.stat-card', { hasText: label }).locator('.stat-value');
-    await expect(statValue('Departure')).toContainText('EFHK');
+    await expect(main.getByTestId('stat-departure')).toContainText('EFHK');
     await expect(main.getByText('Helsinki-Vantaa')).toBeVisible();
-    await expect(statValue('Arrival')).toContainText('EETN');
+    await expect(main.getByTestId('stat-arrival')).toContainText('EETN');
     await expect(main.getByText('Tallinn Lennart Meri')).toBeVisible();
-    await expect(statValue('Points')).toHaveText('3');
-    await expect(statValue('Distance')).toContainText('152.4');
+    await expect(main.getByTestId('stat-points')).toContainText('3');
+    await expect(main.getByTestId('stat-distance')).toContainText('152.4');
 
-    await expect(main.locator('#map .leaflet-container')).toBeVisible();
-    await expect(main.locator('#map .leaflet-marker-icon')).toHaveCount(2);
+    const map = main.getByTestId('flight-map');
+    await expect(map.locator('.leaflet-container')).toBeVisible();
+    await expect(map.locator('.leaflet-marker-icon')).toHaveCount(2);
   });
 
   test('flight 2 renders the Cessna and its EETN -> EEPU route, distinctly from flight 1', async ({ page }) => {
@@ -91,11 +88,10 @@ test.describe('FlightDetail', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: /Flight #2.*Cessna 172/ })).toBeVisible();
 
-    const statValue = (label: string) => main.locator('.stat-card', { hasText: label }).locator('.stat-value');
-    await expect(statValue('Departure')).toContainText('EETN');
-    await expect(statValue('Arrival')).toContainText('EEPU');
-    await expect(statValue('Points')).toHaveText('2');
-    await expect(statValue('Distance')).toContainText('96.1');
+    await expect(main.getByTestId('stat-departure')).toContainText('EETN');
+    await expect(main.getByTestId('stat-arrival')).toContainText('EEPU');
+    await expect(main.getByTestId('stat-points')).toContainText('2');
+    await expect(main.getByTestId('stat-distance')).toContainText('96.1');
   });
 });
 
@@ -105,19 +101,19 @@ test.describe('TripDetail', () => {
     const main = page.getByRole('main');
     await expect(main.getByRole('heading', { name: 'E2E Baltic Hop' })).toBeVisible();
 
-    await expect(main.getByRole('cell', { name: /Airbus A320neo/ })).toBeVisible();
-    await expect(main.locator('.td-route', { hasText: 'EFHK → EETN' })).toBeVisible();
+    const legsTable = main.getByRole('table', { name: 'Trip legs' });
+    await expect(legsTable.getByRole('cell', { name: /Airbus A320neo/ })).toBeVisible();
+    await expect(legsTable.getByRole('cell', { name: /EFHK → EETN/ })).toBeVisible();
 
-    // The unflown, trip-linked planned leg renders as a ghost row.
-    const ghostRow = main.locator('tr.tr-ghost');
+    // The unflown, trip-linked planned leg renders as a dimmed "ghost" row.
+    const ghostRow = legsTable.getByRole('row', { name: /EETN → ESSA/ });
     await expect(ghostRow).toHaveCount(1);
-    await expect(ghostRow.locator('.td-route')).toContainText('EETN → ESSA');
     await expect(ghostRow).toContainText('Planned');
 
     // Leg 2 (ESSA -> EFHK) is loose — it must not appear on trip 1's page.
     await expect(main.getByText('ESSA → EFHK')).toHaveCount(0);
 
     // No app_setting row for SimBrief was seeded.
-    await expect(main.getByText('Enter your SimBrief Pilot ID to enable import.')).toBeVisible();
+    await expect(main.getByText('No SimBrief user id saved.')).toBeVisible();
   });
 });

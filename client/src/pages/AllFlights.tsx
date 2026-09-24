@@ -341,11 +341,9 @@ export function AllFlights() {
   }
 
   let body;
-  if (error && flights === null) {
-    body = null;
-  } else if (flights === null) {
+  if (flights === null && !error) {
     body = <DataTableSkeleton columnCount={COLUMN_COUNT} rowCount={6} showToolbar={false} showHeader={false} />;
-  } else if (flights.length === 0) {
+  } else if (flights !== null && flights.length === 0 && !error) {
     body = <EmptyState title="No flights recorded yet." description="Start MSFS 2024 and take off to begin logging." />;
   } else {
     const headers = [
@@ -418,7 +416,7 @@ export function AllFlights() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {pageEntries.length === 0 && (
+                {pageEntries.length === 0 && !error && (
                   <TableRow>
                     <TableCell colSpan={COLUMN_COUNT + 1} style={{ textAlign: 'center', padding: '2rem' }}>
                       No flights match “{query.trim()}”.

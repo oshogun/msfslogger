@@ -8,8 +8,16 @@ import { FlightDetail } from './FlightDetail';
 import type { FlightPoint } from '../types';
 
 // The GPS Track map draws on a canvas, which jsdom cannot host; the replay
-// panel under test uses SVG and runs for real.
-vi.mock('../components/FlightMap', () => ({ FlightMap: () => <div data-testid="flight-map" /> }));
+// panel under test uses SVG and runs for real. Mocking FlightMap out (rather
+// than letting it render its Leaflet overlay children) is what keeps those
+// children — which need a real map instance — from ever mounting.
+vi.mock('../components/maps', async () => {
+  const actual = await vi.importActual<typeof import('../components/maps')>('../components/maps');
+  return {
+    ...actual,
+    FlightMap: () => <div data-testid="flight-map" />,
+  };
+});
 
 const SESSION_ROUTE: ResponseTuple = [200, { authenticated: true, user: { username: 'e2e' } }];
 const ROUTE_OPTS = { path: '/flight/:id', route: '/flight/1' };
@@ -69,30 +77,30 @@ describe('FlightDetail', () => {
       renderWithProviders(<FlightDetail />, ROUTE_OPTS);
     }
 
-    it('offers no Replay button for a flight with fewer than two points', async () => {
+    it('offers no Replay tab for a flight with fewer than two points', async () => {
       load([points[0]]);
       await screen.findByRole('heading', { name: /Flight #1/ });
-      expect(screen.queryByRole('button', { name: 'Replay flight' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: 'Replay' })).not.toBeInTheDocument();
     });
 
-    it('offers no Replay button for a flight still in progress', async () => {
+    it('offers no Replay tab for a flight still in progress', async () => {
       load(points, null);
       await screen.findByRole('heading', { name: /Flight #1/ });
-      expect(screen.queryByRole('button', { name: 'Replay flight' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: 'Replay' })).not.toBeInTheDocument();
     });
 
-    it('mounts the panel only after the button is clicked, and unmounts it on a second click', async () => {
+    it('mounts the panel only on the Replay tab, and unmounts it when Track is selected again', async () => {
       load(points);
-      const button = await screen.findByRole('button', { name: 'Replay flight' });
+      const replayTab = await screen.findByRole('tab', { name: 'Replay' });
       expect(screen.queryByRole('region', { name: 'Flight replay' })).not.toBeInTheDocument();
 
-      fireEvent.click(button);
+      fireEvent.click(replayTab);
       expect(screen.getByRole('region', { name: 'Flight replay' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Play replay' })).toBeInTheDocument();
       expect(screen.getByRole('combobox', { name: 'Replay speed' })).toBeInTheDocument();
       expect(screen.getByRole('slider', { name: 'Replay position' })).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Hide replay' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Track' }));
       expect(screen.queryByRole('region', { name: 'Flight replay' })).not.toBeInTheDocument();
     });
   });

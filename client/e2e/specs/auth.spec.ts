@@ -14,25 +14,30 @@ test.describe('login form (unauthenticated)', () => {
     await page.goto('/login');
 
     await page.getByLabel('Username').fill(USERNAME);
-    await page.getByLabel('Password').fill(PASSWORD);
-    await page.getByRole('button', { name: /^log in$/i }).click();
+    // Carbon's PasswordInput also renders a "Show password" toggle button,
+    // whose accessible name contains "password" — an exact match is needed
+    // or the two collide under a plain substring lookup.
+    await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await page.getByRole('button', { name: /^sign in$/i }).click();
 
     await expect(page).not.toHaveURL(/\/login$/);
     const main = page.getByRole('main');
-    await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+    await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
   });
 
   test('a wrong password is rejected with the real 401 message, and the form stays put', async ({ page }) => {
     await page.goto('/login');
 
     await page.getByLabel('Username').fill(USERNAME);
-    await page.getByLabel('Password').fill('definitely-the-wrong-password');
-    await page.getByRole('button', { name: /^log in$/i }).click();
+    await page.getByLabel('Password', { exact: true }).fill('definitely-the-wrong-password');
+    await page.getByRole('button', { name: /^sign in$/i }).click();
 
     // This is src/auth/routes.ts's login handler's own 401 body rendered
     // verbatim by Login.tsx — not a mocked response, the real scrypt-verify
-    // failure path.
-    await expect(page.getByRole('alert')).toHaveText('Invalid username or password');
+    // failure path. A second, empty role=alert also exists on this page (a
+    // text-input character counter Carbon renders unconditionally), so the
+    // error banner is picked out by its text.
+    await expect(page.getByRole('alert').filter({ hasText: 'Invalid username or password' })).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 
@@ -40,10 +45,10 @@ test.describe('login form (unauthenticated)', () => {
     await page.goto('/login');
 
     await page.getByLabel('Username').fill('nobody-by-this-name');
-    await page.getByLabel('Password').fill(PASSWORD);
-    await page.getByRole('button', { name: /^log in$/i }).click();
+    await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await page.getByRole('button', { name: /^sign in$/i }).click();
 
-    await expect(page.getByRole('alert')).toHaveText('Invalid username or password');
+    await expect(page.getByRole('alert').filter({ hasText: 'Invalid username or password' })).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 
@@ -51,7 +56,7 @@ test.describe('login form (unauthenticated)', () => {
     await page.goto('/flights');
 
     await expect(page).toHaveURL(/\/login$/);
-    await expect(page.getByRole('button', { name: /^log in$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^sign in$/i })).toBeVisible();
   });
 });
 
@@ -62,12 +67,12 @@ test.describe('authenticated session', () => {
   test('the session survives a reload', async ({ page }) => {
     await page.goto('/');
     const main = page.getByRole('main');
-    await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+    await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
 
     await page.reload();
 
     await expect(page).not.toHaveURL(/\/login$/);
-    await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+    await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
   });
 
 });
@@ -83,9 +88,9 @@ test.describe('logout', () => {
   test('logging out clears the session and returns to the login form', async ({ page }) => {
     await page.goto('/login');
     await page.getByLabel('Username').fill(USERNAME);
-    await page.getByLabel('Password').fill(PASSWORD);
-    await page.getByRole('button', { name: /^log in$/i }).click();
-    await expect(page.getByRole('main').getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+    await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await page.getByRole('button', { name: /^sign in$/i }).click();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();
 
     await page.getByRole('button', { name: /log out/i }).click();
     await expect(page).toHaveURL(/\/login$/);

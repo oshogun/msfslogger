@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MapContainer } from 'react-leaflet';
 import L from 'leaflet';
 import {
@@ -7,18 +7,8 @@ import {
   NavdataLayers, NavdataPanes, unwrapAirwayLeg, unwrapPoint,
   type LabelCandidate, type NavdataVisibility,
 } from './NavdataLayers';
-import { FlightMap } from './FlightMap';
-import { TripMap } from './TripMap';
-import { mockFetchRoutes } from '../test/mockFetch';
-import { absentStatus, emptyFeatures, presentStatus } from '../test/navdataFixtures';
-import { flightFixture } from '../test/fixtures';
-import type { FeatureAirport, FeatureNavaid, FeatureRunway, FeatureWaypoint, FeaturesResponse, FlightPoint } from '../types';
-
-const points: FlightPoint[] = Array.from({ length: 4 }, (_, i) => ({
-  id: i, flight_id: 1, ts: '2026-01-01T12:00:00Z', lat: 10 + i * 0.1, lon: 20 + i * 0.1, altitude_ft: 1000,
-  airspeed_kts: 100, ground_speed_kts: 100, heading_deg: 90, vertical_speed_fpm: 0, on_ground: 0,
-}));
-const trip = { ...flightFixture, points };
+import { emptyFeatures } from '../../test/navdataFixtures';
+import type { FeatureAirport, FeatureNavaid, FeatureRunway, FeatureWaypoint, FeaturesResponse } from '../../types';
 
 describe('antimeridian unwrapping', () => {
   it('draws a dateline airway leg through the unwrapped chain, not across the world', () => {
@@ -39,45 +29,6 @@ describe('antimeridian unwrapping', () => {
   });
 });
 
-describe('maps without navdata', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it('render identically whether or not the navdata prop is set while the replica is absent', async () => {
-    const fetchSpy = vi.fn(async () => new Response(JSON.stringify(absentStatus), { status: 200 }));
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const plain = render(<FlightMap preferCanvas={false} points={points} />);
-    const plainHtml = plain.container.innerHTML;
-    plain.unmount();
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    const withNav = render(<FlightMap preferCanvas={false} points={points} navdata />);
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/navdata/status', expect.anything()));
-    await new Promise(r => setTimeout(r, 20));
-    expect(withNav.container.innerHTML).toBe(plainHtml);
-    expect(screen.queryByText('Navdata')).toBeNull();
-    expect(withNav.container.querySelector('.leaflet-navdata-pane')).toBeNull();
-  });
-
-  it('render no navdata pane or request when the prop is left off, even on a present replica', async () => {
-    const fetchSpy = vi.fn(async () => new Response(JSON.stringify(presentStatus), { status: 200 }));
-    vi.stubGlobal('fetch', fetchSpy);
-    const { container } = render(<TripMap preferCanvas={false} flights={[trip]} />);
-    await new Promise(r => setTimeout(r, 20));
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(container.querySelector('.leaflet-navdata-pane')).toBeNull();
-  });
-
-  it('create the panes and the controls when the replica is present', async () => {
-    mockFetchRoutes({ '/api/navdata/status': [200, presentStatus] });
-    const { container } = render(<FlightMap preferCanvas={false} points={points} navdata />);
-    await waitFor(() => expect(screen.getByText('Navdata')).toBeInTheDocument());
-    const nav = container.querySelector<HTMLElement>('.leaflet-navdata-pane')!;
-    const markers = container.querySelector<HTMLElement>('.leaflet-navdata-markers-pane')!;
-    expect(nav.style.zIndex).toBe('350');
-    expect(markers.style.zIndex).toBe('360');
-  });
-});
 
 // jsdom has no real <canvas> 2D context, and the runway polyline always draws
 // through Leaflet's own canvas renderer (never the SVG one), so exercising it
@@ -229,39 +180,39 @@ describe('airport glyphs', () => {
   it('colors a towered airport blue', () => {
     const { container } = renderAirports([airport({ ident: 'ZZTW', longestRunwayM: 1500, surface: 'soft', towered: true })]);
     const [g] = glyphEls(container);
-    expect(g.color).toBe('#1d4ed8');
+    expect(g.color).toBe('#78a9ff');
   });
 
   it('colors an uncontrolled airport purple', () => {
     const { container } = renderAirports([airport({ ident: 'ZZNT', longestRunwayM: 1500, surface: 'soft', towered: false })]);
     const [g] = glyphEls(container);
-    expect(g.color).toBe('#c026d3');
+    expect(g.color).toBe('#be95ff');
   });
 
   it('colors a tower-unknown airport gray, distinct from both towered and untowered', () => {
     const { container } = renderAirports([airport({ ident: 'ZZUK', longestRunwayM: 900, surface: 'soft', towered: null })]);
     const [g] = glyphEls(container);
-    expect(g.color).toBe('#94a3b8');
-    expect(g.color).not.toBe('#1d4ed8');
-    expect(g.color).not.toBe('#c026d3');
+    expect(g.color).toBe('#a8a8a8');
+    expect(g.color).not.toBe('#78a9ff');
+    expect(g.color).not.toBe('#be95ff');
   });
 
   it('renders a paved airport hollow', () => {
     const { container } = renderAirports([airport({ ident: 'ZZPV', longestRunwayM: 3714.5, surface: 'paved', towered: true })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZPV', shape: 'disc', size: '18', color: '#1d4ed8', fill: 'hollow' });
+    expect(g).toEqual({ ident: 'ZZPV', shape: 'disc', size: '18', color: '#78a9ff', fill: 'hollow' });
   });
 
   it('renders a soft-field airport filled', () => {
     const { container } = renderAirports([airport({ ident: 'ZZSF', longestRunwayM: 1500, surface: 'soft', towered: false })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZSF', shape: 'disc', size: '13', color: '#c026d3', fill: 'filled' });
+    expect(g).toEqual({ ident: 'ZZSF', shape: 'disc', size: '13', color: '#be95ff', fill: 'filled' });
   });
 
   it('renders a water airport filled, same treatment as soft', () => {
     const { container } = renderAirports([airport({ ident: 'ZZWT', longestRunwayM: 1100, surface: 'water', towered: true })]);
     const [g] = glyphEls(container);
-    expect(g).toEqual({ ident: 'ZZWT', shape: 'disc', size: '9', color: '#1d4ed8', fill: 'filled' });
+    expect(g).toEqual({ ident: 'ZZWT', shape: 'disc', size: '9', color: '#78a9ff', fill: 'filled' });
   });
 
   it('renders a surface-unknown airport as reduced-opacity filled, distinct from both hollow and filled', () => {
@@ -529,11 +480,11 @@ describe('airport labels', () => {
     expect(glyphs).toHaveLength(20);
     expect(glyphs[0].getAttribute('data-glyph')).toBe('disc');
     expect(glyphs[0].getAttribute('data-size')).toBe('13');
-    expect(glyphs[0].getAttribute('data-color')).toBe('#1d4ed8');
+    expect(glyphs[0].getAttribute('data-color')).toBe('#78a9ff');
     expect(glyphs[0].getAttribute('data-fill')).toBe('hollow');
     expect(container.querySelectorAll('span[data-direction-line]')).toHaveLength(20);
     // Some, but not all, of the tightly-packed idents keep their label.
-    const labels = container.querySelectorAll('span[style*="text-shadow:0 0 3px #000"]');
+    const labels = container.querySelectorAll('span[style*="text-shadow:0 0 3px #161616"]');
     expect(labels.length).toBeGreaterThan(0);
     expect(labels.length).toBeLessThan(20);
   });
@@ -576,17 +527,17 @@ describe('waypoint markers', () => {
     const polygon = container.querySelector('svg polygon');
     expect(polygon).not.toBeNull();
     expect(polygon!.getAttribute('fill')).toBe('none');
-    expect(polygon!.getAttribute('stroke')).toBe('#c026d3');
+    expect(polygon!.getAttribute('stroke')).toBe('#be95ff');
     // no dot markup like the other labelled navdata markers use
     expect(container.querySelector('span[style*="border-radius:50%"]')).toBeNull();
   });
 
-  it('labels the waypoint magenta with a white halo, not the black halo other labels use', () => {
+  it('labels the waypoint magenta with the same halo as every other navdata label', () => {
     renderNavdata({ waypoints: [waypoint({ ident: 'ZAKRO' })] }, { waypoints: true });
     const label = screen.getByText('ZAKRO');
     const style = label.getAttribute('style') ?? '';
-    expect(style).toContain('color:#c026d3');
-    expect(style).toContain('text-shadow:0 0 3px #fff');
+    expect(style).toContain('color:#be95ff');
+    expect(style).toContain('text-shadow:0 0 3px #161616');
   });
 
   it('keeps the dense fallback a canvas CircleMarker recolored to magenta, not a per-node icon', async () => {
@@ -597,7 +548,7 @@ describe('waypoint markers', () => {
     await new Promise(r => setTimeout(r, 50));
     expect(container.querySelector('svg polygon')).toBeNull();
     expect(container.querySelector('.leaflet-marker-icon')).toBeNull();
-    expect(ctx.strokeStyle).toBe('#c026d3');
+    expect(ctx.strokeStyle).toBe('#be95ff');
   });
 
   it('leaves navaids on their own sky-blue dot-and-label styling, unaffected by the waypoint change', () => {
@@ -605,10 +556,10 @@ describe('waypoint markers', () => {
     expect(container.querySelector('svg polygon')).toBeNull();
     const dot = container.querySelector<HTMLElement>('span[style*="border-radius:50%"]');
     expect(dot).not.toBeNull();
-    expect(dot!.getAttribute('style')).toContain('background:#38bdf8');
+    expect(dot!.getAttribute('style')).toContain('background:#33b1ff');
     const label = screen.getByText('ZZVR');
     const style = label.getAttribute('style') ?? '';
-    expect(style).toContain('color:#e2e8f0');
-    expect(style).toContain('text-shadow:0 0 3px #000');
+    expect(style).toContain('color:#f4f4f4');
+    expect(style).toContain('text-shadow:0 0 3px #161616');
   });
 });

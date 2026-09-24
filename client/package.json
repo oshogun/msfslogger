@@ -14,7 +14,8 @@
     "test:watch": "vitest",
     "test:types": "tsc -p tsconfig.test.json",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "check:print-chunk": "node scripts/check-print-chunk.mjs"
   },
   "dependencies": {
     "@carbon/icons-react": "^11.89.0",

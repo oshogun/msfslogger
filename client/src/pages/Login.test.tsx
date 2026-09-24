@@ -3,12 +3,21 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Login } from './Login';
-import { SessionProvider } from '../hooks/useSession';
+import { SessionProvider } from '../shell/SessionContext';
 import { formatDuration } from '../utils/format';
 import { mockFetchRoutes } from '../test/mockFetch';
 import type { ResponseTuple } from '../test/mockFetch';
 
 const ANONYMOUS_SESSION: ResponseTuple = [200, { authenticated: false, user: null }];
+
+/**
+ * Carbon's `TextInput` always renders its own (empty, unless a character
+ * counter is enabled) `role="alert"` span, so a query for "the error alert"
+ * has to skip that one and find the one with actual text in it.
+ */
+function nonEmptyAlerts(): HTMLElement[] {
+  return screen.queryAllByRole('alert').filter(el => el.textContent?.trim());
+}
 
 /**
  * One test proving the whole component-test harness works end to end:
@@ -43,13 +52,13 @@ describe('component test harness smoke test', () => {
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/username/i), 'operator');
-    await user.type(screen.getByLabelText(/password/i), 'e2e-password-123');
-    await user.click(screen.getByRole('button', { name: /log in/i }));
+    await user.type(screen.getByLabelText('Password'), 'e2e-password-123');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     await waitFor(() => {
       expect(calls.some(c => c.url === '/api/auth/login')).toBe(true);
     });
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(nonEmptyAlerts()).toHaveLength(0);
 
     const loginCall = calls.find(c => c.url === '/api/auth/login');
     expect(loginCall?.init?.body).toBe(JSON.stringify({ username: 'operator', password: 'e2e-password-123' }));
@@ -78,10 +87,11 @@ describe('failed login', () => {
     renderLogin();
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/username/i), 'operator');
-    await user.type(screen.getByLabelText(/password/i), 'wrong-password');
-    await user.click(screen.getByRole('button', { name: /log in/i }));
+    await user.type(screen.getByLabelText('Password'), 'wrong-password');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid username or password');
+    await waitFor(() => expect(nonEmptyAlerts()).toHaveLength(1));
+    expect(nonEmptyAlerts()[0]).toHaveTextContent('Invalid username or password');
   });
 
   it('renders a 429 throttle message the same way, verbatim', async () => {
@@ -93,10 +103,11 @@ describe('failed login', () => {
     renderLogin();
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/username/i), 'operator');
-    await user.type(screen.getByLabelText(/password/i), 'whatever');
-    await user.click(screen.getByRole('button', { name: /log in/i }));
+    await user.type(screen.getByLabelText('Password'), 'whatever');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Too many login attempts. Try again in 30 seconds.');
+    await waitFor(() => expect(nonEmptyAlerts()).toHaveLength(1));
+    expect(nonEmptyAlerts()[0]).toHaveTextContent('Too many login attempts. Try again in 30 seconds.');
   });
 });
 
@@ -105,7 +116,7 @@ describe('client-side validation', () => {
     mockFetchRoutes({ '/api/auth/session': ANONYMOUS_SESSION });
 
     renderLogin();
-    await userEvent.setup().click(screen.getByRole('button', { name: /log in/i }));
+    await userEvent.setup().click(screen.getByRole('button', { name: /sign in/i }));
 
     // required on both <input>s stops the browser from ever dispatching
     // submit — so the network call this test really cares about (login)
@@ -115,7 +126,7 @@ describe('client-side validation', () => {
       expect(fetchMock.mock.calls.some(([url]) => url === '/api/auth/session')).toBe(true);
     });
     expect(fetchMock.mock.calls.some(([url]) => url === '/api/auth/login')).toBe(false);
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(nonEmptyAlerts()).toHaveLength(0);
   });
 
   it('never calls the login endpoint when the password is left empty', async () => {
@@ -124,7 +135,7 @@ describe('client-side validation', () => {
     renderLogin();
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/username/i), 'operator');
-    await user.click(screen.getByRole('button', { name: /log in/i }));
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     expect(fetchMock.mock.calls.some(([url]) => url === '/api/auth/login')).toBe(false);
@@ -135,8 +146,8 @@ describe('client-side validation', () => {
 
     renderLogin();
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText(/password/i), 'e2e-password-123');
-    await user.click(screen.getByRole('button', { name: /log in/i }));
+    await user.type(screen.getByLabelText('Password'), 'e2e-password-123');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     expect(fetchMock.mock.calls.some(([url]) => url === '/api/auth/login')).toBe(false);

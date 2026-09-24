@@ -8,7 +8,7 @@ import {
   geometryHasChains,
   procedureNote,
 } from './RouteGeometryLayer';
-import type { GeometryChain, GeometryPoint, PlannedLegWithChildren, RouteGeometryResponse } from '../types';
+import type { GeometryChain, GeometryPoint, PlannedLegWithChildren, RouteGeometryResponse } from '../../types';
 
 const empty: GeometryChain = { source: null, synthetic: false, points: [], arcs: [] };
 const pt = (lat: number, lon: number, ident: string | null = null): GeometryPoint => ({

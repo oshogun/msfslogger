@@ -7,6 +7,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      IBM_TELEMETRY_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +25,12 @@ jobs:
       - name: Build (client + server)
         run: npm run build
 
+      - name: Print/export chunk guard (RK-1)
+        run: |
+          cd client
+          npx vite build --manifest
+          npm run check:print-chunk
+
       - name: Typecheck tests
         run: npm run test:types
 
@@ -38,6 +46,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     needs: build-and-test
+    env:
+      IBM_TELEMETRY_DISABLED: 'true'
     steps:
       - uses: actions/checkout@v4
 

@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { NavdataControls, kindNote, type NavdataControlsProps } from './NavdataControls';
-import { mockFetchRoutes } from '../test/mockFetch';
-import { absentStatus, cov, emptyFeatures, presentStatus } from '../test/navdataFixtures';
-import type { FeaturesResponse } from '../types';
+import { NavdataControls, NavdataOverlay, kindNote, type NavdataControlsProps } from './NavdataControls';
+import { FlightMap } from './FlightMap';
+import { mockFetchRoutes } from '../../test/mockFetch';
+import { absentStatus, cov, emptyFeatures, presentStatus } from '../../test/navdataFixtures';
+import type { FeaturesResponse } from '../../types';
+import type { FlightPoint } from '../../types';
 
 const allOff = { airports: false, navaids: false, waypoints: false, airways: false, runways: false };
 
@@ -89,7 +91,12 @@ describe('NavdataControls', () => {
   it('greys a gated toggle and gives the reason', () => {
     renderControls(emptyFeatures({ gated: ['waypoints'] }));
     expect(screen.getByText('Waypoints: Zoom in to see waypoints')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Waypoints' }).closest('label')).toHaveStyle({ opacity: '0.45' });
+    // The Carbon Checkbox renders its input beside the label, not inside it,
+    // so the gated state is asserted on the row wrapper the input sits in,
+    // which is what carries the dimming class and the reason as a title.
+    const wrapper = screen.getByRole('checkbox', { name: 'Waypoints' }).closest('.navdata-panel__kind')!;
+    expect(wrapper).toHaveClass('navdata-panel__kind--gated');
+    expect(wrapper).toHaveAttribute('title', 'Zoom in to see waypoints');
   });
 
   it('warns when the answer was truncated', () => {
@@ -140,5 +147,92 @@ describe('NavdataControls', () => {
       airports: [{ ident: 'ZZ-BAD!', lat: 1, lon: 1, name: null, hasDetail: false, runways: null, procedures: null, longestRunwayM: null, surface: null, towered: null, longestRunwayHeadingDeg: null, tier: null }],
     }));
     expect(screen.queryByRole('button', { name: 'Fetch detail' })).toBeNull();
+  });
+});
+
+const track: FlightPoint[] = [0, 1].map(i => ({
+  id: i,
+  flight_id: 1,
+  ts: new Date(Date.parse('2026-01-01T12:00:00.000Z') + i * 5000).toISOString(),
+  lat: 50 + i * 0.01,
+  lon: 8 + i * 0.01,
+  altitude_ft: 1000,
+  airspeed_kts: 120,
+  ground_speed_kts: 130,
+  heading_deg: 90,
+  vertical_speed_fpm: 0,
+  on_ground: 0,
+}));
+
+// jsdom has no real <canvas> 2D context, and the flown track always draws
+// through Leaflet's own canvas renderer, so mounting a real FlightMap here
+// needs a context stub — every draw call is a no-op, only property
+// assignment is kept, which is all the renderer needs to not throw.
+function stubCanvasContext() {
+  const target: Record<PropertyKey, unknown> = {};
+  const fakeCtx = new Proxy(target, {
+    get: (t, prop) => (prop in t ? t[prop as PropertyKey] : () => undefined),
+    set: (t, prop, value) => {
+      t[prop as PropertyKey] = value;
+      return true;
+    },
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(fakeCtx as unknown as CanvasRenderingContext2D);
+}
+
+// FlightMap renders NavdataOverlay (and everything else navdata-shaped) as a
+// child, not through a boolean prop, so a map that never mounts the overlay
+// must stay completely inert: no status poll, no pane.
+describe('a map without NavdataOverlay', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('makes no /api/navdata/status request and creates no navdata pane', async () => {
+    stubCanvasContext();
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify(presentStatus), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { container } = render(<FlightMap points={track} />);
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(container.querySelector('.leaflet-navdata-pane')).toBeNull();
+  });
+});
+
+describe('NavdataOverlay', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders no controls and fetches no features when the replica is absent', async () => {
+    stubCanvasContext();
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/navdata/status') return new Response(JSON.stringify(absentStatus), { status: 200 });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { container } = render(
+      <FlightMap points={track}>
+        <NavdataOverlay />
+      </FlightMap>
+    );
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/navdata/status', expect.anything()));
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(screen.queryByText('Navdata')).toBeNull();
+    expect(container.querySelector('.leaflet-navdata-pane')).toBeNull();
+    expect(fetchSpy.mock.calls.some(([u]) => String(u).includes('/api/navdata/features'))).toBe(false);
+  });
+
+  it('creates the pane and renders the controls when the replica is present', async () => {
+    stubCanvasContext();
+    mockFetchRoutes({ '/api/navdata/status': [200, presentStatus] });
+    const { container } = render(
+      <FlightMap points={track}>
+        <NavdataOverlay />
+      </FlightMap>
+    );
+    await waitFor(() => expect(screen.getByText('Navdata')).toBeInTheDocument());
+    expect(container.querySelector('.leaflet-navdata-pane')).not.toBeNull();
   });
 });

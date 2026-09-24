@@ -1,0 +1,160 @@
+import fs from 'node:fs';
+import { test, expect } from '@playwright/test';
+
+/**
+ * Shell-level guarantees that no single page spec covers on its own: the
+ * SideNav's identity across a write, breadcrumb navigation staying in-app,
+ * the shared modal's focus trap, the header's live-status wording, a PDF
+ * export round trip, and the session-expiry bounce to /login. Fixture rows
+ * are from src/testSeed.ts (trip 1 "E2E Baltic Hop", flight 1 EFHK -> EETN).
+ */
+
+test.describe('SideNav identity', () => {
+  test('a trip submenu opened by hand stays open across a rename', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();
+
+    const tripMenuButton = page.getByRole('button', { name: 'E2E Baltic Hop' });
+    await tripMenuButton.click();
+    const overviewLink = page.getByRole('link', { name: 'Trip overview' });
+    await expect(overviewLink).toBeVisible();
+    await expect(tripMenuButton).toHaveAttribute('aria-expanded', 'true');
+
+    await overviewLink.click();
+    await expect(page.getByRole('main').getByRole('heading', { name: 'E2E Baltic Hop', level: 1 })).toBeVisible();
+
+    try {
+      await page.getByRole('button', { name: 'Edit' }).click();
+      await expect(page.getByRole('heading', { name: 'Edit trip' })).toBeVisible();
+      const nameField = page.getByLabel('Trip name');
+      await nameField.fill('E2E Baltic Hop Renamed');
+      await page.getByRole('button', { name: 'Save' }).click();
+      await expect(page.getByRole('heading', { name: 'Edit trip' })).toBeHidden();
+      await expect(page.getByRole('main').getByRole('heading', { name: 'E2E Baltic Hop Renamed', level: 1 })).toBeVisible();
+
+      // The rename is the write; subscribeMutations debounces 150ms before
+      // useNavTree refetches. The renamed SideNavMenu must still be the same
+      // open submenu, not a freshly-mounted, freshly-collapsed one.
+      const renamedMenuButton = page.getByRole('button', { name: 'E2E Baltic Hop Renamed' });
+      await expect(renamedMenuButton).toBeVisible();
+      await expect(renamedMenuButton).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.getByRole('link', { name: 'Trip overview' })).toBeVisible();
+    } finally {
+      // Leave the fixture as found for whatever runs after this test.
+      await page.request.patch('/api/trips/1', {
+        data: { name: 'E2E Baltic Hop' },
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  });
+});
+
+test.describe('breadcrumb navigation', () => {
+  test('following a breadcrumb link is an in-app route change, not a reload', async ({ page }) => {
+    await page.goto('/trip/1');
+    await expect(page.getByRole('main').getByRole('heading', { name: 'E2E Baltic Hop', level: 1 })).toBeVisible();
+
+    // A sentinel that only a full page reload would clear.
+    await page.evaluate(() => { (window as unknown as Record<string, unknown>).__e2e_sentinel__ = 'still-here'; });
+
+    const breadcrumb = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await breadcrumb.getByRole('link', { name: 'All Flights' }).click();
+
+    await expect(page).toHaveURL(/\/flights$/);
+    const sentinel = await page.evaluate(() => (window as unknown as Record<string, unknown>).__e2e_sentinel__);
+    expect(sentinel).toBe('still-here');
+  });
+});
+
+test.describe('modal focus trap', () => {
+  test('Tab stays inside ConfirmModal; Escape returns focus to the launcher', async ({ page }) => {
+    await page.goto('/trip/1');
+    const launcher = page.getByRole('button', { name: 'Delete Trip' });
+    await launcher.click();
+
+    const heading = page.getByRole('heading', { name: 'Delete trip' });
+    await expect(heading).toBeVisible();
+
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    const focusInModal = await page.evaluate(
+      () => document.activeElement?.closest('.cds--modal-container') != null,
+    );
+    expect(focusInModal).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(heading).toBeHidden();
+    await expect(launcher).toBeFocused();
+  });
+});
+
+test.describe('header live-status label', () => {
+  test('shows "Sim not connected" against the agent-less scratch server, and never a stray label', async ({ page }) => {
+    const tag = page.locator('[aria-live="polite"]');
+    const allowedLabel = /^(Checking\.\.\.|Server unreachable|Sim not connected|Recording · .+|Paused · .+|Connected · Idle)$/;
+
+    await page.goto('/');
+    const seen = new Set<string>();
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const text = (await tag.innerText()).trim();
+      if (text) seen.add(text);
+      await page.waitForTimeout(200);
+    }
+    expect(seen.size).toBeGreaterThan(0);
+    for (const text of seen) expect(text).toMatch(allowedLabel);
+    await expect(tag).toHaveText('Sim not connected');
+  });
+
+  test('shows "Connected · Idle" when /api/status reports a connected, idle sim', async ({ page }) => {
+    await page.route('**/api/status', route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        connected: true, flightState: 'IDLE', currentFlightId: null, aircraft: null,
+        frame: null, paused: false, pauseFlags: 0,
+      }),
+    }));
+    await page.goto('/');
+    await expect(page.locator('[aria-live="polite"]')).toHaveText('Connected · Idle');
+  });
+});
+
+test.describe('PDF export round trip', () => {
+  test('Export PDF on /flight/1 downloads a PDF with the expected filename', async ({ page }) => {
+    await page.goto('/flight/1');
+    await expect(page.getByRole('main').getByRole('heading', { name: /^Flight #1/ })).toBeVisible();
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Export PDF' }).click(),
+    ]);
+
+    expect(download.suggestedFilename()).toBe('flight-1-efhk-eetn-2026-03-01.pdf');
+    const filePath = await download.path();
+    expect(filePath).not.toBeNull();
+    const header = fs.readFileSync(filePath as string).subarray(0, 4).toString('latin1');
+    expect(header).toBe('%PDF');
+  });
+});
+
+test.describe('session expiry (RK-4)', () => {
+  test('a session lost mid-page bounces once to /login with no visible error banner', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();
+
+    // The server has already dropped the session; the client only finds out
+    // on its next gated call. No full reload — a route change is enough to
+    // fire useNavTree's fetch and the RequireAuth 401 handler with it.
+    await page.context().clearCookies();
+    await page.getByRole('link', { name: 'Prefiles' }).click();
+
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+
+    // Settles at /login rather than bouncing back and forth.
+    await page.waitForTimeout(800);
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+  });
+});
