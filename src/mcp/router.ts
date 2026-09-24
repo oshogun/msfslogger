@@ -17,7 +17,7 @@ const METHOD_NOT_ALLOWED_BODY = {
  * and the MCP spec explicitly allows 405 for a GET the server doesn't
  * support. Only called when config.mcp.enabled is true.
  */
-export function createMcpRouter(mcp: McpConfig, flightManager: FlightManager): Router {
+export function createMcpRouter(mcp: McpConfig, flightManager: FlightManager, onChanged: () => void = () => {}): Router {
   // Startup assertion, run once here rather than per request: this is what
   // keeps MCP_SCOPED_ROUTES load-bearing even though every tool handler below
   // calls an in-process function instead of going through this router.
@@ -30,7 +30,7 @@ export function createMcpRouter(mcp: McpConfig, flightManager: FlightManager): R
     // Fresh server and transport per request (stateless mode): one operator,
     // a handful of concurrent clients at most, and nothing any tool returns
     // needs a resumable stream or a server-initiated notification.
-    const server = buildMcpServer(flightManager);
+    const server = buildMcpServer(flightManager, onChanged);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();

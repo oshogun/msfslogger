@@ -9,7 +9,9 @@ import { NAVDATA_BATCH_MAX_BYTES } from './navdata/store';
 import { SidecarStateStore } from './navdata/sidecarState';
 import { TrafficStore } from './trafficStore';
 import { getConfig } from './config';
-import { getOrCreateAppSecret } from './db';
+import { getOrCreateAppSecret, setAcarsInsertListener } from './db';
+import { EventHub } from './eventHub';
+import { createEventsRouter } from './routes/events';
 import { SqliteSessionStore } from './auth/sessionStore';
 import { requireAuth, requireSameOrigin, SESSION_COOKIE_NAME } from './auth/middleware';
 import { createIngestTokenScopeGate } from './auth/ingestScope';
@@ -49,17 +51,79 @@ export function createServer(flightManager: FlightManager): express.Express {
   // server starts empty. Never persisted, never written to flights.db.
   const trafficStore = new TrafficStore();
 
+  // The in-process event hub for GET /api/events, and every closure that
+  // requests a publish on it. Declared here — before the ingest and MCP
+  // routers below, both of which take one of these as a callback — with no
+  // side effect until something actually calls one.
+  const hub = new EventHub();
+  function buildStatusBody(): object {
+    const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
+    // Only while FLYING, and only when the flight is actually linked — every
+    // other case must leave the response byte-identical to before this key
+    // existed, so it is spread in rather than ever sent as a literal null.
+    const plannedLeg = flightState === 'FLYING' && lastFrame
+      ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
+      : null;
+    // Present iff flightState === 'GROUND' — never null, so an unchanged
+    // AppState serialises byte-identically to before this key existed. Same
+    // conditional-spread idiom as plannedLeg.
+    const groundSession = flightState === 'GROUND'
+      ? flightManager.getGroundSessionStatus()
+      : null;
+    // Present iff non-empty — never null, never [], absent instead, so an
+    // unchanged AppState serialises byte-identically to before this key
+    // existed. Same conditional-spread idiom as plannedLeg.
+    const traffic = trafficStore.read();
+    return {
+      connected,
+      flightState,
+      currentFlightId,
+      paused,
+      pauseFlags,
+      simRunning: lastFrame?.simRunning ?? 0,
+      onGround: lastFrame?.onGround ?? true,
+      aircraft: lastFrame?.aircraft ?? null,
+      frame: lastFrame ? {
+        lat:              lastFrame.lat,
+        lon:              lastFrame.lon,
+        altitudeFt:       lastFrame.altitudeFt,
+        airspeedKnots:    lastFrame.airspeedKnots,
+        groundSpeedKnots: lastFrame.groundSpeedKnots,
+        headingDeg:       lastFrame.headingDeg,
+        verticalSpeedFpm: lastFrame.verticalSpeedFpm,
+        onGround:         lastFrame.onGround,
+      } : null,
+      ...(plannedLeg ? { plannedLeg } : {}),
+      ...(groundSession ? { groundSession } : {}),
+      ...(traffic.length ? { traffic } : {}),
+    };
+  }
+
+  const requestStatus = () => hub.publishDeferred('status', '', buildStatusBody);
+  const requestFlightState = () => hub.publishDeferred('flight-state', '', () => flightManager.getFlightStatePayload());
+  const requestDemand = () => hub.publishDeferred('navdata-demand', '', () => ({}));
+  const notifyFlightsChanged = () => { hub.publishDeferred('flights-changed', '', () => ({})); requestFlightState(); };
+  const notifyPlanChanged = () => { notifyFlightsChanged(); requestDemand(); };
+
+  flightManager.setScopeChangeListener(() => { requestFlightState(); requestStatus(); requestDemand(); });
+  // Module-level (src/db/acarsMessages.ts): every writer already routes
+  // through insertAcarsMessage/insertAcarsMessageOnce, so this is the one
+  // place that turns a created row into a coalesced 'acars' publish, keyed by
+  // the scope it hints at. A second createServer() in one process (tests)
+  // replaces the previous listener — the last server wins.
+  setAcarsInsertListener(hint => hub.publishDeferred('acars', `${hint.flightId}:${hint.plannedLegId}`, () => hint));
+
   // Deliberately above the session middleware: the agent never sends a cookie,
   // and an ingest request must never allocate or touch the session store.
   // Authenticated by INGEST_TOKEN instead.
-  app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest));
+  app.use('/api/ingest', createIngestRouter(flightManager, trafficStore, config.ingest, requestStatus));
 
   // The MCDU sidecar's navdata sync. Same reasoning as the ingest router: no
   // cookie, INGEST_TOKEN instead, above the session middleware. It answers only
   // its own four routes; other /api/navdata paths fall through to the session
   // stack below.
   const sidecarState = new SidecarStateStore();
-  app.use('/api/navdata', createNavdataSyncRouter(config.ingest, sidecarState));
+  app.use('/api/navdata', createNavdataSyncRouter(config.ingest, sidecarState, Date.now, requestDemand));
 
   // A protocol endpoint, not a REST resource, deliberately outside /api: it
   // authenticates with its own MCP_TOKEN bearer gate rather than requireAuth,
@@ -67,7 +131,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // means an MCP request never allocates or touches a session row. Unmounted
   // entirely when no MCP_TOKEN is configured.
   if (config.mcp.enabled) {
-    app.use('/mcp', createMcpRouter(config.mcp, flightManager));
+    app.use('/mcp', createMcpRouter(config.mcp, flightManager, notifyPlanChanged));
   }
 
   // SESSION_SECRET when the operator set one, otherwise a random 32-byte secret
@@ -115,47 +179,14 @@ export function createServer(flightManager: FlightManager): express.Express {
   app.use('/api', requireAuth);
 
   app.get('/api/status', (_req, res) => {
-    const { flightState, currentFlightId, connected, lastFrame, paused, pauseFlags } = flightManager.appState;
-    // Only while FLYING, and only when the flight is actually linked — every
-    // other case must leave the response byte-identical to before this key
-    // existed, so it is spread in rather than ever sent as a literal null.
-    const plannedLeg = flightState === 'FLYING' && lastFrame
-      ? flightManager.getPlannedLegStatus(lastFrame.lat, lastFrame.lon)
-      : null;
-    // Present iff flightState === 'GROUND' — never null, so an unchanged
-    // AppState serialises byte-identically to before this key existed. Same
-    // conditional-spread idiom as plannedLeg.
-    const groundSession = flightState === 'GROUND'
-      ? flightManager.getGroundSessionStatus()
-      : null;
-    // Present iff non-empty — never null, never [], absent instead, so an
-    // unchanged AppState serialises byte-identically to before this key
-    // existed. Same conditional-spread idiom as plannedLeg.
-    const traffic = trafficStore.read();
-    res.json({
-      connected,
-      flightState,
-      currentFlightId,
-      paused,
-      pauseFlags,
-      simRunning: lastFrame?.simRunning ?? 0,
-      onGround: lastFrame?.onGround ?? true,
-      aircraft: lastFrame?.aircraft ?? null,
-      frame: lastFrame ? {
-        lat:              lastFrame.lat,
-        lon:              lastFrame.lon,
-        altitudeFt:       lastFrame.altitudeFt,
-        airspeedKnots:    lastFrame.airspeedKnots,
-        groundSpeedKnots: lastFrame.groundSpeedKnots,
-        headingDeg:       lastFrame.headingDeg,
-        verticalSpeedFpm: lastFrame.verticalSpeedFpm,
-        onGround:         lastFrame.onGround,
-      } : null,
-      ...(plannedLeg ? { plannedLeg } : {}),
-      ...(groundSession ? { groundSession } : {}),
-      ...(traffic.length ? { traffic } : {}),
-    });
+    res.json(buildStatusBody());
   });
+
+  // Directly after /api/status, behind requireAuth like every route below it.
+  app.use('/api', createEventsRouter(hub, {
+    status: buildStatusBody,
+    flightState: () => flightManager.getFlightStatePayload(),
+  }));
 
   // ── Flights ────────────────────────────────────────────────────────────────
   // Mounted where the first of these routes used to sit. The whole /api/flights
@@ -165,13 +196,13 @@ export function createServer(flightManager: FlightManager): express.Express {
   // load-bearing — and that is preserved, POST /flights/combine still ahead of
   // /flights/:id.
 
-  app.use('/api', createFlightsRouter(flightManager));
+  app.use('/api', createFlightsRouter(flightManager, notifyFlightsChanged));
 
   // ── Trips ──────────────────────────────────────────────────────────────────
   // Same reasoning: the trip routes, /api/active-trip and the trip atlas are one
   // router, mounted in the position the first of them occupied.
 
-  app.use('/api', createTripsRouter(flightManager));
+  app.use('/api', createTripsRouter(flightManager, notifyPlanChanged));
 
   // ── Settings ───────────────────────────────────────────────────────────────
   // Mounted here, in the position the routes used to occupy, because
@@ -184,7 +215,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // position the block occupied: every literal /api route must be registered
   // before the SPA catch-all below, or the catch-all swallows it.
 
-  app.use('/api', createPlannedLegsRouter(flightManager));
+  app.use('/api', createPlannedLegsRouter(flightManager, notifyPlanChanged));
 
   // ── Navdata queries and route geometry ─────────────────────────────────────
   // Behind the session gate: the ingest token is never accepted here. The
@@ -192,7 +223,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // /planned-legs/:legId/route-geometry has three segments, so none of the
   // planned-legs handlers above can capture it.
 
-  app.use('/api', createNavdataRouter(sidecarState));
+  app.use('/api', createNavdataRouter(sidecarState, requestDemand));
   app.use('/api', createRouteGeometryRouter());
 
   // ── PDF and KML export ────────────────────────────────────────────────────
@@ -218,7 +249,7 @@ export function createServer(flightManager: FlightManager): express.Express {
   // Mounted before the SPA catch-all, like every other /api router. Nothing
   // already registered can capture /api/ground-sessions or its /current path.
 
-  app.use('/api', createGroundSessionsRouter(flightManager));
+  app.use('/api', createGroundSessionsRouter(flightManager, notifyFlightsChanged));
 
   // Catch-all: let React Router handle client-side routes
   app.get('*', (_req, res) => {

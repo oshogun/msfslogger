@@ -27,6 +27,7 @@ interface TestServerHandle {
   };
   onFrame: ReturnType<typeof vi.fn>;
   trafficReplace: ReturnType<typeof vi.fn>;
+  onStatusChanged: ReturnType<typeof vi.fn>;
 }
 
 function createTestServer(options: TestServerOptions = {}): Promise<TestServerHandle> {
@@ -54,6 +55,7 @@ function createTestServer(options: TestServerOptions = {}): Promise<TestServerHa
   const ingestConfig = {
     token: TOKEN,
   } as Parameters<typeof createIngestRouter>[2];
+  const onStatusChanged = vi.fn();
 
   const app = express();
   app.use(express.json());
@@ -63,6 +65,7 @@ function createTestServer(options: TestServerOptions = {}): Promise<TestServerHa
       flightManager as unknown as Parameters<typeof createIngestRouter>[0],
       trafficStore,
       ingestConfig,
+      onStatusChanged,
     ),
   );
 
@@ -82,6 +85,7 @@ function createTestServer(options: TestServerOptions = {}): Promise<TestServerHa
         flightManager,
         onFrame,
         trafficReplace,
+        onStatusChanged,
       });
     });
     server.on('error', reject);
@@ -348,5 +352,109 @@ describe('stale-disconnect timer', () => {
 
     expect(flightManager.appState.connected).toBe(true);
     expect(flightManager.onSimDisconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('onStatusChanged', () => {
+  it('is called once after a valid frame, not on a rejected one', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const ok = await postJson(baseUrl, '/api/ingest/frame', makeFrame());
+    expect(ok.status).toBe(204);
+    expect(onStatusChanged).toHaveBeenCalledTimes(1);
+
+    const bad = { ...makeFrame(), lat: 'not-a-number' };
+    const rejected = await postJson(baseUrl, '/api/ingest/frame', bad);
+    expect(rejected.status).toBe(400);
+    expect(onStatusChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not called for a frame rejected by auth', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const response = await postJson(baseUrl, '/api/ingest/frame', makeFrame(), 'wrong-token');
+
+    expect(response.status).toBe(401);
+    expect(onStatusChanged).not.toHaveBeenCalled();
+  });
+
+  it.each(['connected', 'disconnected', 'paused', 'unpaused', 'crashed'])(
+    'is called once after an accepted "%s" event',
+    async (type) => {
+      const { baseUrl, onStatusChanged } = await startServer();
+
+      const response = await postJson(baseUrl, '/api/ingest/event', { type });
+
+      expect(response.status).toBe(204);
+      expect(onStatusChanged).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('is called once after a valid "pause" event', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const response = await postJson(baseUrl, '/api/ingest/event', { type: 'pause', flags: 4 });
+
+    expect(response.status).toBe(204);
+    expect(onStatusChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not called for an unknown event type (400) or a bad "pause" payload (400)', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const unknown = await postJson(baseUrl, '/api/ingest/event', { type: 'bogus' });
+    expect(unknown.status).toBe(400);
+
+    const badPause = await postJson(baseUrl, '/api/ingest/event', { type: 'pause', flags: 'not-a-number' });
+    expect(badPause.status).toBe(400);
+
+    expect(onStatusChanged).not.toHaveBeenCalled();
+  });
+
+  it('is not called for an event rejected by auth', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const response = await postJson(baseUrl, '/api/ingest/event', { type: 'connected' }, 'wrong-token');
+
+    expect(response.status).toBe(401);
+    expect(onStatusChanged).not.toHaveBeenCalled();
+  });
+
+  it('is never called from POST /traffic', async () => {
+    const { baseUrl, onStatusChanged } = await startServer();
+
+    const response = await postJson(baseUrl, '/api/ingest/traffic', { objects: [validTrafficElement()] });
+
+    expect(response.status).toBe(204);
+    expect(onStatusChanged).not.toHaveBeenCalled();
+  });
+
+  describe('stale-disconnect timer', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-09-09T12:00:00.000Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('is called once when the timer marks the agent disconnected', async () => {
+      const { baseUrl, onStatusChanged } = await startServer();
+
+      await postJson(baseUrl, '/api/ingest/frame', makeFrame());
+      onStatusChanged.mockClear(); // isolate the timer's own call from the frame's
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(onStatusChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('never fires from the timer while nothing is connected (nothing to mark stale)', async () => {
+      const { onStatusChanged } = await startServer();
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(onStatusChanged).not.toHaveBeenCalled();
+    });
   });
 });

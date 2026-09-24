@@ -17,7 +17,7 @@ import type { TripEditPayload } from '../types';
  * flightManager is a parameter for the same reason as in ./flights: one
  * instance per process, handed in rather than reached for.
  */
-export function createTripsRouter(flightManager: FlightManager): Router {
+export function createTripsRouter(flightManager: FlightManager, onChanged: () => void = () => {}): Router {
   const router = express.Router();
 
   router.post('/trips', (req, res) => {
@@ -29,6 +29,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
       res.status(400).json({ error: 'notes must be a string or null' }); return;
     }
     const id = createTrip(name.trim(), (notes as string | null | undefined) ?? null);
+    onChanged();
     res.status(201).json({ id });
   });
 
@@ -74,6 +75,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
 
     const updated = updateTrip(id, payload);
     if (!updated) { res.status(404).json({ error: 'Not found' }); return; }
+    onChanged();
     res.json(getTripById(id));
   });
 
@@ -90,6 +92,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
         console.warn('[Routes] leg cache refresh after delete failed:', err);
       }
     }
+    onChanged();
     res.json({ deleted: true });
   });
 
@@ -107,6 +110,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
     // so this gets the same live-status-cache refresh the manual link endpoint
     // does. A no-op unless this is the flight in progress.
     flightManager.refreshPlannedLegForFlight(flightId as number);
+    onChanged();
     res.json({ ok: true });
   });
 
@@ -116,6 +120,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
     const removed = removeFlightFromTrip(flightId);
     if (!removed) { res.status(404).json({ error: 'Flight not found' }); return; }
     flightManager.refreshPlannedLegForFlight(flightId);
+    onChanged();
     res.json({ ok: true });
   });
 
@@ -148,6 +153,7 @@ export function createTripsRouter(flightManager: FlightManager): Router {
     try {
       setActiveTrip(tripId as number | null);
       const trip = tripId !== null ? getTripById(tripId as number) : null;
+      onChanged();
       res.json({ tripId, name: trip ? trip.name : null });
     } catch (err) {
       res.status(500).json({ error: String(err) });

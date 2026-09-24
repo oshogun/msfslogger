@@ -85,6 +85,7 @@ export function createNavdataSyncRouter(
   ingestConfig: IngestConfig,
   sidecarState: SidecarStateStore,
   now: () => number = Date.now,
+  onDemandChanged: () => void = () => {},
 ): express.Router {
   const router = express.Router();
   const tokenDigest = ingestTokenDigest(ingestConfig.token);
@@ -134,7 +135,9 @@ export function createNavdataSyncRouter(
           res.status(400).json({ ok: false, code: 'NAVDATA_BAD_BATCH', message: 'No navdataSnapshot file in the upload' });
           return;
         }
-        res.json(await importNavdataSnapshot(file.path));
+        const result = await importNavdataSnapshot(file.path);
+        onDemandChanged();
+        res.json(result);
       } catch (err) {
         if (err instanceof NavdataStoreError) {
           storeError(res, err, log, '/snapshot');
@@ -159,6 +162,7 @@ export function createNavdataSyncRouter(
     try {
       const ack = applyIncrementalBatch(req.body as IncrementalBatch);
       sidecarState.markRowsApplied();
+      onDemandChanged();
       res.json(ack);
     } catch (err) {
       if (err instanceof NavdataStoreError) {

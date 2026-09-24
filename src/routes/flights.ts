@@ -31,7 +31,7 @@ function normalizeDateBound(value: string): string | null {
  * one per process, created in src/index.ts, and a router that reached for a
  * singleton instead would make the scratch/test servers share it.
  */
-export function createFlightsRouter(flightManager: FlightManager): Router {
+export function createFlightsRouter(flightManager: FlightManager, onChanged: () => void = () => {}): Router {
   const router = express.Router();
 
   router.get('/flights', (_req, res) => {
@@ -79,6 +79,7 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
       } catch (err) {
         console.warn(`ICAO backfill for combined flight ${newId} failed:`, err);
       }
+      onChanged();
       res.status(201).json({ id: newId });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -215,6 +216,7 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
     const updated = updateFlight(id, payload);
     if (!updated) { res.status(404).json({ error: 'Not found' }); return; }
 
+    onChanged();
     res.json(getFlightById(id));
   });
 
@@ -231,6 +233,7 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
         console.warn('[Routes] leg cache refresh after delete failed:', err);
       }
     }
+    onChanged();
     res.json({ deleted: true });
   });
 
@@ -250,6 +253,7 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
 
     saveFlightPlanFile(id, file.buffer);
     setFlightPlanName(id, file.originalname.slice(0, 255));
+    onChanged();
     res.json(getFlightById(id));
   });
 
@@ -274,6 +278,7 @@ export function createFlightsRouter(flightManager: FlightManager): Router {
 
     deleteFlightPlanFile(id);
     clearFlightPlanName(id);
+    onChanged();
     res.json(getFlightById(id));
   });
 

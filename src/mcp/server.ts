@@ -18,18 +18,19 @@ export interface McpToolDescriptor {
   description: string;
   route: string | null;
   kind: 'read' | 'write';
-  register(server: McpServer, flightManager: FlightManager): void;
+  register(server: McpServer, flightManager: FlightManager, onChanged: () => void): void;
 }
 
 /** Every tool this server registers: the 14 read tools plus the 4 write tools. */
 export const MCP_TOOLS: readonly McpToolDescriptor[] = [...readTools, ...writeTools];
 
 /** Fresh McpServer per HTTP request: stateless, no session map to leak or
- *  evict. Registers every tool in MCP_TOOLS. */
-export function buildMcpServer(flightManager: FlightManager): McpServer {
+ *  evict. Registers every tool in MCP_TOOLS. A read tool ignores the third
+ *  parameter; only a write tool calls it, once, after its DB write succeeds. */
+export function buildMcpServer(flightManager: FlightManager, onChanged: () => void = () => {}): McpServer {
   const server = new McpServer({ name: 'msfslogger', version: '1.0.0' });
   for (const tool of MCP_TOOLS) {
-    tool.register(server, flightManager);
+    tool.register(server, flightManager, onChanged);
   }
   return server;
 }

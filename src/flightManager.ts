@@ -2,6 +2,7 @@ import type {
   SimFrame, FlightState, AppState, PlannedLegWithChildren, PlannedLegLiveStatus,
   GroundSession, GroundSessionLiveStatus, GroundSessionEndReason,
 } from './types';
+import type { FlightStatePayload } from './eventHub';
 import type { OpenFlightRow, FlightTrackPoint } from './db';
 import {
   insertFlight, insertPoint, closeFlight, getFlightPlannedLegId,
@@ -213,6 +214,10 @@ export class FlightManager {
   private lastPositionReportWindow = 0;
   private isPaused = false;
   private lastPointTime = 0;
+  // Notified after every flight/leg scope change (see the call sites below);
+  // null while nothing has attached one, which is the case for every existing
+  // caller of this class that doesn't care.
+  private scopeChangeListener: (() => void) | null = null;
   // Set whenever recording is skipped, so the following gap is known to be an
   // interruption regardless of how short it was.
   private interrupted = false;
@@ -253,6 +258,35 @@ export class FlightManager {
     this.isPaused = paused;
     this.appState.paused = paused;
     this.appState.pauseFlags = paused ? flags : 0;
+  }
+
+  /** Attach (or detach with null) the callback fired after a scope change. */
+  setScopeChangeListener(listener: (() => void) | null): void {
+    this.scopeChangeListener = listener;
+  }
+
+  /**
+   * The current flight/leg scope, resolved the same way at every call: for a
+   * flight in progress, the effective leg is whatever this.plannedLegCache
+   * holds (never a database read); otherwise it is the open ground session's
+   * planned_leg_id, if any, which covers a manual session open before or
+   * between flights.
+   */
+  getFlightStatePayload(): FlightStatePayload {
+    const currentFlightId = this.appState.currentFlightId;
+    const plannedLegId = currentFlightId !== null
+      ? this.plannedLegCache?.plannedLegId ?? null
+      : getOpenGroundSession()?.planned_leg_id ?? null;
+    return { flightState: this.appState.flightState, currentFlightId, plannedLegId };
+  }
+
+  private notifyScopeChange(): void {
+    if (!this.scopeChangeListener) return;
+    try {
+      this.scopeChangeListener();
+    } catch (err) {
+      console.warn('[FlightManager] scope listener failed:', err);
+    }
   }
 
   onFrame(frame: SimFrame): void {
@@ -398,13 +432,16 @@ export class FlightManager {
     const open = getOpenGroundSession();
     if (!open) {
       if (this.state === 'GROUND') {
+        // resetGroundTracking() already notifies at its own end.
         this.resetGroundTracking();
       } else {
         this.groundSessionCache = null;
+        this.notifyScopeChange();
       }
       return;
     }
     this.groundSessionCache = buildGroundSessionCache(open);
+    this.notifyScopeChange();
   }
 
   /**
@@ -478,6 +515,7 @@ export class FlightManager {
       this.outBlocksAt = null;
       this.state = 'GROUND';
       this.appState.flightState = 'GROUND';
+      this.notifyScopeChange();
     } catch (err) {
       console.warn('[FlightManager] Ground session entry failed, staying IDLE:', err);
       this.groundStreak = 0;
@@ -571,6 +609,7 @@ export class FlightManager {
     this.outBlocksAt = null;
     this.state = 'IDLE';
     this.appState.flightState = 'IDLE';
+    this.notifyScopeChange();
   }
 
   /**
@@ -663,6 +702,7 @@ export class FlightManager {
 
     this.appState.flightState = 'FLYING';
     this.appState.currentFlightId = id;
+    this.notifyScopeChange();
 
     this.onEventFiled = false;
     this.positionReportIntervalMs = parsePositionReportIntervalMs(process.env.POSITION_REPORT_INTERVAL_MIN);
@@ -818,6 +858,7 @@ export class FlightManager {
     // drops its (already-excluded) gap because interrupted is true, and
     // clears interrupted so the next gap counts normally.
     this.writePoint(frame);
+    this.notifyScopeChange();
   }
 
   private endFlight(frame: SimFrame): void {
@@ -890,6 +931,7 @@ export class FlightManager {
     this.state = 'IDLE';
     this.appState.flightState = 'IDLE';
     this.appState.currentFlightId = null;
+    this.notifyScopeChange();
     this.airborneStreak = 0;
     this.landedStreak = 0;
   }
@@ -942,11 +984,12 @@ export class FlightManager {
    * reads. A no-op for any flight that isn't the one currently flying.
    */
   refreshPlannedLegForFlight(flightId: number): void {
-    if (flightId !== this.currentFlightId) return;
+    if (flightId !== this.currentFlightId) { this.notifyScopeChange(); return; }
     const legId = getFlightPlannedLegId(flightId);
-    if (legId === null) { this.plannedLegCache = null; return; }
+    if (legId === null) { this.plannedLegCache = null; this.notifyScopeChange(); return; }
     const leg = getPlannedLegById(legId);
     this.plannedLegCache = leg ? buildPlannedLegCache(flightId, leg) : null;
+    this.notifyScopeChange();
   }
 
   /**

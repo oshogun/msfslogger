@@ -4,7 +4,7 @@
 // database, never mocked (a file that calls createScratchDb() must not
 // vi.mock('../src/db')).
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   insertAcarsMessage,
   insertAcarsMessageOnce,
@@ -12,6 +12,7 @@ import {
   findAcarsMessageByDedupKey,
   listAcarsMessagesForFlight,
   listAcarsMessagesForPlannedLeg,
+  setAcarsInsertListener,
 } from '../../src/db';
 import { createScratchDb, destroyScratchDb, seedFlight, seedPlannedLeg, seedTrip, seedAcarsMessage, type ScratchDb } from '../helpers/db';
 
@@ -209,6 +210,95 @@ describe('listAcarsMessagesForFlight() and listAcarsMessagesForPlannedLeg()', ()
     const thread = listAcarsMessagesForPlannedLeg(legId);
 
     expect(thread.map(m => m.id)).toEqual([first, second]);
+  });
+});
+
+describe('setAcarsInsertListener()', () => {
+  afterEach(() => {
+    setAcarsInsertListener(null); // never leak a listener into a later test file
+  });
+
+  it('insertAcarsMessage() calls the listener exactly once, with the created row\'s hint fields', () => {
+    const flightId = seedFlight(scratch.db);
+    const listener = vi.fn();
+    setAcarsInsertListener(listener);
+
+    const row = insertAcarsMessage({
+      flight_id: flightId,
+      direction: 'uplink',
+      category: 'freetext',
+      body: 'CLEARED TO DESTINATION',
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ flightId, plannedLegId: null, messageId: row.id });
+  });
+
+  it('insertAcarsMessageOnce() calls the listener once for a fresh dedup_key', () => {
+    const flightId = seedFlight(scratch.db);
+    const listener = vi.fn();
+    setAcarsInsertListener(listener);
+
+    const { message } = insertAcarsMessageOnce({
+      flight_id: flightId,
+      direction: 'uplink',
+      category: 'pdc',
+      body: 'PDC TEXT',
+      dedup_key: 'pdc:leg:29',
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ flightId, plannedLegId: null, messageId: message.id });
+  });
+
+  it('insertAcarsMessageOnce() calls the listener zero times on a duplicate dedup_key', () => {
+    const flightId = seedFlight(scratch.db);
+    insertAcarsMessageOnce({
+      flight_id: flightId, direction: 'uplink', category: 'pdc', body: 'PDC TEXT', dedup_key: 'pdc:leg:29',
+    });
+
+    const listener = vi.fn();
+    setAcarsInsertListener(listener);
+    insertAcarsMessageOnce({
+      flight_id: flightId, direction: 'uplink', category: 'pdc', body: 'PDC TEXT REISSUED', dedup_key: 'pdc:leg:29',
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('passes the leg scope through for a leg-only row', () => {
+    const tripId = seedTrip(scratch.db);
+    const legId = seedPlannedLeg(scratch.db, { trip_id: tripId });
+    const listener = vi.fn();
+    setAcarsInsertListener(listener);
+
+    const row = insertAcarsMessage({ planned_leg_id: legId, direction: 'uplink', category: 'pdc', body: 'PDC TEXT' });
+
+    expect(listener).toHaveBeenCalledWith({ flightId: null, plannedLegId: legId, messageId: row.id });
+  });
+
+  it('a throwing listener is caught and logged, and the row is still stored and returned', () => {
+    const flightId = seedFlight(scratch.db);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    setAcarsInsertListener(() => { throw new Error('boom'); });
+
+    const row = insertAcarsMessage({ flight_id: flightId, direction: 'uplink', category: 'freetext', body: 'HELLO' });
+
+    expect(row.id).toBeGreaterThan(0);
+    expect(getAcarsMessageById(row.id)?.body).toBe('HELLO');
+    expect(warn).toHaveBeenCalledWith('[db/acarsMessages] insert listener failed:', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('detaching with null stops further notifications', () => {
+    const flightId = seedFlight(scratch.db);
+    const listener = vi.fn();
+    setAcarsInsertListener(listener);
+    setAcarsInsertListener(null);
+
+    insertAcarsMessage({ flight_id: flightId, direction: 'uplink', category: 'freetext', body: 'HELLO' });
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });
 

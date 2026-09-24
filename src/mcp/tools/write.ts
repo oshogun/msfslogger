@@ -23,7 +23,7 @@ const updateFlightNotes: McpToolDescriptor = {
   description: 'Replace the notes on one flight. Cannot change the aircraft or any other field.',
   route: 'flight-edit-notes',
   kind: 'write',
-  register(server) {
+  register(server, _flightManager, onChanged) {
     server.registerTool(
       'update_flight_notes',
       {
@@ -40,6 +40,7 @@ const updateFlightNotes: McpToolDescriptor = {
         const flight = getFlightById(flight_id)!;
         const { points, ...fields } = flight;
         const tripName = fields.trip_id !== null ? getTripName(fields.trip_id) : null;
+        onChanged();
         return toolText({ ...fields, trip_name: tripName, track: null });
       }),
     );
@@ -54,7 +55,7 @@ const createTripTool: McpToolDescriptor = {
   description: 'Create a new trip with a name and optional notes.',
   route: 'trip-create',
   kind: 'write',
-  register(server) {
+  register(server, _flightManager, onChanged) {
     server.registerTool(
       'create_trip',
       {
@@ -70,6 +71,7 @@ const createTripTool: McpToolDescriptor = {
         if (trimmed.length === 0) return toolError('name must be a non-empty string.');
         const resolvedNotes = notes ?? null;
         const id = createTrip(trimmed, resolvedNotes);
+        onChanged();
         return toolText({ id, name: trimmed, notes: resolvedNotes });
       }),
     );
@@ -84,7 +86,7 @@ const assignFlightToTripTool: McpToolDescriptor = {
   description: 'Assign one flight to one trip.',
   route: 'trip-assign-flight',
   kind: 'write',
-  register(server, flightManager) {
+  register(server, flightManager, onChanged) {
     server.registerTool(
       'assign_flight_to_trip',
       {
@@ -105,6 +107,7 @@ const assignFlightToTripTool: McpToolDescriptor = {
         // the web route performs — a no-op unless this is the flight
         // currently in progress.
         flightManager.refreshPlannedLegForFlight(flight_id);
+        onChanged();
         return toolText({ ok: true, flight_id, trip_id, trip_name: trip.name });
       }),
     );
@@ -119,7 +122,7 @@ const importSimbriefLeg: McpToolDescriptor = {
   description: 'Import the operator\'s current SimBrief OFP as a loose planned leg, not attached to any trip.',
   route: 'planned-leg-simbrief-import',
   kind: 'write',
-  register(server) {
+  register(server, _flightManager, onChanged) {
     server.registerTool(
       'import_simbrief_leg',
       {
@@ -132,6 +135,7 @@ const importSimbriefLeg: McpToolDescriptor = {
       runTool('import_simbrief_leg', async ({ allow_duplicates }) => {
         const outcome = await importSimbriefLooseLeg({ allowDuplicates: allow_duplicates ?? false });
         if (outcome.kind === 'error') return toolError(outcome.body.error);
+        onChanged();
         return toolText(outcome.body.result);
       }),
     );

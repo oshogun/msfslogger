@@ -22,7 +22,7 @@ const MAX_PARKING_POSITION_LENGTH = 120;
  * the manager talks to the database directly here, on its own connection,
  * and has no other way to find out.
  */
-export function createGroundSessionsRouter(flightManager: FlightManager): Router {
+export function createGroundSessionsRouter(flightManager: FlightManager, onChanged: () => void = () => {}): Router {
   const router = express.Router();
 
   router.post('/ground-sessions', (req, res) => {
@@ -95,6 +95,7 @@ export function createGroundSessionsRouter(flightManager: FlightManager): Router
         aircraft: flightManager.appState.lastFrame?.aircraft ?? null,
       });
       flightManager.refreshGroundSession();
+      onChanged();
       res.status(created ? 201 : 200).json(session);
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -118,6 +119,7 @@ export function createGroundSessionsRouter(flightManager: FlightManager): Router
         return;
       }
       flightManager.refreshGroundSession();
+      onChanged();
       res.json(closed);
     } catch (err) {
       res.status(500).json({ error: String(err) });

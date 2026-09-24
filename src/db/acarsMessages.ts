@@ -1,4 +1,5 @@
 import type { AcarsMessage, CreateAcarsMessage } from '../types';
+import type { AcarsHint } from '../eventHub';
 import { getDb } from './connection';
 
 // ── ACARS messages ────────────────────────────────────────────────────────────
@@ -16,6 +17,24 @@ const COLUMNS = `
   id, flight_id, planned_leg_id, direction, category, label, body,
   payload_json, correlation_id, dedup_key, sent_at, read_at
 `;
+
+// Notified once per newly created row — never for a dedup hit, never for a
+// read_at update or a delete. This is the one choke point every writer routes
+// through, so this is the only file that needs to know about the event at all.
+let acarsInsertListener: ((hint: AcarsHint) => void) | null = null;
+
+export function setAcarsInsertListener(listener: ((hint: AcarsHint) => void) | null): void {
+  acarsInsertListener = listener;
+}
+
+function notifyAcarsInsert(row: AcarsMessage): void {
+  if (!acarsInsertListener) return;
+  try {
+    acarsInsertListener({ flightId: row.flight_id, plannedLegId: row.planned_leg_id, messageId: row.id });
+  } catch (err) {
+    console.warn('[db/acarsMessages] insert listener failed:', err);
+  }
+}
 
 /**
  * Inserts one message and returns the stored row.
@@ -35,7 +54,7 @@ export function insertAcarsMessage(msg: CreateAcarsMessage): AcarsMessage {
 
   const sentAt = msg.sent_at ?? new Date().toISOString();
 
-  return getDb().transaction((): AcarsMessage => {
+  const row = getDb().transaction((): AcarsMessage => {
     const result = getDb().prepare(`
       INSERT INTO acars_messages
         (flight_id, planned_leg_id, direction, category, label, body,
@@ -46,10 +65,13 @@ export function insertAcarsMessage(msg: CreateAcarsMessage): AcarsMessage {
       msg.payload_json ?? null, msg.correlation_id ?? null, msg.dedup_key ?? null, sentAt,
     );
 
-    const row = getAcarsMessageById(result.lastInsertRowid as number);
-    if (!row) throw new Error('ACARS message vanished immediately after insert');
-    return row;
+    const inserted = getAcarsMessageById(result.lastInsertRowid as number);
+    if (!inserted) throw new Error('ACARS message vanished immediately after insert');
+    return inserted;
   })();
+
+  notifyAcarsInsert(row);
+  return row;
 }
 
 /**
@@ -72,7 +94,7 @@ export function insertAcarsMessageOnce(
 
   const sentAt = msg.sent_at ?? new Date().toISOString();
 
-  return getDb().transaction((): { message: AcarsMessage; created: boolean } => {
+  const outcome = getDb().transaction((): { message: AcarsMessage; created: boolean } => {
     // The WHERE on the conflict target is not optional: the unique index is
     // partial, and SQLite requires the target's WHERE to match the index's.
     const result = getDb().prepare(`
@@ -90,6 +112,9 @@ export function insertAcarsMessageOnce(
     if (!message) throw new Error('ACARS message vanished immediately after insert');
     return { message, created: result.changes === 1 };
   })();
+
+  if (outcome.created) notifyAcarsInsert(outcome.message);
+  return outcome;
 }
 
 /** One row by id, or null. */

@@ -17,7 +17,13 @@ import { createGroundSessionsRouter } from '../src/routes/groundSessions';
 import { createSettingsRouter } from '../src/routes/settings';
 import { createPlannedLegsRouter } from '../src/routes/plannedLegs';
 import { createSayIntentionsRouter } from '../src/routes/sayIntentions';
+import { createEventsRouter } from '../src/routes/events';
+import { EventHub } from '../src/eventHub';
 import type { FlightManager } from '../src/flightManager';
+
+// A stub good enough to construct the router with — this file never opens a
+// stream, only walks the router's own route table.
+const stubSnapshot = { status: () => ({}), flightState: () => ({ flightState: 'IDLE' as const, currentFlightId: null, plannedLegId: null }) };
 
 const TOKEN = 'ingest-scope-test-token';
 
@@ -96,11 +102,12 @@ const NUMERIC_ID_PATHS: Array<[string, string]> = [
   ['POST', '/api/planned-legs/42/acars-messages/loadsheet'],
   ['POST', '/api/planned-legs/42/acars-messages/clearance'],
   ['GET', '/api/ground-sessions/current'],
+  ['GET', '/api/events'],
 ];
 
 describe('isIngestScopedRoute', () => {
-  it('has exactly nineteen entries, one per scoped route', () => {
-    expect(INGEST_SCOPED_ROUTES).toHaveLength(19);
+  it('has exactly twenty entries, one per scoped route', () => {
+    expect(INGEST_SCOPED_ROUTES).toHaveLength(20);
   });
 
   it.each(NUMERIC_ID_PATHS)('matches %s %s with a numeric id', (method, path) => {
@@ -400,6 +407,7 @@ describe('the allowlist against the real route tables', () => {
     createPlannedLegsRouter({} as unknown as FlightManager),
   );
   const sayIntentionsRoutes = routesOf(createSayIntentionsRouter());
+  const eventsRoutes = routesOf(createEventsRouter(new EventHub(), stubSnapshot));
   const allRoutes = [
     { method: 'GET', path: '/api/status' }, // not from a router; asserted by name
     ...acarsRoutes,
@@ -407,6 +415,7 @@ describe('the allowlist against the real route tables', () => {
     ...settingsRoutes,
     ...plannedLegsRoutes,
     ...sayIntentionsRoutes,
+    ...eventsRoutes,
   ];
 
   // Every route this run's design put on the list.
@@ -430,6 +439,7 @@ describe('the allowlist against the real route tables', () => {
     'DELETE /api/flights/:id/sayintentions/link',
     'POST /api/flights/:id/sayintentions/import',
     'POST /api/planned-legs/:legId/sayintentions/clearance',
+    'GET /api/events',
   ]);
 
   it.each(allRoutes.map(r => [`${r.method} ${r.path}`, r] as const))(

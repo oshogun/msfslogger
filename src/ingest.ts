@@ -122,6 +122,7 @@ export function createIngestRouter(
   flightManager: FlightManager,
   trafficStore: TrafficStore,
   ingestConfig: IngestConfig,
+  onStatusChanged: () => void = () => {},
 ): Router {
   const router = express.Router();
 
@@ -183,11 +184,16 @@ export function createIngestRouter(
   };
 
   // The agent only sends an explicit "disconnected" event when it shuts down cleanly.
-  // If it dies or the network drops, this catches the silence instead.
+  // If it dies or the network drops, this catches the silence instead. This is
+  // the one status change with no HTTP response of its own to piggyback on, so
+  // it calls onStatusChanged() itself — markDisconnected() does not, precisely
+  // so the /event 'disconnected' case (whose common post-switch call already
+  // covers it) doesn't fire it twice.
   setInterval(() => {
     if (flightManager.appState.connected && Date.now() - lastFrameAt > STALE_TIMEOUT_MS) {
       console.log('[Ingest] No data received recently — marking disconnected');
       markDisconnected();
+      onStatusChanged();
     }
   }, STALE_CHECK_INTERVAL_MS);
 
@@ -199,6 +205,7 @@ export function createIngestRouter(
     }
     markConnected();
     flightManager.onFrame(req.body);
+    onStatusChanged();
     res.status(204).end();
   });
 
@@ -238,6 +245,7 @@ export function createIngestRouter(
         res.status(400).json({ error: `Unknown event type: ${String(type)}` });
         return;
     }
+    onStatusChanged();
     res.status(204).end();
   });
 

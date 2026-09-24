@@ -32,6 +32,7 @@ export const INGEST_SCOPED_ROUTES: readonly { method: 'GET' | 'POST' | 'DELETE';
   { method: 'DELETE', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/link$/, name: 'flight-sayintentions-unlink' },
   { method: 'POST', pattern: /^\/api\/flights\/[^/]+\/sayintentions\/import$/, name: 'flight-sayintentions-import' },
   { method: 'POST', pattern: /^\/api\/planned-legs\/[^/]+\/sayintentions\/clearance$/, name: 'planned-leg-sayintentions-push' },
+  { method: 'GET', pattern: /^\/api\/events$/, name: 'events' },
 ];
 
 export function isIngestScopedRoute(method: string, path: string): boolean {

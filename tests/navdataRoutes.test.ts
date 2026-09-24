@@ -9,8 +9,9 @@ import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNavdataSyncRouter } from '../src/routes/navdataSync';
+import { createNavdataRouter } from '../src/routes/navdata';
 import { snapshotUploadDir } from '../src/routes/uploads';
 import { SidecarStateStore } from '../src/navdata/sidecarState';
 import { closeNavDb, getNavDb, openNavdata, resolveNavdataPath } from '../src/navdata/connection';
@@ -333,5 +334,150 @@ describe('busy', () => {
       expect(statuses).toEqual([200, 200]);
     }
     expect(resolveNavdataPath()).toBe(path.join(dir, 'navdata.db'));
+  });
+});
+
+describe('onDemandChanged — sync router', () => {
+  let demandServer: Server;
+  let demandBase: string;
+  let onDemandChanged: ReturnType<typeof vi.fn<() => void>>;
+
+  beforeEach(async () => {
+    onDemandChanged = vi.fn<() => void>();
+    const app = express();
+    app.use('/api/navdata/rows', express.json({ limit: '4mb' }));
+    app.use(express.json({ limit: '100kb' }));
+    app.use('/api/navdata', createNavdataSyncRouter({ token: TOKEN, allowUnauthenticated: false }, state, Date.now, onDemandChanged));
+    await new Promise<void>(resolve => { demandServer = app.listen(0, '127.0.0.1', resolve); });
+    demandBase = `http://127.0.0.1:${(demandServer.address() as { port: number }).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>(resolve => demandServer.close(() => resolve()));
+  });
+
+  const demandPostJson = (p: string, body: unknown) =>
+    fetch(`${demandBase}${p}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ingest-token': TOKEN },
+      body: JSON.stringify(body),
+    });
+
+  it('POST /snapshot calls onDemandChanged once on a successful import', async () => {
+    const form = new FormData();
+    form.append('navdataSnapshot', new Blob([fs.readFileSync(snapshotFile('d1'))], { type: 'application/gzip' }), 'd1.gz');
+
+    const res = await fetch(`${demandBase}/api/navdata/snapshot`, {
+      method: 'POST', body: form, headers: { 'x-ingest-token': TOKEN },
+    });
+
+    expect(res.status).toBe(200);
+    expect(onDemandChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /snapshot does not call onDemandChanged on a refused upload', async () => {
+    const bad = await fetch(`${demandBase}/api/navdata/snapshot`, {
+      method: 'POST', headers: { 'x-ingest-token': TOKEN }, body: new FormData(),
+    });
+    expect(bad.status).toBe(400);
+    expect(onDemandChanged).not.toHaveBeenCalled();
+  });
+
+  it('POST /rows calls onDemandChanged once on a successful batch, zero on a refused one', async () => {
+    const form = new FormData();
+    form.append('navdataSnapshot', new Blob([fs.readFileSync(snapshotFile('d2'))], { type: 'application/gzip' }), 'd2.gz');
+    await fetch(`${demandBase}/api/navdata/snapshot`, { method: 'POST', body: form, headers: { 'x-ingest-token': TOKEN } });
+    onDemandChanged.mockClear();
+
+    const refused = await demandPostJson('/api/navdata/rows', {
+      v: 1, schemaVersion: 2, snapshotId: 'other', fromRev: 5, toRev: 6, rows: [], more: false,
+    });
+    expect(refused.status).toBe(409);
+    expect(onDemandChanged).not.toHaveBeenCalled();
+
+    const ok = await demandPostJson('/api/navdata/rows', {
+      v: 1, schemaVersion: 2, snapshotId: 'd2', fromRev: 5, toRev: 6,
+      rows: [{ t: 'airport', r: { ident: 'ZZDD', name: 'Zulu Demand', lat: 1, lon: 2, position_source: 'list', rev: 6 } }],
+      more: false,
+    });
+    expect(ok.status).toBe(200);
+    expect(onDemandChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('GET /demand never calls onDemandChanged', async () => {
+    const res = await fetch(`${demandBase}/api/navdata/demand`, { headers: { 'x-ingest-token': TOKEN } });
+    expect(res.status).toBe(200);
+    expect(onDemandChanged).not.toHaveBeenCalled();
+  });
+
+  it('POST /state never calls onDemandChanged', async () => {
+    const res = await demandPostJson('/api/navdata/state', {
+      v: 1, state: 'nav.ready', reason: null, snapshotId: 's1', rev: 3, sentAt: 1,
+    });
+    expect(res.status).toBe(204);
+    expect(onDemandChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('onDemandChanged — POST /navdata/request', () => {
+  let reqServer: Server;
+  let reqBase: string;
+  let onDemandChanged: ReturnType<typeof vi.fn<() => void>>;
+
+  beforeEach(async () => {
+    onDemandChanged = vi.fn<() => void>();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createNavdataRouter(state, onDemandChanged));
+    await new Promise<void>(resolve => { reqServer = app.listen(0, '127.0.0.1', resolve); });
+    reqBase = `http://127.0.0.1:${(reqServer.address() as { port: number }).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>(resolve => reqServer.close(() => resolve()));
+  });
+
+  const request = (body: unknown) =>
+    fetch(`${reqBase}/api/navdata/request`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+  it('calls onDemandChanged once when the request is freshly queued', async () => {
+    const res = await request({ kind: 'A', ident: 'ZZNEW' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, state: 'queued', ident: 'ZZNEW' });
+    expect(onDemandChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onDemandChanged on a 400 (bad kind)', async () => {
+    const res = await request({ kind: 'X', ident: 'ZZNEW' });
+    expect(res.status).toBe(400);
+    expect(onDemandChanged).not.toHaveBeenCalled();
+  });
+
+  it('does not call onDemandChanged for a known-absent ident', async () => {
+    // submitRequest only consults nav_absent/nav_airport when getNavDb() is
+    // non-null, which requires a replica file to exist on disk — so a
+    // snapshot has to land first, same as the already-present case below.
+    await postSnapshot(snapshotFile('req-absent'));
+    getNavDb()!.prepare(
+      `INSERT INTO nav_absent (kind, ident, region, reason, first_seen_at, last_checked_at, attempts, rev)
+       VALUES ('A', 'ZZNOPE', '', 'silent', ?, ?, 1, 1)`,
+    ).run(Date.now(), Date.now());
+
+    const res = await request({ kind: 'A', ident: 'ZZNOPE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ state: 'known-absent' });
+    expect(onDemandChanged).not.toHaveBeenCalled();
+  });
+
+  it('does not call onDemandChanged for an already-present airport', async () => {
+    await postSnapshot(snapshotFile('req1'));
+    getNavDb()!.prepare("UPDATE nav_airport SET detail_state = 'detail' WHERE ident = 'ZZAA'").run();
+
+    const res = await request({ kind: 'A', ident: 'ZZAA' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ state: 'already-present' });
+    expect(onDemandChanged).not.toHaveBeenCalled();
   });
 });

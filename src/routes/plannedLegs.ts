@@ -63,7 +63,7 @@ const SIMBRIEF_FAILURE_STATUS: Record<SimbriefErrorCode, number> = {
  * flightManager is a parameter for the same reason as in ./flights: one
  * instance per process, handed in rather than reached for.
  */
-export function createPlannedLegsRouter(flightManager: FlightManager): Router {
+export function createPlannedLegsRouter(flightManager: FlightManager, onChanged: () => void = () => {}): Router {
   const router = express.Router();
 
   router.post('/trips/:id/planned-legs', uploadLnmpln.array('lnmpln', MAX_LNMPLN_FILES), (req, res) => {
@@ -185,6 +185,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
       return;
     }
     const batch = { ordering: (order.resolved ? 'chain' : 'upload') as 'chain' | 'upload', reason: order.reason };
+    onChanged();
     res.status(201).json({ imported, batch, results });
   });
 
@@ -289,6 +290,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
       return;
     }
     const batch = { ordering: (order.resolved ? 'chain' : 'upload') as 'chain' | 'upload', reason: order.reason };
+    onChanged();
     res.status(201).json({ imported, batch, results });
   });
 
@@ -369,6 +371,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
       if (existing) {
         // 200, not 4xx: nothing failed and nothing changed.
         console.log(`[SIMBRIEF] import duplicate: trip ${tripId} leg ${existing.id} ${plan.departure.ident}->${plan.destination.ident} ofp ${ofpId}`);
+        onChanged();
         res.json({
           imported: [],
           result: {
@@ -413,6 +416,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
         console.error(`[SIMBRIEF] dispatch release not filed: leg ${legId} ofp ${ofpId} (${String(err)})`);
       }
 
+      onChanged();
       res.status(201).json({
         imported: [getPlannedLegById(legId)!],
         result: { status: 'imported', planned_leg_id: legId, label, warnings: plan.warnings },
@@ -431,6 +435,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
   router.post('/planned-legs/simbrief', async (req, res) => {
     const allowDuplicates = (req.body as Record<string, unknown> | undefined)?.allow_duplicates === true;
     const outcome = await importSimbriefLooseLeg({ allowDuplicates });
+    if (outcome.kind !== 'error') onChanged();
     res.status(outcome.status).json(outcome.body);
   });
 
@@ -477,6 +482,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
     }
 
     reorderPlannedLegs(tripId, legIds as number[]);
+    onChanged();
     res.json(getPlannedLegsForTrip(tripId));
   });
 
@@ -501,6 +507,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
         console.warn('[Routes] leg cache refresh after delete failed:', err);
       }
     }
+    onChanged();
     res.json({ deleted: true });
   });
 
@@ -520,6 +527,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
 
     try {
       setPlannedLegStatus(legId, status);
+      onChanged();
       res.json(getPlannedLegById(legId));
     } catch (err) {
       if (err instanceof PlannedLegHasLinkedFlightError) {
@@ -561,6 +569,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
       // cache would otherwise keep whatever autoLinkPlannedLeg last set for
       // this flight. A no-op unless `id` is the flight in progress.
       flightManager.refreshPlannedLegForFlight(id);
+      onChanged();
       res.json(getFlightById(id));
     } catch (err) {
       if (err instanceof PlannedLegAlreadyLinkedError) {
@@ -628,6 +637,7 @@ export function createPlannedLegsRouter(flightManager: FlightManager): Router {
           : `[PlannedLeg] Flight #${id} hand-reopened — leg #${decision.legId} back to planned`
       );
 
+      onChanged();
       res.json(saved);
     } catch (err) {
       if (err instanceof PlannedLegHandCloseConflictError) {

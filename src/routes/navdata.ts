@@ -38,7 +38,7 @@ function parseKinds(raw: unknown): FeatureKind[] | null {
  * (and requireSameOrigin, which already covers the one POST); none of these
  * accept the ingest token. A missing replica is an empty answer, not an error.
  */
-export function createNavdataRouter(sidecarState: SidecarStateStore): express.Router {
+export function createNavdataRouter(sidecarState: SidecarStateStore, onDemandChanged: () => void = () => {}): express.Router {
   const router = express.Router();
 
   router.get('/navdata/features', (req, res) => {
@@ -106,7 +106,9 @@ export function createNavdataRouter(sidecarState: SidecarStateStore): express.Ro
       return;
     }
     guarded(res, 'Navdata request', () => {
-      res.json(submitRequest(getNavDb(), parsed));
+      const result = submitRequest(getNavDb(), parsed);
+      if (result.state === 'queued') onDemandChanged();
+      res.json(result);
     });
   });
 
