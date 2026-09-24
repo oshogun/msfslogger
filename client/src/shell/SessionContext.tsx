@@ -1,56 +1,78 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-
-const STORAGE_KEY = 'carbonproto.session';
-const LOGIN_DELAY_MS = 300;
-const PROTOTYPE_PASSWORD = 'sabia';
+import { apiFetch } from '../utils/api';
+import type { LoginRequest, LoginResponse, SessionResponse, SessionUser } from '../types';
 
 export type SessionState =
   | { status: 'loading'; user: null }
   | { status: 'anonymous'; user: null }
-  | { status: 'authenticated'; user: { username: string } };
+  | { status: 'authenticated'; user: SessionUser };
 
 export type SessionValue = SessionState & {
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /**
+   * Marks the session anonymous without a network round trip. For a
+   * mid-session 401 on some other call: the server already dropped us, so
+   * there is nothing to ask it — this just makes the client's own state
+   * agree, which is what lets RequireAuth's existing anonymous branch redirect.
+   */
+  expire: () => void;
 };
 
 const SessionContext = createContext<SessionValue | null>(null);
 
-function readStored(): { username: string } | null {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { username?: unknown };
-    return typeof parsed.username === 'string' ? { username: parsed.username } : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Fake session backed by localStorage; no cookie, no network. */
+/**
+ * Mounted once at the top of App so RequireAuth and the header's logout
+ * control see the same value. Calls GET /api/auth/session once on mount;
+ * login/logout update the same in-memory state rather than triggering a
+ * second round trip.
+ */
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'loading', user: null });
 
   useEffect(() => {
-    const user = readStored();
-    setState(user ? { status: 'authenticated', user } : { status: 'anonymous', user: null });
+    let cancelled = false;
+    apiFetch<SessionResponse>('/api/auth/session')
+      .then(res => {
+        if (cancelled) return;
+        setState(res.authenticated ? { status: 'authenticated', user: res.user } : { status: 'anonymous', user: null });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setState({ status: 'anonymous', user: null });
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    await new Promise(resolve => setTimeout(resolve, LOGIN_DELAY_MS));
-    if (password !== PROTOTYPE_PASSWORD) throw new Error('Invalid username or password');
-    const user = { username: username.trim() || 'operator' };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-    setState({ status: 'authenticated', user });
+    const body: LoginRequest = { username, password };
+    const res = await apiFetch<LoginResponse>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    setState({ status: 'authenticated', user: res.user });
   }, []);
 
   const logout = useCallback(async () => {
-    window.localStorage.removeItem(STORAGE_KEY);
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // logout is idempotent server-side; the client clears its own state
+      // regardless of how the request landed.
+    }
     setState({ status: 'anonymous', user: null });
   }, []);
 
-  const value = useMemo<SessionValue>(() => ({ ...state, login, logout }), [state, login, logout]);
+  const expire = useCallback(() => {
+    setState({ status: 'anonymous', user: null });
+  }, []);
+
+  const value = useMemo<SessionValue>(
+    () => ({ ...state, login, logout, expire }),
+    [state, login, logout, expire],
+  );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

@@ -21,6 +21,18 @@ export function setUnauthorizedHandler(fn: (() => void) | null): void {
   unauthorizedHandler = fn;
 }
 
+/**
+ * For the rare call site that cannot use apiFetch — a partial-failure batch
+ * carries a body worth rendering on a non-2xx status, which apiFetch
+ * discards — but still answers 401 on session expiry like every other
+ * endpoint. Calling this on that 401 gives it the same "bounce to /login"
+ * behaviour apiFetch gives everything else, before throwing.
+ */
+export function reportUnauthorized(message?: string): UnauthorizedError {
+  unauthorizedHandler?.();
+  return new UnauthorizedError(message);
+}
+
 export async function apiFetch<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {

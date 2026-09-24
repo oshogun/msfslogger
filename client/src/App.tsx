@@ -14,7 +14,6 @@ import { Device } from './pages/Device';
 import { Override } from './pages/Override';
 import { Login } from './pages/Login';
 import { Settings } from './pages/Settings';
-import { DevGallery } from './pages/DevGallery';
 
 function ShellRoutes() {
   const session = useSession();
@@ -46,7 +45,6 @@ function ShellRoutes() {
         <Route path="/device" element={<Device />} />
         <Route path="/override" element={<Override />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/dev/gallery" element={<DevGallery />} />
       </Routes>
     </AppShell>
   );
