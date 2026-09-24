@@ -80,7 +80,7 @@ Same shape regardless of tier — scale the depth to the change's size.
 ```bash
 # All CI work happens in a fresh clone of main, never in the live checkout
 # (.claude/agents.md § Rules): edit the workflow and verify it there.
-RUN_DIR=$(mktemp -d /tmp/msfslogger-run-<run-id>-XXXX)
+RUN_DIR=/home/guilherme/msfslogger/.claude/run-clones/<run-id>   # never /tmp — see ENVIRONMENT.md § Scratch space
 git clone --local --branch main /home/guilherme/msfslogger "$RUN_DIR/tree"
 cd "$RUN_DIR/tree" && git switch -c run/<run-id>
 

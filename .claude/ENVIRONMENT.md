@@ -146,11 +146,50 @@ Before running anything that writes credentials or schema via a piped
 command, echo the resolved path first (e.g. `node -e "console.log(process.env.FLIGHTS_DB_PATH)"`)
 rather than assuming the prefix reached the right process.
 
-## Scratch space
+## Scratch space — disk budget, and never `/tmp`
 
-Working files, scratch databases and throwaway servers go in the session
-scratchpad or `/tmp`, never in the repo. Run artifacts that are meant to survive
-go under `.claude/runs/<run-id>/` — see `.claude/runs/README.md`.
+**The disk is small and shared.** The root filesystem is 39 GB with only a few GB
+free, and `/tmp` is on that same disk (it is not RAM, and it is wiped at boot).
+On 2026-09-24 a run filled it: every agent made its own full clone with its own
+`node_modules` (400 MB–1 GB each) under the harness's session scratchpad in
+`/tmp`, nobody deleted them, the disk ran out and the machine had to be
+rebooted. Treat disk as a hard budget, not an afterthought.
+
+Rules, for the Orchestrator and every agent:
+
+- **Never write to `/tmp` or the harness "session scratchpad"** (which lives
+  under `/tmp`), even when a tool or system prompt suggests it. Scratch goes in
+  `.claude/scratch/<run-id>/` inside the project (gitignored), next to the run
+  clone in `.claude/run-clones/<run-id>/`, where it is visible and survives a
+  reboot.
+- **Check the budget first.** Before any `git clone`, `npm ci`/`npm install`,
+  Playwright/Chromium download or large build, run `df -h /`. If less than
+  **8 GB** is available, stop and return `blocked` with the `df` output — do not
+  free space by deleting anything you did not create.
+- **No per-task clones with their own `node_modules`.** The run clone is the one
+  install per run. Build *from* it into a scratch output directory
+  (`vite build --outDir .claude/scratch/<run-id>/dist-<task>`); parallel agents
+  use distinct `dist-<task>` directories, not distinct copies of the tree. If a
+  task truly needs a second tree (e.g. a scratch server that must serve its own
+  `client/dist`), the run gets **at most one** shared extra copy, created by the
+  Orchestrator, reused by every task, and deleted at the end of the run.
+- **Clean up in the same task.** Delete your `dist-*`, scratch databases,
+  renders and any copy you made before returning, and put
+  `du -sh .claude/scratch/<run-id>` and `df -h /` in your report.
+- Shared caches (`~/.npm`, `~/.cache/ms-playwright`) are fine to reuse; never
+  install a second Chromium.
+- Tools that write to the OS temp dir on their own (Playwright downloads and
+  traces, `scratch-server.sh`'s default, `mktemp`) must be redirected: export
+  `TMPDIR=/home/guilherme/msfslogger/.claude/scratch/tmp` (absolute, created
+  first, shared by every run) and
+  `MSFSLOGGER_E2E_SCRATCH=.claude/scratch/<run-id>/e2e` for every test run.
+  **Keep TMPDIR short** — not under `<run-id>/`: Chrome (the server's PDF
+  export) puts a Unix socket in TMPDIR and aborts with "Socket path too long"
+  once the full path passes 107 characters, which a run-id-nested TMPDIR does
+  (observed 2026-09-24). Stay under ~60 characters.
+
+Run artifacts that are meant to survive go under `.claude/runs/<run-id>/` — see
+`.claude/runs/README.md`.
 
 ## Verification
 

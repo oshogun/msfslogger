@@ -208,6 +208,13 @@ For tier-3 work only — see Cost discipline rule 6.
   delete carelessly, but it does keep it out of blast radius from cleanup
   aimed at generic temp directories.
 
+  - **The run clone is the only install per run, and nothing goes in `/tmp`.**
+    Per-agent copies of the tree with their own `node_modules` under the
+    `/tmp` session scratchpad filled the (small, shared) root disk and crashed
+    the machine on 2026-09-24. Scratch output (builds via `--outDir`, scratch
+    DBs, renders) goes in `.claude/scratch/<run-id>/`; agents check `df -h /`
+    (≥ 8 GB free) before any clone/install and clean up per task. Details:
+    `.claude/ENVIRONMENT.md` § Scratch space. Every envelope repeats this.
   - The clone is of **committed `main`** — uncommitted or untracked files in
     the live checkout (`.claude/runs/**`, `start.sh`, `flights.db`,
     `node_modules`) are deliberately absent. Install dependencies inside the

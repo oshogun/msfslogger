@@ -24,3 +24,4 @@ navdata.db*
 # Kept inside the project (not /tmp) so a disk-cleanup pass elsewhere on the
 # machine can't delete uncommitted or unfetched run work out from under it.
 .claude/run-clones/
+.claude/scratch/

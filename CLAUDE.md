@@ -123,6 +123,12 @@ bigger model.
   `.claude/agents.md` § Rules. Run artifacts under `.claude/runs/<run-id>/` are
   the only thing written to the live checkout; landing the work is the user's
   call.
+- **Never use `/tmp` or the harness session scratchpad, and budget disk.** The
+  root disk is small and `/tmp` sits on it; per-agent clones with their own
+  `node_modules` filled it and crashed the machine on 2026-09-24. Scratch lives
+  in `.claude/scratch/<run-id>/`, one install per run (the run clone), `df -h /`
+  checked before any clone/install, everything cleaned up per task. Rules in
+  `.claude/ENVIRONMENT.md` § Scratch space — repeat them in every envelope.
 - **Never touch the user's running server or live `flights.db`.** It serves
   their real logbook on port 3000. Scratch copies, other ports.
 - **You never merge unreviewed work**, and you do not review your own — the
