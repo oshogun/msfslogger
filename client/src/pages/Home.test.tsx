@@ -1,27 +1,31 @@
-import { describe, it, expect } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, renderHook, screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { mockFetchRoutes, deferred } from '../test/mockFetch';
 import type { ResponseTuple } from '../test/mockFetch';
 import { flightFixture } from '../test/fixtures';
+import { MockEventSource } from '../test/mockEventSource';
+import { LiveEventsProvider, useLiveEvent, LIVE_HANDLER_DEBOUNCE_MS } from '../shell/LiveEventsProvider';
 import { Home } from './Home';
 
 const SESSION_ROUTE: ResponseTuple = [200, { authenticated: true, user: { username: 'e2e' } }];
-const IDLE_STATUS: ResponseTuple = [200, {
-  connected: true, flightState: 'IDLE', currentFlightId: null, aircraft: null, frame: null, paused: false, pauseFlags: 0,
-}];
+const BASE_ROUTES: Record<string, ResponseTuple> = {
+  '/api/auth/session': SESSION_ROUTE,
+  '/api/flights': [200, [flightFixture]],
+  '/api/trips': [200, []],
+  '/api/ground-sessions/current': [200, { session: null }],
+  '/api/planned-legs': [200, []],
+};
+
+function fetchCallCount(): number {
+  return (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+}
 
 describe('Home', () => {
   it('shows a loading state before the flights request resolves, then the real stats', async () => {
     const flights = deferred<ResponseTuple>();
-    mockFetchRoutes({
-      '/api/auth/session': SESSION_ROUTE,
-      '/api/status': IDLE_STATUS,
-      '/api/flights': flights.handler,
-      '/api/trips': [200, []],
-      '/api/ground-sessions/current': [200, { session: null }],
-      '/api/planned-legs': [200, []],
-    });
+    mockFetchRoutes({ ...BASE_ROUTES, '/api/flights': flights.handler });
 
     renderWithProviders(<Home />);
 
@@ -37,14 +41,7 @@ describe('Home', () => {
   });
 
   it('renders the empty state once the flights request resolves with none', async () => {
-    mockFetchRoutes({
-      '/api/auth/session': SESSION_ROUTE,
-      '/api/status': IDLE_STATUS,
-      '/api/flights': [200, []],
-      '/api/trips': [200, []],
-      '/api/ground-sessions/current': [200, { session: null }],
-      '/api/planned-legs': [200, []],
-    });
+    mockFetchRoutes({ ...BASE_ROUTES, '/api/flights': [200, []] });
 
     renderWithProviders(<Home />);
 
@@ -53,17 +50,124 @@ describe('Home', () => {
   });
 
   it('renders the flights-fetch error inline instead of the flight list', async () => {
-    mockFetchRoutes({
-      '/api/auth/session': SESSION_ROUTE,
-      '/api/status': IDLE_STATUS,
-      '/api/flights': [500, { error: 'Database is locked' }],
-      '/api/trips': [200, []],
-      '/api/ground-sessions/current': [200, { session: null }],
-      '/api/planned-legs': [200, []],
-    });
+    mockFetchRoutes({ ...BASE_ROUTES, '/api/flights': [500, { error: 'Database is locked' }] });
 
     renderWithProviders(<Home />);
 
     await waitFor(() => expect(screen.getByText('Database is locked')).toBeInTheDocument());
+  });
+
+  describe('driven by the shared live event stream', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      MockEventSource.reset();
+      vi.stubGlobal('EventSource', MockEventSource);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('opens exactly one EventSource for a full render', async () => {
+      mockFetchRoutes(BASE_ROUTES);
+
+      renderWithProviders(<LiveEventsProvider><Home /></LiveEventsProvider>);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    it('refetches once for a flights-changed and a flight-state event from one write', async () => {
+      mockFetchRoutes(BASE_ROUTES);
+
+      renderWithProviders(<LiveEventsProvider><Home /></LiveEventsProvider>);
+      await act(() => vi.advanceTimersByTimeAsync(0));
+
+      const es = MockEventSource.latest();
+      // Drain the reconnect-refetch the initial open already queued, so the
+      // count below isolates the pair emitted next.
+      act(() => { es.open(); });
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+      const before = fetchCallCount();
+      act(() => {
+        es.emit('flights-changed', { flightId: 1 });
+        es.emit('flight-state', { flightState: 'GROUND', currentFlightId: 1, plannedLegId: null });
+      });
+
+      // Still inside the debounce window: no refetch yet.
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS - 1));
+      expect(fetchCallCount()).toBe(before);
+
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      // One Home refetch (listFlights + listTrips) plus GroundSection's own
+      // registration on the same pair of topics (getCurrentGroundSession) —
+      // three calls total, not six: each registration debounces on its own,
+      // but only once per burst.
+      expect(fetchCallCount() - before).toBe(3);
+    });
+  });
+
+  describe('useLiveEvent batching (via the shared provider)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      MockEventSource.reset();
+      vi.stubGlobal('EventSource', MockEventSource);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <LiveEventsProvider>{children}</LiveEventsProvider>
+    );
+
+    it('delivers a pure open as {reconnected: true, events: []}, then a burst as one call in arrival order', async () => {
+      const handler = vi.fn();
+      renderHook(() => useLiveEvent(['flights-changed', 'acars'], handler), { wrapper });
+      const es = MockEventSource.latest();
+
+      act(() => { es.open(); });
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenLastCalledWith({ reconnected: true, events: [] });
+
+      handler.mockClear();
+      act(() => {
+        es.emit('flights-changed', { a: 1 });
+        es.emit('acars', { b: 2 });
+      });
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenLastCalledWith({
+        reconnected: false,
+        events: [
+          { topic: 'flights-changed', data: { a: 1 } },
+          { topic: 'acars', data: { b: 2 } },
+        ],
+      });
+    });
+
+    it('reads the current handler from the ref at fire time', async () => {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { rerender } = renderHook(({ handler }) => useLiveEvent(['acars'], handler), {
+        initialProps: { handler: first },
+        wrapper,
+      });
+      const es = MockEventSource.latest();
+      act(() => { es.open(); });
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+      first.mockClear();
+
+      act(() => { es.emit('acars', { messageId: 1 }); });
+      rerender({ handler: second });
+      await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+    });
   });
 });

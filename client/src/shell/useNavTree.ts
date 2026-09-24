@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { listFlights, listTrips, subscribeMutations } from '../api';
+import { useLiveEvent } from './LiveEventsProvider';
 import type { AppShellProps } from './AppShell';
 
 type NavTrips = AppShellProps['trips'];
@@ -14,8 +15,6 @@ const route = (dep: string | null, arr: string | null) => `${dep ?? '???'} → $
 
 /** How long a burst of writes is allowed to pile up before the tree is fetched again. */
 const MUTATION_DEBOUNCE_MS = 150;
-/** Live Sidebar's polling interval (components/Sidebar.tsx). */
-const REFRESH_INTERVAL_MS = 30000;
 
 /**
  * `trips` and `loose` are independent: trips carries its own flights embedded
@@ -47,11 +46,11 @@ async function fetchTree(): Promise<PartialTree | null> {
 /**
  * SideNav tree from GET /api/trips + GET /api/flights, refetched on mount,
  * on every write (subscribeMutations, debounced), on a route change, on a
- * 30 s interval and when the tab becomes visible again. An empty tree if the
- * very first fetch fails; any later failed refetch — of either half
- * independently — keeps whichever half was already shown. The tree is only
- * replaced when its content actually changed, so an open SideNavMenu keeps
- * its key and does not remount.
+ * flights-changed/flight-state stream event and when the tab becomes visible
+ * again. An empty tree if the very first fetch fails; any later failed
+ * refetch — of either half independently — keeps whichever half was already
+ * shown. The tree is only replaced when its content actually changed, so an
+ * open SideNavMenu keeps its key and does not remount.
  */
 export function useNavTree(): NavTree {
   const [tree, setTree] = useState<NavTree>({ trips: [], loose: [] });
@@ -82,16 +81,16 @@ export function useNavTree(): NavTree {
       clearTimeout(timer);
       timer = setTimeout(load, MUTATION_DEBOUNCE_MS);
     });
-    const interval = setInterval(load, REFRESH_INTERVAL_MS);
     const onVisible = () => { if (!document.hidden) load(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearTimeout(timer);
-      clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
       unsubscribe();
     };
   }, [load]);
+
+  useLiveEvent(['flights-changed', 'flight-state'], load);
 
   return tree;
 }

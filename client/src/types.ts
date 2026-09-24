@@ -382,6 +382,36 @@ export interface Status {
   traffic?: TrafficObject[];
 }
 
+// ── Live event stream (GET /api/events) ─────────────────────────────────────
+
+export type LiveTopic = 'status' | 'flight-state' | 'acars' | 'flights-changed' | 'navdata-demand';
+
+/** Mirrors the flight-state SSE payload; same fields status carries, on their own. */
+export interface FlightStateEvent {
+  flightState: string;
+  currentFlightId: number | null;
+  plannedLegId: number | null;
+}
+
+/** A hint that new ACARS rows exist; the payload never carries the message bodies themselves. */
+export interface AcarsHint {
+  flightId: number | null;
+  plannedLegId: number | null;
+  messageId: number;
+}
+
+/** One decoded server-sent message, as delivered to a useLiveEvent handler. */
+export interface LiveEvent {
+  topic: LiveTopic;
+  data: unknown;
+}
+
+/** Everything a registered handler is given when its debounce window fires. */
+export interface LiveBatch {
+  reconnected: boolean;
+  events: ReadonlyArray<LiveEvent>;
+}
+
 // ── Ground sessions ─────────────────────────────────────────────────────────
 
 export type GroundSessionSource = 'auto' | 'manual';

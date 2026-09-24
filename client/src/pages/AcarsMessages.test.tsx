@@ -1,15 +1,19 @@
-import { describe, it, expect } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { mockFetchRoutes } from '../test/mockFetch';
-import type { ResponseTuple } from '../test/mockFetch';
+import type { ResponseTuple, RouteMap } from '../test/mockFetch';
+import { plannedLegFixture } from '../test/fixtures';
+import { MockEventSource } from '../test/mockEventSource';
+import { LiveEventsProvider, LIVE_HANDLER_DEBOUNCE_MS } from '../shell/LiveEventsProvider';
 import type { AcarsMessage, AcarsThread } from '../types';
 import { AcarsMessages } from './AcarsMessages';
 
 const SESSION_ROUTE: ResponseTuple = [200, { authenticated: true, user: { username: 'e2e' } }];
 const CANNED_ROUTE: ResponseTuple = [200, { messages: [] }];
 const ROUTE_OPTS = { path: '/flight/:id/acars', route: '/flight/1/acars' };
+const PLANNED_LEG_ROUTE_OPTS = { path: '/planned-leg/:legId/acars', route: '/planned-leg/1/acars' };
 
 const emptyThread: AcarsThread = { flight_id: 1, planned_leg_id: null, messages: [] };
 
@@ -412,5 +416,161 @@ describe('AcarsMessages - manual refresh', () => {
       ).toBeInTheDocument()
     );
     expect(acarsGetCallCount).toBe(2);
+  });
+});
+
+describe('AcarsMessages - live acars hint', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockEventSource.reset();
+    vi.stubGlobal('EventSource', MockEventSource);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function routesForOneOpenThread(acarsGetCallCount: { n: number }): RouteMap {
+    return {
+      '/api/auth/session': SESSION_ROUTE,
+      '/api/flights/1/acars-messages': (): ResponseTuple => {
+        acarsGetCallCount.n++;
+        return [200, emptyThread];
+      },
+      '/api/acars/canned-messages': CANNED_ROUTE,
+      '/api/flights/1/sayintentions/link': [200, noKeyStatus],
+      '/api/settings/sayintentions': [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }],
+    };
+  }
+
+  it('refreshes exactly once for a relevant hint (matching flightId)', async () => {
+    const acarsGetCallCount = { n: 0 };
+    mockFetchRoutes(routesForOneOpenThread(acarsGetCallCount));
+
+    renderWithProviders(<LiveEventsProvider><AcarsMessages /></LiveEventsProvider>, ROUTE_OPTS);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText('No messages yet')).toBeInTheDocument();
+
+    const es = MockEventSource.latest();
+    // Drain the reconnect-refetch the initial open already queues.
+    act(() => { es.open(); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+    const before = acarsGetCallCount.n;
+
+    act(() => { es.emit('acars', { flightId: 1, plannedLegId: null, messageId: 1 }); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+    expect(acarsGetCallCount.n - before).toBe(1);
+  });
+
+  it('does not refresh for an irrelevant hint (a different flight and no matching leg)', async () => {
+    const acarsGetCallCount = { n: 0 };
+    mockFetchRoutes(routesForOneOpenThread(acarsGetCallCount));
+
+    renderWithProviders(<LiveEventsProvider><AcarsMessages /></LiveEventsProvider>, ROUTE_OPTS);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText('No messages yet')).toBeInTheDocument();
+
+    const es = MockEventSource.latest();
+    act(() => { es.open(); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+    const before = acarsGetCallCount.n;
+
+    act(() => { es.emit('acars', { flightId: 2, plannedLegId: 99, messageId: 1 }); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+    expect(acarsGetCallCount.n).toBe(before);
+  });
+
+  it('refreshes for a hint naming the thread\'s linked leg, even from a different flight', async () => {
+    const acarsGetCallCount = { n: 0 };
+    mockFetchRoutes({
+      '/api/auth/session': SESSION_ROUTE,
+      '/api/flights/1/acars-messages': (): ResponseTuple => {
+        acarsGetCallCount.n++;
+        return [200, threadWithPdc]; // flight_id 1, linked to planned_leg_id 1
+      },
+      '/api/acars/canned-messages': CANNED_ROUTE,
+      '/api/flights/1/sayintentions/link': [200, noKeyStatus],
+      '/api/settings/sayintentions': [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }],
+    });
+
+    renderWithProviders(<LiveEventsProvider><AcarsMessages /></LiveEventsProvider>, ROUTE_OPTS);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    const es = MockEventSource.latest();
+    act(() => { es.open(); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+    const before = acarsGetCallCount.n;
+
+    // A different flight's hint, but plannedLegId names the leg this thread is linked to.
+    act(() => { es.emit('acars', { flightId: 999, plannedLegId: 1, messageId: 42 }); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+    expect(acarsGetCallCount.n - before).toBe(1);
+  });
+
+  it('refreshes for a hint naming the exact leg on a leg-scoped (pre-flight) thread', async () => {
+    const acarsGetCallCount = { n: 0 };
+    mockFetchRoutes({
+      '/api/auth/session': SESSION_ROUTE,
+      '/api/planned-legs/1/acars-messages': (): ResponseTuple => {
+        acarsGetCallCount.n++;
+        return [200, { planned_leg_id: 1, messages: [] }];
+      },
+      '/api/planned-legs/1': [200, plannedLegFixture],
+      '/api/acars/canned-messages': CANNED_ROUTE,
+    });
+
+    renderWithProviders(<LiveEventsProvider><AcarsMessages /></LiveEventsProvider>, PLANNED_LEG_ROUTE_OPTS);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    const es = MockEventSource.latest();
+    act(() => { es.open(); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+    const before = acarsGetCallCount.n;
+
+    act(() => { es.emit('acars', { flightId: null, plannedLegId: 1, messageId: 7 }); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+    expect(acarsGetCallCount.n - before).toBe(1);
+  });
+
+  it('does not clear a visible send error on an automatic refresh; only a manual refresh or a successful send may', async () => {
+    const acarsGetCallCount = { n: 0 };
+    mockFetchRoutes({
+      '/api/auth/session': SESSION_ROUTE,
+      '/api/flights/1/acars-messages': (): ResponseTuple => {
+        acarsGetCallCount.n++;
+        return [200, emptyThread];
+      },
+      '/api/acars/canned-messages': CANNED_ROUTE,
+      '/api/flights/1/sayintentions/link': {
+        GET: [200, notLinkedStatus],
+        POST: [502, { error: 'SayIntentions is unreachable right now.', code: 'NETWORK' }],
+      },
+    });
+
+    renderWithProviders(<LiveEventsProvider><AcarsMessages /></LiveEventsProvider>, ROUTE_OPTS);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    // fireEvent, not userEvent: userEvent's own internal timers don't mix
+    // with vi.useFakeTimers() here.
+    fireEvent.click(screen.getByRole('button', { name: 'LINK SAYINTENTIONS' }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText('SayIntentions is unreachable right now.')).toBeInTheDocument();
+
+    const es = MockEventSource.latest();
+    act(() => { es.open(); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+    const before = acarsGetCallCount.n;
+
+    act(() => { es.emit('acars', { flightId: 1, plannedLegId: null, messageId: 3 }); });
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_HANDLER_DEBOUNCE_MS));
+
+    // The automatic refresh really ran...
+    expect(acarsGetCallCount.n).toBeGreaterThan(before);
+    // ...but the operator's send error is still exactly where they left it.
+    expect(screen.getByText('SayIntentions is unreachable right now.')).toBeInTheDocument();
   });
 });

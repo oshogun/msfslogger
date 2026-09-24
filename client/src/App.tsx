@@ -1,6 +1,7 @@
 import { Route, Routes, useNavigate } from 'react-router-dom';
 import { AppShell } from './shell/AppShell';
 import { RequireAuth } from './shell/RequireAuth';
+import { LiveEventsProvider } from './shell/LiveEventsProvider';
 import { SessionProvider, useSession } from './shell/SessionContext';
 import { useLiveStatus } from './shell/useLiveStatus';
 import { useNavTree } from './shell/useNavTree';
@@ -59,7 +60,9 @@ export function App() {
           path="*"
           element={
             <RequireAuth>
-              <ShellRoutes />
+              <LiveEventsProvider>
+                <ShellRoutes />
+              </LiveEventsProvider>
             </RequireAuth>
           }
         />

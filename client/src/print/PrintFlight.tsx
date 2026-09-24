@@ -13,8 +13,9 @@ import type { Flight } from '../types';
 
 /**
  * Print-only view of a single flight, rendered headlessly by the PDF export
- * (see src/pdfExport.ts). Deliberately renders no Header — its useStatus poll
- * would keep the network busy forever and the page would never look idle.
+ * (see src/pdfExport.ts). Deliberately renders no Header — its live event
+ * stream would keep the network busy forever and the page would never look
+ * idle.
  */
 export function PrintFlight() {
   const { id } = useParams<{ id: string }>();

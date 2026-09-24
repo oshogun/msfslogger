@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Accordion, AccordionItem, Button, Form, InlineNotification, Link, Select, SelectItem, Stack, Tag, TextInput, Tile,
 } from '@carbon/react';
 import { getCurrentGroundSession, getPlannedLeg, listPlannedLegs, setGroundSession } from '../../api';
 import { UnauthorizedError } from '../../utils/api';
+import { useLiveEvent } from '../../shell/LiveEventsProvider';
 import type { GroundSession, PlannedLegListItem, PlannedLegWithChildren, Status } from '../../types';
 import { formatDate } from '../../utils/format';
 
@@ -49,19 +50,33 @@ export function GroundSection({ status }: { status: Status | null }) {
     localStorage.setItem(GROUND_SECTION_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
 
+  // A ref rather than a `cancelled` local: the live-stream refetch below and
+  // the mount-time load share this one loader, so both need the same guard.
+  // Set on mount, not just in the cleanup: StrictMode's dev-mode
+  // mount-cleanup-mount would otherwise leave this false for good after the
+  // second mount, dropping every result silently.
+  const mountedRef = useRef(false);
   useEffect(() => {
-    let cancelled = false;
-    const load = () =>
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const loadCurrent = useCallback(
+    () =>
       getCurrentGroundSession()
-        .then(r => { if (!cancelled) { setCurrent(r.session); setGroundError(null); } })
+        .then(r => { if (mountedRef.current) { setCurrent(r.session); setGroundError(null); } })
         .catch(e => {
           if (e instanceof UnauthorizedError) return;
-          if (!cancelled) setGroundError(errText(e));
-        });
-    load();
-    const timer = setInterval(load, 10000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+          if (mountedRef.current) setGroundError(errText(e));
+        }),
+    []
+  );
+
+  useEffect(() => {
+    loadCurrent();
+  }, [loadCurrent]);
+
+  useLiveEvent(['flights-changed', 'flight-state'], loadCurrent);
 
   useEffect(() => {
     let cancelled = false;

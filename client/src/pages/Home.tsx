@@ -9,7 +9,7 @@ import { PageHeader } from '../components/PageHeader';
 import { StatTiles } from '../components/StatTiles';
 import { listFlights, listTrips } from '../api';
 import { UnauthorizedError } from '../utils/api';
-import { useStatus } from '../hooks/useStatus';
+import { useLiveEvent, useLiveEvents } from '../shell/LiveEventsProvider';
 import type { Flight, Trip } from '../types';
 import { GroundSection } from './home/GroundSection';
 import { LivePanel } from './home/LivePanel';
@@ -18,7 +18,7 @@ import { formatDate, formatDistance, formatDuration } from '../utils/format';
 const RECENT_FLIGHTS_LIMIT = 5;
 
 export function Home() {
-  const { status } = useStatus();
+  const { status } = useLiveEvents();
   const [flights, setFlights] = useState<Flight[] | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -37,14 +37,14 @@ export function Home() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 10000);
     const onVisible = () => { if (!document.hidden) load(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [load]);
+
+  useLiveEvent(['flights-changed', 'flight-state'], load);
 
   const list = flights ?? [];
   const totalDurationSec = list.reduce((s, f) => s + (f.duration_sec ?? 0), 0);

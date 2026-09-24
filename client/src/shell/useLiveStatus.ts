@@ -1,5 +1,5 @@
 import type { LiveStatusView } from './AppShell';
-import { useStatus } from '../hooks/useStatus';
+import { useLiveEvents } from './LiveEventsProvider';
 import type { Status } from '../types';
 
 /** Same wording the production header uses, mapped onto Carbon Tag colours. */
@@ -13,9 +13,9 @@ export function statusToView(s: Status): LiveStatusView {
   return { type: 'blue', label: 'Connected · Idle' };
 }
 
-/** Live-status view for the header Tag, fed by the real /api/status poll. */
+/** Live-status view for the header Tag, fed by the shared event stream. */
 export function useLiveStatus(): LiveStatusView {
-  const { status, serverError } = useStatus();
+  const { status, serverError } = useLiveEvents();
   if (serverError) return { type: 'red', label: 'Server unreachable' };
   if (!status) return { type: 'gray', label: 'Checking...' };
   return statusToView(status);

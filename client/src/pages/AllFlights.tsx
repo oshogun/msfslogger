@@ -15,6 +15,7 @@ import {
   addFlightToTrip, combineFlights, createTrip, listFlights, listTrips,
 } from '../api';
 import { UnauthorizedError, downloadFlightSetKml } from '../utils/api';
+import { useLiveEvent } from '../shell/LiveEventsProvider';
 import type { Flight, Trip } from '../types';
 import './allflights/allflights.scss';
 import { legColor } from '../components/maps/palette';
@@ -77,14 +78,14 @@ export function AllFlights() {
 
   useEffect(() => {
     loadFlights();
-    const interval = setInterval(loadFlights, 10000);
     const onVisible = () => { if (!document.hidden) loadFlights(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadFlights]);
+
+  useLiveEvent(['flights-changed', 'flight-state'], loadFlights);
 
   const allFlights = useMemo(() => flights ?? [], [flights]);
   const selectableCount = allFlights.filter(isSelectable).length;

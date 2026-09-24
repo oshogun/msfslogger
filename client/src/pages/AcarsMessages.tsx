@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 import { Button, InlineLoading, InlineNotification, Link } from '@carbon/react';
 import { UnauthorizedError } from '../utils/api';
@@ -9,8 +9,9 @@ import {
   importSayIntentions, linkSayIntentions, listCannedMessages, pushClearanceToSayIntentions, requestAcarsPair,
   requestWx, sendCannedAcars, unlinkSayIntentions,
 } from '../api';
+import { useLiveEvent } from '../shell/LiveEventsProvider';
 import type {
-  AcarsMessage, AcarsThread, CannedAcarsMessage, PlannedLegWithChildren, SayIntentionsLinkStatus,
+  AcarsHint, AcarsMessage, AcarsThread, CannedAcarsMessage, PlannedLegWithChildren, SayIntentionsLinkStatus,
 } from '../types';
 import { MessageCard } from './acars/MessageCard';
 import { SayIntentionsPanel } from './acars/SayIntentionsPanel';
@@ -116,10 +117,14 @@ export function AcarsMessages() {
 
   // Refetches the thread and merges by id: rows already on screen are replaced
   // in place and new ones added, so the list never blanks and scroll position
-  // survives. No timer drives this — the button is the only trigger.
-  async function refresh() {
+  // survives. Runs from the Refresh button and from a relevant live acars
+  // hint or a stream reconnect. Only the button counts as `manual`: an
+  // automatic run must not clear a send error the operator hasn't acted on
+  // yet, so it's left in place until they click Refresh themselves or send
+  // something that succeeds.
+  async function refresh(opts: { manual?: boolean } = {}) {
     setRefreshing(true);
-    setSendError('');
+    if (opts.manual) setSendError('');
     try {
       const thread = scope === 'planned-leg' ? await getPlannedLegAcars(Number(legId)) : await getFlightAcars(flightId);
       setMessages(prev => mergeById(prev, thread.messages));
@@ -130,6 +135,19 @@ export function AcarsMessages() {
       setRefreshing(false);
     }
   }
+
+  // Per the acars hint's relevance rule: a flight thread cares about a hint
+  // naming its own flight id, or naming the leg it's linked to (a leg-scoped
+  // row belongs to the flight thread too); a planned-leg thread cares only
+  // about hints naming that exact leg.
+  const isRelevantHint = useCallback((hint: AcarsHint) => {
+    if (scope === 'planned-leg') return hint.plannedLegId === Number(legId);
+    return hint.flightId === flightId || (hint.plannedLegId !== null && hint.plannedLegId === plannedLegId);
+  }, [scope, legId, flightId, plannedLegId]);
+
+  useLiveEvent(['acars'], batch => {
+    if (batch.reconnected || batch.events.some(e => isRelevantHint(e.data as AcarsHint))) refresh();
+  });
 
   async function handleSend(cannedId: string) {
     setSendingId(cannedId);
@@ -304,7 +322,7 @@ export function AcarsMessages() {
         title={title}
         subtitle={`${messages.length} messages${scope === 'flight' && plannedLegId != null ? ` · including planned leg ${plannedLegId}` : ''}`}
         actions={loading ? undefined : (
-          <Button kind="tertiary" size="md" disabled={refreshing} onClick={refresh}>
+          <Button kind="tertiary" size="md" disabled={refreshing} onClick={() => refresh({ manual: true })}>
             {refreshing ? <InlineLoading description="Refreshing…" /> : 'Refresh'}
           </Button>
         )}

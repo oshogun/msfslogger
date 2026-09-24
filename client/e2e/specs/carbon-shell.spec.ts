@@ -106,15 +106,36 @@ test.describe('header live-status label', () => {
     await expect(tag).toHaveText('Sim not connected');
   });
 
-  test('shows "Connected · Idle" when /api/status reports a connected, idle sim', async ({ page }) => {
-    await page.route('**/api/status', route => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        connected: true, flightState: 'IDLE', currentFlightId: null, aircraft: null,
-        frame: null, paused: false, pauseFlags: 0,
-      }),
-    }));
+  test('shows "Connected · Idle" when the live stream opens with a connected, idle sim', async ({ page }) => {
+    // The header reads status off the shared SSE stream now, not a poll —
+    // route()-ing /api/status would never be consulted. A fake EventSource
+    // installed before any page script runs stands in for the real stream:
+    // it opens and emits one 'status' message, then goes quiet (never a
+    // finite/closed body, which would flip the tag to "Server unreachable").
+    const statusBody = {
+      connected: true, flightState: 'IDLE', currentFlightId: null, aircraft: null,
+      frame: null, paused: false, pauseFlags: 0,
+    };
+    await page.addInitScript((body: unknown) => {
+      class FakeEventSource extends EventTarget {
+        readyState = 0;
+        url: string;
+        constructor(url: string) {
+          super();
+          this.url = url;
+          setTimeout(() => {
+            this.readyState = 1;
+            this.dispatchEvent(new Event('open'));
+            this.dispatchEvent(new MessageEvent('status', { data: JSON.stringify(body) }));
+          }, 0);
+        }
+        close() {
+          this.readyState = 2;
+        }
+      }
+      (window as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
+    }, statusBody);
+
     await page.goto('/');
     await expect(page.locator('[aria-live="polite"]')).toHaveText('Connected · Idle');
   });
@@ -140,8 +161,26 @@ test.describe('PDF export round trip', () => {
 
 test.describe('session expiry', () => {
   test('a session lost mid-page bounces once to /login with no visible error banner', async ({ page }) => {
+    // Armed before goto(), so no response can be missed. The live stream
+    // opens and, ~100ms later, its reconnect-refetch fires every registered
+    // handler at once (Home, GroundSection, useNavTree — several requests,
+    // not one). Clearing cookies while any of those is still in flight races
+    // it: its still-valid cookie can restore the session on arrival via its
+    // own rolling Set-Cookie, or it can itself eat the 401 and bounce early —
+    // either way the click below lands on a non-deterministic page. Rather
+    // than naming every endpoint that burst can touch, wait for a quiet
+    // stretch with no new response instead — not page-wide `networkidle`,
+    // which would never fire while the SSE connection stays open, so the one
+    // response it did produce (the initial connect) is excluded by hand.
+    let lastResponseAt = Date.now();
+    page.on('response', res => {
+      if (!res.url().includes('/api/events')) lastResponseAt = Date.now();
+    });
+
     await page.goto('/');
     await expect(page.getByRole('main').getByRole('heading', { name: 'Home' })).toBeVisible();
+
+    await expect.poll(() => Date.now() - lastResponseAt, { timeout: 5000 }).toBeGreaterThan(500);
 
     // The server has already dropped the session; the client only finds out
     // on its next gated call. No full reload — a route change is enough to
