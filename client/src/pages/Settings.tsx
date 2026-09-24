@@ -50,7 +50,7 @@ export function Settings() {
       const r = await saveSimbriefSettings(sbId.trim() || null);
       setSbSaved(r.simbrief_user_id);
       setSbId(r.simbrief_user_id ?? '');
-      setSbOk(r.simbrief_user_id ? 'SimBrief user ID saved.' : 'SimBrief user ID removed.');
+      setSbOk(r.simbrief_user_id ? 'SimBrief pilot ID saved.' : 'SimBrief pilot ID removed.');
     } catch (err) {
       if (err instanceof UnauthorizedError) return;
       setSbId(sbSaved ?? '');
@@ -98,11 +98,11 @@ export function Settings() {
           <Form onSubmit={e => { e.preventDefault(); if (sbDirty) void saveSb(); }}>
             <Stack gap={5}>
               <h2 className="sabia-heading-03">SimBrief</h2>
-              <p style={helper}>The user ID is stored here; importing a SimBrief plan itself stays on Prefiles.</p>
+              <p style={helper}>The pilot ID is stored here; importing a SimBrief plan itself stays on Prefiles.</p>
               {loading ? <SkeletonText /> : (
                 <TextInput
                   id="settings-simbrief-user-id"
-                  labelText="SimBrief User ID"
+                  labelText="SimBrief Pilot ID"
                   value={sbId}
                   disabled={sbSaving}
                   onChange={e => setSbId(e.target.value)}

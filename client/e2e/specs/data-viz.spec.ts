@@ -123,6 +123,6 @@ test.describe('TripDetail', () => {
     await expect(main.getByText('ESSA → EFHK')).toHaveCount(0);
 
     // No app_setting row for SimBrief was seeded.
-    await expect(main.getByText('No SimBrief user id saved.')).toBeVisible();
+    await expect(main.getByText('No SimBrief pilot ID saved.')).toBeVisible();
   });
 });

@@ -12,7 +12,7 @@ const NO_SAYINTENTIONS: ResponseTuple = [200, { sayintentions_api_key_set: false
 const SET_SAYINTENTIONS: ResponseTuple = [200, { sayintentions_api_key_set: true, sayintentions_api_key_masked: '••••cdef' }];
 
 describe('Settings', () => {
-  it('loads and shows the saved SimBrief user id and the SayIntentions status', async () => {
+  it('loads and shows the saved SimBrief pilot ID and the SayIntentions status', async () => {
     mockFetchRoutes({
       '/api/auth/session': SESSION_ROUTE,
       '/api/settings/simbrief': [200, { simbrief_user_id: 'e2e-simbrief-id' }],
@@ -25,7 +25,7 @@ describe('Settings', () => {
     expect(screen.getByTestId('si-status')).toHaveTextContent('Saved: ••••cdef');
   });
 
-  it('trims and saves a new SimBrief user id, showing the server echo', async () => {
+  it('trims and saves a new SimBrief pilot ID, showing the server echo', async () => {
     const user = userEvent.setup();
     const puts: unknown[] = [];
     mockFetchRoutes({
@@ -42,11 +42,11 @@ describe('Settings', () => {
 
     renderWithProviders(<Settings />);
 
-    const input = await screen.findByLabelText('SimBrief User ID');
+    const input = await screen.findByLabelText('SimBrief Pilot ID');
     await user.type(input, '  trimmed-id  ');
     await user.click(screen.getAllByRole('button', { name: 'Save' })[0]);
 
-    await waitFor(() => expect(screen.getByText('SimBrief user ID saved.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('SimBrief pilot ID saved.')).toBeInTheDocument());
     expect(puts).toEqual([{ simbrief_user_id: 'trimmed-id' }]);
     expect(screen.getByDisplayValue('trimmed-id')).toBeInTheDocument();
   });
@@ -97,7 +97,7 @@ describe('Settings', () => {
 
     renderWithProviders(<Settings />);
 
-    const input = await screen.findByLabelText('SimBrief User ID');
+    const input = await screen.findByLabelText('SimBrief Pilot ID');
     await user.type(input, 'e2e-id');
     await user.click(screen.getAllByRole('button', { name: 'Save' })[0]);
 

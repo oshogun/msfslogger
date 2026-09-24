@@ -34,7 +34,7 @@ export function SimbriefImportPanel({ userId, importing = false, onImport, error
         {loading && <InlineLoading description="Loading settings…" />}
         {!loading && !importing && unset && (
           <span style={{ color: 'var(--cds-text-secondary)' }}>
-            No SimBrief user id saved.{' '}
+            No SimBrief pilot ID saved.{' '}
             <Link as={RouterLink} to="/settings">Set it in Settings</Link> to enable import.
           </span>
         )}

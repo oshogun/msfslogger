@@ -52,7 +52,7 @@ describe('Prefiles', () => {
   });
 
   describe('SimBrief import action', () => {
-    it('is disabled and links to Settings when no SimBrief user id is saved', async () => {
+    it('is disabled and links to Settings when no SimBrief pilot ID is saved', async () => {
       mockFetchRoutes({
         '/api/auth/session': SESSION_ROUTE,
         '/api/planned-legs': [200, []],
@@ -66,7 +66,7 @@ describe('Prefiles', () => {
       expect(screen.getByRole('link', { name: 'Set it in Settings' })).toHaveAttribute('href', '/settings');
     });
 
-    it('imports a leg and shows the success banner once a SimBrief user id is saved', async () => {
+    it('imports a leg and shows the success banner once a SimBrief pilot ID is saved', async () => {
       const user = userEvent.setup();
       mockFetchRoutes({
         '/api/auth/session': SESSION_ROUTE,
