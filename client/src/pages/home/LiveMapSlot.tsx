@@ -1,4 +1,4 @@
-import type { Status } from '../../mock/types';
+import type { Status } from '../../types';
 import { LiveMap } from '../../components/maps';
 
 /** The Home live map: a spacer above and the Leaflet map filling the panel width. */

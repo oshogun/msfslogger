@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useExportPdf } from '../components/ExportPdfButton';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Button, Checkbox, InlineLoading, InlineNotification, Link,
   Tab, TabList, TabPanel, TabPanels, Tabs, Tile,
 } from '@carbon/react';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatTiles } from '../components/StatTiles';
 import { AltitudeChart } from '../components/charts';
@@ -15,12 +13,12 @@ import { ReplayPanel } from '../components/replay';
 import {
   attachFlightPlan, deleteFlight, getFlight, getPlannedLeg, linkFlightToLeg, listTrips, patchFlight,
   removeFlightPlan, setFlightPlannedLegStatus,
-} from '../mock/api';
-import type { Flight, PlannedLegWithChildren } from '../mock/types';
+} from '../api';
+import type { Flight, PlannedLegWithChildren } from '../types';
+import { downloadKml, downloadPdf, UnauthorizedError } from '../utils/api';
 import { formatAlt, formatDate, formatDistance, formatDuration, formatSpeed } from '../utils/format';
 import { EditFlightModal } from './flightdetail/EditFlightModal';
 import { FlightPlanSection } from './flightdetail/FlightPlanSection';
-import { buildFlightKml, downloadKml } from '../utils/kml';
 import { PlannedLegSection } from './flightdetail/PlannedLegSection';
 import { newReplayBridge, ReplayMarker, TrackOnTop } from './flightdetail/ReplayMarker';
 
@@ -40,16 +38,15 @@ export function FlightDetail() {
   const [search, setSearch] = useSearchParams();
   const [flight, setFlight] = useState<Flight | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingKml, setExportingKml] = useState(false);
   const [actionError, setActionError] = useState('');
-  const exportPdf = useExportPdf('ghost');
   const [includePlan, setIncludePlan] = useState(true);
 
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
@@ -66,8 +63,6 @@ export function FlightDetail() {
   useEffect(() => {
     setFlight(null);
     setLoadError(null);
-    setNotFound(false);
-    if (!Number.isInteger(id)) { setNotFound(true); return; }
     let cancelled = false;
     getFlight(id)
       .then(f => {
@@ -77,8 +72,8 @@ export function FlightDetail() {
       })
       .catch(err => {
         if (cancelled) return;
-        if (/not found$/.test(errMsg(err))) setNotFound(true);
-        else setLoadError(errMsg(err));
+        if (err instanceof UnauthorizedError) return;
+        setLoadError(errMsg(err));
       });
     return () => { cancelled = true; };
   }, [id]);
@@ -104,7 +99,9 @@ export function FlightDetail() {
         setPlannedTripName(trips.find(t => t.id === leg.trip_id)?.name ?? null);
       })
       .catch(err => {
-        if (!cancelled) setPlannedLegError('Failed to load planned leg: ' + errMsg(err));
+        if (cancelled) return;
+        if (err instanceof UnauthorizedError) return;
+        setPlannedLegError('Failed to load planned leg: ' + errMsg(err));
       })
       .finally(() => {
         if (!cancelled) setPlannedLegLoading(false);
@@ -137,6 +134,7 @@ export function FlightDetail() {
     try {
       setFlight(await linkFlightToLeg(id, null));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setUnlinkError('Unlink failed: ' + errMsg(err));
     } finally {
       setUnlinkBusy(false);
@@ -149,6 +147,7 @@ export function FlightDetail() {
     try {
       setPlannedLeg(await setFlightPlannedLegStatus(id, target));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setMarkError('Mark failed: ' + errMsg(err));
     } finally {
       setMarkBusy(false);
@@ -162,6 +161,7 @@ export function FlightDetail() {
       setFlight(await patchFlight(id, values));
       setEditOpen(false);
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSaveError('Save failed: ' + errMsg(err));
     } finally {
       setSaving(false);
@@ -174,6 +174,7 @@ export function FlightDetail() {
       await deleteFlight(id);
       navigate('/flights');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Delete failed: ' + errMsg(err));
     }
   }
@@ -188,6 +189,7 @@ export function FlightDetail() {
     try {
       setFlight(await attachFlightPlan(id, file));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setUploadError('Upload failed: ' + errMsg(err));
     } finally {
       setUploading(false);
@@ -199,7 +201,22 @@ export function FlightDetail() {
     try {
       setFlight(await removeFlightPlan(id));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Remove failed: ' + errMsg(err));
+    }
+  }
+
+  async function handleExportPdf() {
+    if (!flight) return;
+    setExportingPdf(true);
+    setActionError('');
+    try {
+      await downloadPdf(`/api/flights/${flight.id}/export.pdf`, `flight-${flight.id}.pdf`, { includePlans: includePlan });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setActionError('Export failed: ' + errMsg(err));
+    } finally {
+      setExportingPdf(false);
     }
   }
 
@@ -208,9 +225,9 @@ export function FlightDetail() {
     setExportingKml(true);
     setActionError('');
     try {
-      await new Promise(r => setTimeout(r, 300));
-      downloadKml(`flight-${flight.id}.kml`, buildFlightKml(flight));
+      await downloadKml(`/api/flights/${flight.id}/export.kml`, `flight-${flight.id}.kml`);
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Export failed: ' + errMsg(err));
     } finally {
       setExportingKml(false);
@@ -223,23 +240,11 @@ export function FlightDetail() {
     </div>
   );
 
-  if (notFound) {
-    return (
-      <>
-        {backLink}
-        <EmptyState
-          title="Flight not found"
-          description={Number.isInteger(id) ? `There is no flight #${id}.` : 'That is not a valid flight id.'}
-          action={<Button as={RouterLink} to="/flights" kind="tertiary">All Flights</Button>}
-        />
-      </>
-    );
-  }
   if (loadError) {
     return (
       <>
         {backLink}
-        <InlineNotification kind="error" title="Failed to load flight" subtitle={loadError} hideCloseButton />
+        <InlineNotification kind="error" title={`Failed to load flight: ${loadError}`} hideCloseButton />
       </>
     );
   }
@@ -361,7 +366,9 @@ export function FlightDetail() {
         <Button as={RouterLink} to="/" kind="ghost">← Back</Button>
         <Button kind="ghost" onClick={() => { setSaveError(''); setEditOpen(true); }}>Edit</Button>
         <Button as={RouterLink} to={`/flight/${flight.id}/acars`} kind="ghost">ACARS Messages</Button>
-        {exportPdf.button}
+        <Button kind="ghost" disabled={exportingPdf} onClick={handleExportPdf}>
+          {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+        </Button>
         <Button kind="ghost" disabled={exportingKml} onClick={handleExportKml}>
           {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </Button>
@@ -370,12 +377,12 @@ export function FlightDetail() {
             id="include-plan"
             labelText="Include flight plan"
             checked={includePlan}
+            disabled={exportingPdf}
             onChange={(_, { checked }) => setIncludePlan(checked)}
           />
         )}
         <Button kind="danger" onClick={() => setConfirm('delete')}>Delete Flight</Button>
       </div>
-      {exportPdf.note}
       {actionError && (
         <InlineNotification
           kind="error"

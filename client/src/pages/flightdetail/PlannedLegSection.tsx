@@ -2,7 +2,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import { Button, InlineLoading, InlineNotification, Link, Tag, Tile } from '@carbon/react';
 import { StatusTag } from '../../components/StatusTag';
 import { formatAlt, formatDistance, plannedLegLandingNote } from '../../components/legs';
-import type { Flight, PlannedLegWithChildren } from '../../mock/types';
+import type { Flight, PlannedLegWithChildren } from '../../types';
 
 const muted = { color: 'var(--cds-text-secondary)', marginTop: '0.25rem' } as const;
 

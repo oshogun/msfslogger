@@ -7,26 +7,18 @@ import {
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatTiles } from '../components/StatTiles';
-import { failing, listFlights, listTrips, subscribeStatus } from '../mock/api';
-import type { Flight, Status, Trip } from '../mock/types';
+import { listFlights, listTrips } from '../api';
+import { UnauthorizedError } from '../utils/api';
+import { useStatus } from '../hooks/useStatus';
+import type { Flight, Trip } from '../types';
 import { GroundSection } from './home/GroundSection';
 import { LivePanel } from './home/LivePanel';
 import { formatDate, formatDistance, formatDuration } from '../utils/format';
 
 const RECENT_FLIGHTS_LIMIT = 5;
 
-/** The scripted live-status poll; null until the first reading, and forever if `?fail=live`. */
-function useStatus(): Status | null {
-  const [status, setStatus] = useState<Status | null>(null);
-  useEffect(() => {
-    if (failing('live')) return;
-    return subscribeStatus(setStatus);
-  }, []);
-  return status;
-}
-
 export function Home() {
-  const status = useStatus();
+  const { status } = useStatus();
   const [flights, setFlights] = useState<Flight[] | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +26,7 @@ export function Home() {
   const load = useCallback(async () => {
     const [f, t] = await Promise.allSettled([listFlights(), listTrips()]);
     if (f.status === 'rejected') {
+      if (f.reason instanceof UnauthorizedError) return;
       setError((f.reason as Error).message);
       return;
     }

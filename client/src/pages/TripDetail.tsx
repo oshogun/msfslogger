@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useExportPdf } from '../components/ExportPdfButton';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Button, ContentSwitcher, InlineNotification, Link, SkeletonText, Switch, Tile,
+  Button, Checkbox, ContentSwitcher, InlineLoading, InlineNotification, SkeletonText, Switch, Tile,
 } from '@carbon/react';
 import { ConfirmModal } from '../components/ConfirmModal';
-import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatTiles } from '../components/StatTiles';
 import { StatusTag } from '../components/StatusTag';
@@ -15,12 +13,12 @@ import {
   useRouteGeometry,
 } from '../components/maps';
 import type { LegOverlay } from '../components/maps';
-import * as api from '../mock/api';
+import * as api from '../api';
+import { downloadKml, downloadPdf, UnauthorizedError } from '../utils/api';
 import type {
   Flight, Journey, PlannedLegImportResponse, PlannedLegListItem, PlannedLegWithChildren, SimbriefImportResult, Trip,
-} from '../mock/types';
+} from '../types';
 import { formatAlt, formatDistance, formatDuration } from '../utils/format';
-import { buildTripKml, downloadKml } from '../utils/kml';
 import { EditTripModal } from './tripdetail/EditTripModal';
 import { LegsTable } from './tripdetail/LegsTable';
 import type { LegsTableProps } from './tripdetail/legsTableProps';
@@ -39,8 +37,6 @@ const without = <T,>(rec: Record<number, T>, key: number): Record<number, T> => 
   return rest;
 };
 
-const NOT_FOUND = /not found/i;
-
 /** One trip: overview (stats, notes, map, imports, legs) and atlas views. */
 export function TripDetail() {
   const { id } = useParams<{ id: string }>();
@@ -49,11 +45,14 @@ export function TripDetail() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get('view') === 'atlas' ? 'atlas' : 'overview';
 
-  const exportPdf = useExportPdf('tertiary');
   const [trip, setTrip] = useState<Trip | null>(null);
   const [loadError, setLoadError] = useState('');
   const [tracksError, setTracksError] = useState(false);
   const [actionError, setActionError] = useState('');
+
+  const [includePlans, setIncludePlans] = useState(true);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportPdfError, setExportPdfError] = useState('');
 
   const [journey, setJourney] = useState<Journey | null>(null);
   const [journeyError, setJourneyError] = useState('');
@@ -130,6 +129,7 @@ export function TripDetail() {
       setJourney(null);
       setJourneyError('');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Could not reload the trip: ' + (err as Error).message);
     } finally {
       setRefreshing(false);
@@ -147,7 +147,10 @@ export function TripDetail() {
         setTrip(t);
         document.title = `${t.name} — Sabiá`;
       })
-      .catch(err => { if (!cancelled) setLoadError((err as Error).message); });
+      .catch(err => {
+        if (cancelled || err instanceof UnauthorizedError) return;
+        setLoadError((err as Error).message);
+      });
     // A user-level setting that fails independently: the import panels then
     // read as "not set" instead of blocking the page.
     api.getSimbriefSettings()
@@ -162,7 +165,10 @@ export function TripDetail() {
     let cancelled = false;
     api.getJourney(tripId)
       .then(j => { if (!cancelled) setJourney(j); })
-      .catch(err => { if (!cancelled) setJourneyError((err as Error).message); });
+      .catch(err => {
+        if (cancelled || err instanceof UnauthorizedError) return;
+        setJourneyError((err as Error).message);
+      });
     return () => { cancelled = true; };
   }, [view, journey, journeyError, tripId]);
 
@@ -192,6 +198,7 @@ export function TripDetail() {
       await reload();
       document.title = `${editName.trim()} — Sabiá`;
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSaveError('Save failed: ' + (err as Error).message);
     } finally {
       setSaving(false);
@@ -210,6 +217,7 @@ export function TripDetail() {
           await api.setActiveTrip(c.activating ? trip.id : null);
           await reload();
         } catch (err) {
+          if (err instanceof UnauthorizedError) return;
           setActionError('Failed: ' + (err as Error).message);
         } finally {
           setActiveBusy(false);
@@ -221,6 +229,7 @@ export function TripDetail() {
           await api.deleteTrip(trip.id);
           navigate('/');
         } catch (err) {
+          if (err instanceof UnauthorizedError) return;
           setActionError('Delete failed: ' + (err as Error).message);
         }
         return;
@@ -229,6 +238,7 @@ export function TripDetail() {
           await api.removeFlightFromTrip(trip.id, c.flightId);
           await reload();
         } catch (err) {
+          if (err instanceof UnauthorizedError) return;
           setActionError('Failed to remove leg: ' + (err as Error).message);
         }
         return;
@@ -237,6 +247,7 @@ export function TripDetail() {
           await api.deletePlannedLeg(c.legId);
           await reload();
         } catch (err) {
+          if (err instanceof UnauthorizedError) return;
           setActionError('Failed to delete planned leg: ' + (err as Error).message);
         }
         return;
@@ -249,6 +260,7 @@ export function TripDetail() {
           setLinkableLegs(null);
           await reload();
         } catch (err) {
+          if (err instanceof UnauthorizedError) return;
           setUnlinkErrorByFlight(prev => ({ ...prev, [c.flightId]: (err as Error).message }));
         } finally {
           setUnlinkBusyFlightId(null);
@@ -266,6 +278,7 @@ export function TripDetail() {
       setImportResponse(await api.importPlannedLegs(files, tripId));
       await reload();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setImportError('Import failed: ' + (err as Error).message);
     } finally {
       setImporting(false);
@@ -277,10 +290,11 @@ export function TripDetail() {
     setSimbriefError('');
     setSimbriefResult(null);
     try {
-      const result = await api.importSimbriefLeg(tripId);
-      setSimbriefResult(result);
-      if (result.status === 'imported') await reload();
+      const response = await api.importSimbriefLeg(tripId);
+      setSimbriefResult(response.result);
+      if (response.result.status === 'imported') await reload();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSimbriefError((err as Error).message);
     } finally {
       setSimbriefImporting(false);
@@ -302,6 +316,7 @@ export function TripDetail() {
       const updated = await api.reorderPlannedLegs(trip.id, legIds);
       setTrip(t => (t ? { ...t, planned_legs: updated } : t));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setReorderError('Reorder failed: ' + (err as Error).message);
     } finally {
       setReorderingLegId(null);
@@ -318,6 +333,7 @@ export function TripDetail() {
       setSkipTarget(null);
       await reload();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       // A 409 means a flight got linked to the leg since the page loaded; the
       // server's message stays inside the dialog.
       setSkipErrorByLeg(prev => ({ ...prev, [target.id]: (err as Error).message }));
@@ -331,6 +347,7 @@ export function TripDetail() {
     try {
       setLinkableFlights((await api.listFlights()).filter(f => f.planned_leg_id === null));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkFlightsError((err as Error).message);
     }
   }
@@ -341,6 +358,7 @@ export function TripDetail() {
     try {
       setLinkableLegs((await api.listPlannedLegs()).filter(l => l.linked_flight_id === null));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkLegsError((err as Error).message);
     }
   }
@@ -361,6 +379,7 @@ export function TripDetail() {
       setLinkingLegId(null);
       setLinkFlightChoice('');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
     } finally {
       setLinkBusyLegId(null);
@@ -376,9 +395,24 @@ export function TripDetail() {
       setLinkingFlightId(null);
       setLinkLegChoice('');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkErrorByFlight(prev => ({ ...prev, [flightId]: (err as Error).message }));
     } finally {
       setLinkBusyFlightId(null);
+    }
+  }
+
+  async function handleExportPdf() {
+    if (!trip) return;
+    setExportingPdf(true);
+    setExportPdfError('');
+    try {
+      await downloadPdf(`/api/trips/${trip.id}/export.pdf`, `trip-${trip.id}.pdf`, { includePlans });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setExportPdfError('Export failed: ' + (err as Error).message);
+    } finally {
+      setExportingPdf(false);
     }
   }
 
@@ -387,8 +421,9 @@ export function TripDetail() {
     setExportingKml(true);
     setActionError('');
     try {
-      downloadKml(`trip-${trip.id}.kml`, buildTripKml(trip.name, trip.flights));
+      await downloadKml(`/api/trips/${trip.id}/export.kml`, `trip-${trip.id}.kml`);
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Export failed: ' + (err as Error).message);
     } finally {
       setExportingKml(false);
@@ -422,23 +457,10 @@ export function TripDetail() {
   };
 
   if (loadError) {
-    if (NOT_FOUND.test(loadError)) {
-      return (
-        <>
-          <PageHeader title="Trip not found" />
-          <EmptyState
-            title="This trip does not exist."
-            description="It may have been deleted."
-            action={<Link as={RouterLink} to="/flights">Back to All Flights</Link>}
-          />
-        </>
-      );
-    }
     return (
       <>
         <PageHeader title="Trip" />
-        <InlineNotification kind="error" lowContrast hideCloseButton title="Failed to load trip"
-          subtitle={loadError} style={{ maxInlineSize: 'none' }} />
+        <InlineNotification kind="error" hideCloseButton title={`Failed to load trip: ${loadError}`} />
       </>
     );
   }
@@ -446,7 +468,7 @@ export function TripDetail() {
     return (
       <>
         <PageHeader title="Trip" />
-        <SkeletonText paragraph lineCount={6} />
+        <InlineLoading description="Loading..." />
       </>
     );
   }
@@ -457,6 +479,8 @@ export function TripDetail() {
   // them all still shows it so the flag can be cleared.
   const showActiveTripControl = plannedLegs.length > 0 || trip.is_active === 1;
   const isActive = trip.is_active === 1;
+  // Only worth offering when at least one leg actually has a plan attached.
+  const planCount = trip.flights.filter(f => f.flight_plan_name).length;
   const subtitle = `${trip.flight_count} leg${trip.flight_count !== 1 ? 's' : ''}` +
     (trip.total_distance_nm != null ? ` · ${formatDistance(trip.total_distance_nm)} nm total` : '');
 
@@ -649,13 +673,27 @@ export function TripDetail() {
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBlockStart: '2rem', alignItems: 'center' }}>
         <Button kind="ghost" as={RouterLink} to="/">Back</Button>
         <Button kind="tertiary" onClick={openEdit}>Edit</Button>
-        {exportPdf.button}
-        <Button kind="tertiary" disabled={exportingKml} onClick={handleExportKml}>
+        <Button kind="tertiary" disabled={exportingPdf} onClick={() => void handleExportPdf()}>
+          {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+        </Button>
+        <Button kind="tertiary" disabled={exportingKml} onClick={() => void handleExportKml()}>
           {exportingKml ? 'Exporting KML…' : 'Export KML'}
         </Button>
+        {planCount > 0 && (
+          <Checkbox
+            id="trip-export-include-plans"
+            labelText={`Include flight plans (${planCount})`}
+            checked={includePlans}
+            disabled={exportingPdf}
+            onChange={(_e, { checked }) => setIncludePlans(checked)}
+          />
+        )}
         <Button kind="danger--tertiary" onClick={() => setConfirm({ kind: 'deleteTrip' })}>Delete Trip</Button>
       </div>
-      {exportPdf.note}
+      {exportPdfError && (
+        <InlineNotification kind="error" lowContrast title="Export failed" subtitle={exportPdfError}
+          onCloseButtonClick={() => setExportPdfError('')} style={{ maxInlineSize: 'none', marginBlockStart: '0.5rem' }} />
+      )}
 
       <EditTripModal
         open={editOpen}

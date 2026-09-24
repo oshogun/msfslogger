@@ -1,6 +1,6 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { Button, InlineLoading, InlineNotification, Link, TextInput, Tile } from '@carbon/react';
-import type { CannedAcarsMessage, PlannedLegWithChildren } from '../../mock/types';
+import type { CannedAcarsMessage, PlannedLegWithChildren } from '../../types';
 import { isPlausibleIcao } from './thread';
 import './acars.scss';
 

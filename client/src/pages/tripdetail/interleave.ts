@@ -1,4 +1,4 @@
-import type { Flight, PlannedLegWithChildren } from '../../mock/types';
+import type { Flight, PlannedLegWithChildren } from '../../types';
 
 export type MergedTripRow =
   | { kind: 'flight'; flight: Flight; flightIndex: number }

@@ -3,8 +3,9 @@ import { Link as RouterLink } from 'react-router-dom';
 import {
   Accordion, AccordionItem, Button, Form, InlineNotification, Link, Select, SelectItem, Stack, Tag, TextInput, Tile,
 } from '@carbon/react';
-import { getCurrentGroundSession, getPlannedLeg, listPlannedLegs, setGroundSession } from '../../mock/api';
-import type { GroundSession, PlannedLegListItem, PlannedLegWithChildren, Status } from '../../mock/types';
+import { getCurrentGroundSession, getPlannedLeg, listPlannedLegs, setGroundSession } from '../../api';
+import { UnauthorizedError } from '../../utils/api';
+import type { GroundSession, PlannedLegListItem, PlannedLegWithChildren, Status } from '../../types';
 import { formatDate } from '../../utils/format';
 
 /** Same key as the production page, so the operator's choice carries over. */
@@ -53,7 +54,10 @@ export function GroundSection({ status }: { status: Status | null }) {
     const load = () =>
       getCurrentGroundSession()
         .then(r => { if (!cancelled) { setCurrent(r.session); setGroundError(null); } })
-        .catch(e => { if (!cancelled) setGroundError(errText(e)); });
+        .catch(e => {
+          if (e instanceof UnauthorizedError) return;
+          if (!cancelled) setGroundError(errText(e));
+        });
     load();
     const timer = setInterval(load, 10000);
     return () => { cancelled = true; clearInterval(timer); };
@@ -63,7 +67,10 @@ export function GroundSection({ status }: { status: Status | null }) {
     let cancelled = false;
     listPlannedLegs()
       .then(all => { if (!cancelled) setLegOptions(all.filter(l => l.linked_flight_id === null)); })
-      .catch(e => { if (!cancelled) setLegOptionsError(errText(e)); });
+      .catch(e => {
+        if (e instanceof UnauthorizedError) return;
+        if (!cancelled) setLegOptionsError(errText(e));
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -105,16 +112,20 @@ export function GroundSection({ status }: { status: Status | null }) {
     setFormError('');
     setFormOk('');
     try {
-      const r = await setGroundSession({
-        airport_icao: code,
+      await setGroundSession({
+        icao: code.toUpperCase(),
         ...(standTouched ? { parking_position: stand.trim() || null } : {}),
         ...(legTouched ? { planned_leg_id: legId === '' ? null : Number(legId) } : {}),
       });
-      setCurrent(r.session);
+      // The POST returns the created row, but the card is driven from the
+      // /current envelope everywhere else, so re-fetch it rather than swap shapes.
+      const refreshed = await getCurrentGroundSession();
+      setCurrent(refreshed.session);
       setGroundError(null);
       setFormOk(`Ground position set to ${code.toUpperCase()}.`);
       setIcao(''); setStand(''); setLegId(''); setStandTouched(false); setLegTouched(false);
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setFormError(errText(err));
     } finally {
       setSubmitting(false);

@@ -1,4 +1,4 @@
-import type { AcarsMessage } from '../../mock/types';
+import type { AcarsMessage } from '../../types';
 
 /** Oldest-first order the API returns, with id as the tie-break. */
 export function bySentAt(a: AcarsMessage, b: AcarsMessage): number {

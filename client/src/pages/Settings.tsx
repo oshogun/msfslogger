@@ -3,8 +3,9 @@ import { Button, Form, InlineNotification, PasswordInput, SkeletonText, Stack, T
 import { PageHeader } from '../components/PageHeader';
 import {
   clearSayIntentionsKey, getSayIntentionsSettings, getSimbriefSettings, saveSayIntentionsKey, saveSimbriefSettings,
-} from '../mock/api';
-import type { SayIntentionsSettings } from '../mock/types';
+} from '../api';
+import { UnauthorizedError } from '../utils/api';
+import type { SayIntentionsSettings } from '../types';
 
 const helper: React.CSSProperties = { color: 'var(--cds-text-secondary)', fontSize: '0.875rem' };
 
@@ -33,7 +34,10 @@ export function Settings() {
         setSbId(sb.simbrief_user_id ?? '');
         setSiSaved(si);
       })
-      .catch(err => { if (!cancelled) setLoadError((err as Error).message); })
+      .catch(err => {
+        if (cancelled || err instanceof UnauthorizedError) return;
+        setLoadError((err as Error).message);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -48,6 +52,7 @@ export function Settings() {
       setSbId(r.simbrief_user_id ?? '');
       setSbOk(r.simbrief_user_id ? 'SimBrief user ID saved.' : 'SimBrief user ID removed.');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSbId(sbSaved ?? '');
       setSbError((err as Error).message);
     } finally {
@@ -62,6 +67,7 @@ export function Settings() {
       setSiKey('');
       setSiOk('SayIntentions API key saved.');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSiError((err as Error).message);
     } finally {
       setSiSaving(false);
@@ -74,6 +80,7 @@ export function Settings() {
       setSiSaved(await clearSayIntentionsKey());
       setSiOk('SayIntentions API key cleared.');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSiError((err as Error).message);
     } finally {
       setSiSaving(false);

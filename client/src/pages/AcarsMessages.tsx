@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link as RouterLink, useParams } from 'react-router-dom';
 import { Button, InlineLoading, InlineNotification, Link } from '@carbon/react';
+import { UnauthorizedError } from '../utils/api';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import {
   getFlightAcars, getPlannedLeg, getPlannedLegAcars, getSayIntentionsLink, getSayIntentionsSettings,
   importSayIntentions, linkSayIntentions, listCannedMessages, pushClearanceToSayIntentions, requestAcarsPair,
   requestWx, sendCannedAcars, unlinkSayIntentions,
-} from '../mock/api';
+} from '../api';
 import type {
-  AcarsMessage, CannedAcarsMessage, PlannedLegWithChildren, SayIntentionsLinkStatus,
-} from '../mock/types';
+  AcarsMessage, AcarsThread, CannedAcarsMessage, PlannedLegWithChildren, SayIntentionsLinkStatus,
+} from '../types';
 import { MessageCard } from './acars/MessageCard';
 import { SayIntentionsPanel } from './acars/SayIntentionsPanel';
 import {
@@ -54,21 +55,34 @@ export function AcarsMessages() {
     Promise.all([
       scope === 'planned-leg' ? getPlannedLegAcars(Number(legId)) : getFlightAcars(flightId),
       // The canned set is its own resource: if only it fails, the thread is
-      // still worth rendering read-only.
-      listCannedMessages().catch(() => null),
-      scope === 'flight' ? getSayIntentionsLink(flightId).catch(() => null) : Promise.resolve(null),
-      getSayIntentionsSettings().catch(() => null),
+      // still worth rendering read-only. A 401 is re-thrown so the redirect
+      // still happens through the main catch below.
+      listCannedMessages().catch(err => {
+        if (err instanceof UnauthorizedError) throw err;
+        return null;
+      }),
+      // getSayIntentionsLink already swallows its own failure to null.
+      scope === 'flight' ? getSayIntentionsLink(flightId) : Promise.resolve(null),
+      getSayIntentionsSettings().catch(err => {
+        if (err instanceof UnauthorizedError) throw err;
+        return null;
+      }),
     ])
       .then(([thread, cannedList, siStatus, siSettings]) => {
         if (cancelled) return;
         setMessages(thread.messages);
-        setPlannedLegId(scope === 'planned-leg' ? Number(legId) : (thread as { planned_leg_id: number | null }).planned_leg_id);
-        if (cannedList) setCanned(cannedList);
+        setPlannedLegId(scope === 'planned-leg' ? Number(legId) : (thread as AcarsThread).planned_leg_id);
+        if (cannedList) setCanned(cannedList.messages);
         else setCannedError('Canned messages unavailable');
         setSiLinkStatus(siStatus);
         setSiKeySet(siSettings ? siSettings.sayintentions_api_key_set : false);
       })
-      .catch(err => { if (!cancelled) setLoadError((err as Error).message); })
+      .catch(err => {
+        // A 401 has already triggered the redirect inside apiFetch; showing a
+        // page error on the way out would just flash behind it.
+        if (cancelled || err instanceof UnauthorizedError) return;
+        setLoadError((err as Error).message);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id, legId, scope, flightId]);
@@ -83,7 +97,9 @@ export function AcarsMessages() {
     let cancelled = false;
     getPlannedLeg(plannedLegId)
       .then(leg => { if (!cancelled) setPlannedLeg(leg); })
-      .catch(() => { if (!cancelled) setPlannedLeg(null); });
+      .catch(err => {
+        if (!(err instanceof UnauthorizedError)) setPlannedLeg(null);
+      });
     return () => { cancelled = true; };
   }, [plannedLegId]);
 
@@ -96,98 +112,161 @@ export function AcarsMessages() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plannedLeg]);
 
-  /** Runs one send action with the single in-flight id and the shared error slot. */
-  async function run(sending: string, action: () => Promise<void>, clearSi = false) {
-    setSendingId(sending);
-    setSendError('');
-    if (clearSi) setSiMessage('');
-    try {
-      await action();
-    } catch (err) {
-      setSendError((err as Error).message);
-    } finally {
-      setSendingId(null);
-    }
-  }
+  const scopeArg = scope === 'planned-leg' ? { legId: Number(legId) } : { flightId };
 
   // Refetches the thread and merges by id: rows already on screen are replaced
-  // in place and new ones added, and the list never blanks, so scroll position
-  // survives.
-  const refresh = useCallback(async () => {
+  // in place and new ones added, so the list never blanks and scroll position
+  // survives. No timer drives this — the button is the only trigger.
+  async function refresh() {
     setRefreshing(true);
     setSendError('');
     try {
       const thread = scope === 'planned-leg' ? await getPlannedLegAcars(Number(legId)) : await getFlightAcars(flightId);
       setMessages(prev => mergeById(prev, thread.messages));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSendError((err as Error).message);
     } finally {
       setRefreshing(false);
     }
-  }, [scope, legId, flightId]);
+  }
 
-  const scopeArg = scope === 'planned-leg' ? { legId: Number(legId) } : { flightId };
+  async function handleSend(cannedId: string) {
+    setSendingId(cannedId);
+    setSendError('');
+    try {
+      const created = await sendCannedAcars(scopeArg, cannedId);
+      // The response is the row the server stored, so appending is all the
+      // thread needs: nothing optimistic to reconcile if a send is rejected.
+      setMessages(prev => [...prev, created]);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  const handleSend = (cannedId: string) => run(cannedId, async () => {
-    const created = await sendCannedAcars(scopeArg, cannedId);
-    // The response is the row the server stored, so appending is all the
-    // thread needs: nothing optimistic to reconcile if a send is rejected.
-    setMessages(prev => [...prev, created]);
-  });
-
-  // A re-request returns the pair already in the thread, so it merges by id.
-  const handleLoadsheet = () => plannedLegId !== null
-    ? run(LOADSHEET_SENDING_ID, async () => {
-      const r = await requestAcarsPair({ legId: plannedLegId }, 'loadsheet');
+  async function handleLoadsheet() {
+    if (plannedLegId === null) return;
+    setSendingId(LOADSHEET_SENDING_ID);
+    setSendError('');
+    try {
+      const r = await requestAcarsPair(plannedLegId, 'loadsheet');
+      // A re-request returns the pair already in the thread, so it merges by id.
       setMessages(prev => mergeById(prev, [r.request, r.reply]));
-    })
-    : undefined;
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  const handleClearance = () => plannedLegId !== null
-    ? run(CLEARANCE_SENDING_ID, async () => {
-      const r = await requestAcarsPair({ legId: plannedLegId }, 'clearance');
+  async function handleClearance() {
+    if (plannedLegId === null) return;
+    setSendingId(CLEARANCE_SENDING_ID);
+    setSendError('');
+    try {
+      const r = await requestAcarsPair(plannedLegId, 'clearance');
       setMessages(prev => mergeById(prev, [r.request, r.reply]));
-    })
-    : undefined;
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  // Every accepted WX call creates two brand-new rows, so a plain append.
-  const handleWx = () => run(WX_SENDING_ID, async () => {
-    const r = await requestWx(scopeArg, wxIcao.trim().toUpperCase());
-    setMessages(prev => [...prev, r.request, r.reply]);
-  });
+  async function handleWx() {
+    setSendingId(WX_SENDING_ID);
+    setSendError('');
+    try {
+      const r = await requestWx(scopeArg, wxIcao.trim().toUpperCase());
+      // Every accepted WX call creates two brand-new rows, so a plain append.
+      setMessages(prev => [...prev, r.request, r.reply]);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
   // LINK and RELINK share the same call.
-  const handleSiLink = () => run(SI_LINK_SENDING_ID, async () => {
-    const r = await linkSayIntentions(flightId);
-    setSiLinkStatus({ flight_id: flightId, linked: true, link: r.link, api_key_set: true });
-    setSiMessage(`Linked to SayIntentions session ${r.link.upstream_flight_id ?? 'current'} — ${r.pending_messages} messages waiting.`);
-  }, true);
+  async function handleSiLink() {
+    setSendingId(SI_LINK_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const r = await linkSayIntentions(flightId);
+      setSiLinkStatus({ flight_id: flightId, linked: true, link: r.link, api_key_set: true });
+      setSiMessage(`Linked to SayIntentions session ${r.link.upstream_flight_id ?? 'current'} — ${r.pending_messages} messages waiting.`);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  const handleSiUnlink = () => run(SI_UNLINK_SENDING_ID, async () => {
-    await unlinkSayIntentions(flightId);
-    setSiLinkStatus(prev => (prev ? { ...prev, linked: false, link: null } : prev));
-  }, true);
+  async function handleSiUnlink() {
+    setSendingId(SI_UNLINK_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      await unlinkSayIntentions(flightId);
+      setSiLinkStatus(prev => (prev ? { ...prev, linked: false, link: null } : prev));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  const handleSiImport = () => run(SI_IMPORT_SENDING_ID, async () => {
-    const r = await importSayIntentions(flightId);
-    // A repeat import with nothing new is a success and the merge a no-op.
-    if (r.messages.length > 0) setMessages(prev => mergeById(prev, r.messages));
-    setSiMessage(r.imported > 0 ? `Imported ${r.imported} message(s).` : 'No new messages.');
-    setSiLinkStatus(prev => (prev && prev.link
-      ? { ...prev, link: { ...prev.link, last_import_at: new Date().toISOString(), imported_count: prev.link.imported_count + r.imported } }
-      : prev));
-  }, true);
+  async function handleSiImport() {
+    setSendingId(SI_IMPORT_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const r = await importSayIntentions(flightId);
+      // A repeat import with nothing new is a success and the merge a no-op.
+      if (r.messages.length > 0) setMessages(prev => mergeById(prev, r.messages));
+      setSiMessage(r.imported > 0 ? `Imported ${r.imported} message(s).` : 'No new messages.');
+      // The import response carries the new cursor but not the link's
+      // cumulative counters, so those are re-read rather than approximated —
+      // this accessor already swallows its own failure to null, in which
+      // case the last known status is simply left in place.
+      const refreshed = await getSayIntentionsLink(flightId);
+      if (refreshed) setSiLinkStatus(refreshed);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
-  const handleSiPush = () => {
-    if (plannedLegId === null) return undefined;
+  async function handleSiPush() {
+    if (plannedLegId === null) return;
     const pdc = messages.find(m => m.category === 'pdc' && m.direction === 'uplink' && m.label === 'PDC');
-    return run(SI_PUSH_SENDING_ID, async () => {
-      const m = await pushClearanceToSayIntentions(plannedLegId, pdc?.body ?? '');
+    if (!pdc) return;
+    setSendingId(SI_PUSH_SENDING_ID);
+    setSendError('');
+    setSiMessage('');
+    try {
+      const r = await pushClearanceToSayIntentions(plannedLegId);
       // The new stored row is appended directly, not merged.
-      setMessages(prev => [...prev, m]);
-      setSiMessage(`Sent to SayIntentions: ${m.body}`);
-    }, true);
-  };
+      setMessages(prev => [...prev, r.message]);
+      setSiMessage(`Sent to SayIntentions: ${r.message.body}`);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setSendError((err as Error).message);
+    } finally {
+      setSendingId(null);
+    }
+  }
 
   const title = scope === 'planned-leg' ? `ACARS messages — Planned leg #${legId}` : `ACARS messages — Flight #${id}`;
 

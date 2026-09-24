@@ -1,4 +1,4 @@
-import type { Flight, PlannedLegListItem, PlannedLegWithChildren, Trip } from '../../mock/types';
+import type { Flight, PlannedLegListItem, PlannedLegWithChildren, Trip } from '../../types';
 
 /** Rows per page of the legs table. The page passes `page`; the table windows its own rows. */
 export const LEGS_PER_PAGE = 20;

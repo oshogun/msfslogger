@@ -13,15 +13,18 @@ import { StatusTag } from '../components/StatusTag';
 import { ConfirmModal, ModalPortal, useLauncherRef } from '../components/ConfirmModal';
 import {
   addFlightToTrip, combineFlights, createTrip, listFlights, listTrips,
-} from '../mock/api';
-import type { Flight, Trip } from '../mock/types';
+} from '../api';
+import { UnauthorizedError, downloadFlightSetKml } from '../utils/api';
+import type { Flight, Trip } from '../types';
 import './allflights/allflights.scss';
 import { legColor } from '../components/maps/palette';
 import { formatAlt, formatDate, formatDistance, formatDuration, formatSpeed } from '../utils/format';
-import { MAX_KML_FLIGHTS, buildFlightsKml, downloadKml } from '../utils/kml';
 
 const PAGE_SIZES = [5, 10, 20];
 const COLUMN_COUNT = 9;
+// Matches the server's MAX_FLIGHT_SET_IDS (src/kmlExport.ts) — the KML set
+// export route rejects anything past this, so the picker is capped the same.
+const MAX_KML_FLIGHTS = 100;
 
 type Entry = { kind: 'trip'; trip: Trip; legs: Flight[] } | { kind: 'flight'; flight: Flight };
 type Dialog = null | 'combine' | 'newTrip' | 'blankTrip' | 'addToTrip';
@@ -57,6 +60,7 @@ export function AllFlights() {
   const loadFlights = useCallback(async () => {
     const [flightsResult, tripsResult] = await Promise.allSettled([listFlights(), listTrips()]);
     if (flightsResult.status === 'rejected') {
+      if (flightsResult.reason instanceof UnauthorizedError) return;
       setError((flightsResult.reason as Error).message);
       return;
     }
@@ -139,6 +143,7 @@ export function AllFlights() {
     try {
       await fn();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError(`${label}: ${(err as Error).message}`);
     } finally {
       setBusy(false);
@@ -180,15 +185,13 @@ export function AllFlights() {
   };
 
   async function handleExportKml() {
-    if (n === 0) return;
-    if (n > MAX_KML_FLIGHTS) { setActionError('Select at most 100 flights to export.'); return; }
+    if (n === 0 || n > MAX_KML_FLIGHTS) return;
     setExportingKml(true);
     setActionError(null);
     try {
-      await new Promise(r => setTimeout(r, 300));
-      const chosen = allFlights.filter(f => selectedIds.has(f.id));
-      downloadKml('flights.kml', buildFlightsKml(chosen));
+      await downloadFlightSetKml([...selectedIds]);
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setActionError('Export failed: ' + (err as Error).message);
     } finally {
       setExportingKml(false);
@@ -375,8 +378,13 @@ export function AllFlights() {
                 <TableBatchAction renderIcon={Merge} disabled={n !== 2} onClick={() => setDialog('combine')}>
                   Combine Selected
                 </TableBatchAction>
-                <TableBatchAction renderIcon={Export} disabled={exportingKml} onClick={handleExportKml}>
-                  {exportingKml ? 'Exporting KML…' : 'Export KML'}
+                <TableBatchAction
+                  renderIcon={Export}
+                  disabled={exportingKml || n > MAX_KML_FLIGHTS}
+                  title={n > MAX_KML_FLIGHTS ? `Select at most ${MAX_KML_FLIGHTS} flights to export.` : undefined}
+                  onClick={handleExportKml}
+                >
+                  {exportingKml ? 'Exporting KML…' : n > MAX_KML_FLIGHTS ? `Too many selected (max ${MAX_KML_FLIGHTS})` : 'Export KML'}
                 </TableBatchAction>
               </TableBatchActions>}
               <TableToolbarContent aria-hidden={n > 0} className="allflights-toolbar">

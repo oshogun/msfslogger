@@ -1,7 +1,7 @@
 import { Tag, Tile } from '@carbon/react';
 import { StatusTag } from '../../components/StatusTag';
 import type { StatusKind } from '../../components/StatusTag';
-import type { AcarsMessage } from '../../mock/types';
+import type { AcarsMessage } from '../../types';
 import { formatDate } from '../../utils/format';
 import './acars.scss';
 

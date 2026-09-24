@@ -11,7 +11,7 @@ interface FromLocation {
   hash?: string;
 }
 
-/** Fake-auth sign-in; lives outside the shell. Redirects to the `from` location RequireAuth carried, else '/'. */
+/** Lives outside the shell. Redirects to the `from` location RequireAuth carried, else '/'. */
 export function Login() {
   const session = useSession();
   const navigate = useNavigate();

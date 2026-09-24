@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import type { FlightPoint } from '../../mock/types';
+import type { FlightPoint } from '../../types';
 import { unwrapLonChain } from '../../components/maps';
 import { palette } from '../../components/maps/palette';
 import type { ReplaySample } from '../../components/replay';

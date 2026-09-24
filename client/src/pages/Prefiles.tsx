@@ -8,10 +8,11 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { GHOST_LEG_COLUMNS, GhostLegRow, LnmplnImportPanel, SimbriefImportPanel, SkipLegConfirm } from '../components/legs';
-import * as api from '../mock/api';
+import * as api from '../api';
+import { UnauthorizedError } from '../utils/api';
 import type {
   Flight, PlannedLegImportResponse, PlannedLegListItem, PlannedLegStatus, SimbriefImportResult,
-} from '../mock/types';
+} from '../types';
 
 interface Option { id: string; label: string }
 
@@ -59,6 +60,7 @@ export function Prefiles() {
       setLegs(await api.listPlannedLegs());
       setLoadError('');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLoadError((err as Error).message);
     }
   }, []);
@@ -78,6 +80,7 @@ export function Prefiles() {
       setImportResponse(await api.importPlannedLegs(files));
       await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setImportError('Import failed: ' + (err as Error).message);
     } finally {
       setImporting(false);
@@ -89,10 +92,11 @@ export function Prefiles() {
     setSimbriefError('');
     setSimbriefResult(null);
     try {
-      const result = await api.importSimbriefLeg();
-      setSimbriefResult(result);
-      if (result.status === 'imported') await loadLegs();
+      const response = await api.importSimbriefLeg();
+      setSimbriefResult(response.result);
+      if (response.result.status === 'imported') await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSimbriefError((err as Error).message);
     } finally {
       setSimbriefImporting(false);
@@ -107,6 +111,7 @@ export function Prefiles() {
       setDeleteError('');
       await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setDeleteError('Failed to delete planned leg: ' + (err as Error).message);
     }
   }
@@ -121,6 +126,7 @@ export function Prefiles() {
       setSkipTarget(null);
       await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       // A 409 means a flight is linked to the leg; the server's message is
       // shown inside the confirm dialog instead of failing silently.
       setSkipError((err as Error).message);
@@ -134,6 +140,7 @@ export function Prefiles() {
     try {
       setLinkableFlights((await api.listFlights()).filter(f => f.planned_leg_id === null));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkFlightsError((err as Error).message);
     }
   }
@@ -149,6 +156,7 @@ export function Prefiles() {
       setLinkFlightChoice('');
       await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkErrorByLeg(prev => ({ ...prev, [leg.id]: (err as Error).message }));
     } finally {
       setLinkBusyLegId(null);

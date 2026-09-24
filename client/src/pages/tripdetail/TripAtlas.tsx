@@ -5,7 +5,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { StatTiles, type StatTile } from '../../components/StatTiles';
 import { JourneyMap, legColor } from '../../components/maps/JourneyMap';
 import { formatAlt, formatDistance, formatDuration, formatSpeed } from '../../utils/format';
-import type { Journey } from '../../mock/types';
+import type { Journey } from '../../types';
 import './tripatlas.scss';
 
 export interface TripAtlasProps {

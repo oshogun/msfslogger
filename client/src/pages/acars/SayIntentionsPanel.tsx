@@ -1,6 +1,6 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { Button, InlineLoading, Link, Tile } from '@carbon/react';
-import type { SayIntentionsLinkStatus } from '../../mock/types';
+import type { SayIntentionsLinkStatus } from '../../types';
 import { SI_IMPORT_SENDING_ID, SI_LINK_SENDING_ID, SI_UNLINK_SENDING_ID } from './SendToolbar';
 import { formatDate } from '../../utils/format';
 import './acars.scss';

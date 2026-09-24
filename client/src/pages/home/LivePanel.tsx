@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Column, Grid, Tag, Tile } from '@carbon/react';
-import type { Status } from '../../mock/types';
+import type { Status } from '../../types';
 import { formatAlt, formatDistance } from '../../utils/format';
 import { LiveMapSlot } from './LiveMapSlot';
 

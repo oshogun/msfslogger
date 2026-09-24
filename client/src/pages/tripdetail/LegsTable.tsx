@@ -9,7 +9,7 @@ import { StatusTag } from '../../components/StatusTag';
 import { GHOST_LEG_COLUMNS, GhostLegRow, plannedLegLandingNote } from '../../components/legs';
 import { legColor } from '../../components/maps';
 import { formatDate, formatDistance, formatDuration } from '../../utils/format';
-import type { Flight, PlannedLegWithChildren } from '../../mock/types';
+import type { Flight, PlannedLegWithChildren } from '../../types';
 import { interleaveTripRows } from './interleave';
 import { LEGS_PER_PAGE, type LegsTableProps } from './legsTableProps';
 

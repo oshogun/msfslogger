@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Modal, TextArea, TextInput } from '@carbon/react';
 import { ModalPortal, useLauncherRef } from '../../components/ConfirmModal';
-import type { Flight } from '../../mock/types';
+import type { Flight } from '../../types';
 
 export interface EditFlightModalProps {
   open: boolean;

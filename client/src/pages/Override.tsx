@@ -156,7 +156,7 @@ export function Override() {
   const resisting = phase === 'struggling' || phase === 'releasing';
 
   return (
-    <main className="override-page">
+    <div className="override-page">
       <Tile ref={frameRef} className={`override-frame${on ? ' is-engaged' : ''}`}>
         <div className="override-head">
           <div>
@@ -196,6 +196,6 @@ export function Override() {
         className={`ghost-cursor${resisting ? ' is-auto' : ''}`}
         style={{ left: cursor.x, top: cursor.y }}
       />
-    </main>
+    </div>
   );
 }
