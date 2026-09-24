@@ -1,6 +1,6 @@
 // tests/events.test.ts — GET /api/events: auth (same stack as every other
 // gated route), topic filtering end to end over the hub, the keepalive, and
-// the cleanup-on-close contract T-003's listenerCount() hook exists for.
+// the cleanup-on-close contract that the hub's listenerCount() hook enables.
 //
 // A real HTTP server on an ephemeral port (the tests/ingestCors.test.ts
 // pattern), driven with Node's own http client rather than fetch: an SSE
@@ -283,7 +283,7 @@ describe('GET /api/events — stream limit', () => {
 // see tests/ingestScope.test.ts's OFF_LIST case for /api/status), so a HEAD
 // probe needs a session, not a token, to clear requireAuth. That is an auth
 // question, already covered above; this block isolates the router's own HEAD
-// handling (§3.4 step 1) by mounting it with no auth stack in front.
+// handling: HEAD requests answer with SSE headers but do not subscribe to the hub.
 describe('GET /api/events — HEAD (router behaviour, no auth stack)', () => {
   it('answers the SSE headers with no body and does not subscribe', async () => {
     const hub = new EventHub();

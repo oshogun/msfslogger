@@ -1,5 +1,5 @@
 // tests/eventHub.test.ts — src/eventHub.ts: topic filtering, the cleanup
-// guarantee (T-009 re-checks listenerCount() for leak-free reconnects), and
+// guarantee that reconnects leave no listeners behind (verified by listenerCount()), and
 // publishDeferred coalescing. No mocks: EventHub has no imports besides a
 // type, so it is exercised directly.
 
