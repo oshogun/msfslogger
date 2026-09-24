@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import { StructuredListBody, StructuredListCell, StructuredListRow, StructuredListWrapper, Tag, Tile, Toggle } from '@carbon/react';
+import './device/device.scss';
 
 const STORAGE_KEY = 'msfslogger.device.engaged';
 const SINCE_KEY = 'msfslogger.device.since';
@@ -65,18 +67,25 @@ export function Device() {
     engaged && Math.sin(t / (7 + i * 3) + i) > -0.35
   );
 
+  const readout: [string, string][] = [
+    ['FLUX', flux.toFixed(3)],
+    ['PHASE', `${phase.toFixed(1)}°`],
+    ['MARGIN', margin.toFixed(4)],
+    ['ELAPSED', `${hh}:${mm}:${ss}.${cs}`],
+  ];
+
   return (
-    <main className="device-page">
-      <div className={`device-frame${engaged ? ' is-engaged' : ''}`}>
+    <div className="device-page">
+      <Tile className={`device-frame${engaged ? ' is-engaged' : ''}`}>
         <div className="device-head">
           <div>
-            <div className="device-title">THE DEVICE</div>
+            <h1 className="device-title">THE DEVICE</h1>
             <div className="device-sub">UNIT 0x7F3A · REV C</div>
             <div className="device-sub">NO SERVICEABLE PARTS</div>
           </div>
-          <div className={`device-state${engaged ? ' is-engaged' : ''}`}>
+          <Tag className="device-state" type={engaged ? 'warm-gray' : 'gray'}>
             {engaged ? 'ENGAGED' : 'DORMANT'}
-          </div>
+          </Tag>
         </div>
 
         <div className="device-lamps" aria-hidden="true">
@@ -85,32 +94,36 @@ export function Device() {
           ))}
         </div>
 
-        <button
-          type="button"
-          className={`device-switch${engaged ? ' is-engaged' : ''}`}
-          onClick={toggle}
-          role="switch"
-          aria-checked={engaged}
-          aria-label="The Device"
-        >
-          <span className="device-switch-track">
-            <span className="device-switch-knob" />
-          </span>
-        </button>
+        <div className="device-toggle">
+          <Toggle
+            id="device-switch"
+            labelText=""
+            hideLabel
+            aria-label="The Device"
+            labelA=""
+            labelB=""
+            toggled={engaged}
+            onToggle={toggle}
+          />
+        </div>
 
-        <dl className="device-readout">
-          <div><dt>FLUX</dt><dd>{flux.toFixed(3)}</dd></div>
-          <div><dt>PHASE</dt><dd>{phase.toFixed(1)}°</dd></div>
-          <div><dt>MARGIN</dt><dd>{margin.toFixed(4)}</dd></div>
-          <div><dt>ELAPSED</dt><dd>{hh}:{mm}:{ss}.{cs}</dd></div>
-        </dl>
+        <StructuredListWrapper className="device-readout-list" isCondensed aria-label="Readout">
+          <StructuredListBody>
+            {readout.map(([k, v]) => (
+              <StructuredListRow key={k}>
+                <StructuredListCell head>{k}</StructuredListCell>
+                <StructuredListCell>{v}</StructuredListCell>
+              </StructuredListRow>
+            ))}
+          </StructuredListBody>
+        </StructuredListWrapper>
 
         <div className="device-footer">
           {engaged
             ? 'Do not disengage during transit.'
             : 'Disengaged. Conditions unchanged.'}
         </div>
-      </div>
-    </main>
+      </Tile>
+    </div>
   );
 }

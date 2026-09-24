@@ -5,7 +5,7 @@ import { App } from './App';
 // Bundled rather than loaded from a CDN: the PDF export renders this page
 // headlessly, and a CDN outage would silently produce unstyled, broken maps.
 import 'leaflet/dist/leaflet.css';
-import './index.css';
+import './styles/index.scss';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

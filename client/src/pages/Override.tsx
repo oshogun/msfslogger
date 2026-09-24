@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import { Tag, Tile } from '@carbon/react';
+import './override/override.scss';
 
 type Phase = 'idle' | 'held' | 'struggling' | 'releasing';
 
@@ -154,41 +156,41 @@ export function Override() {
   const resisting = phase === 'struggling' || phase === 'releasing';
 
   return (
-    <main className="device-page override-page">
-      <div ref={frameRef} className={`device-frame${on ? ' is-engaged' : ''}`}>
-        <div className="device-head">
+    <main className="override-page">
+      <Tile ref={frameRef} className={`override-frame${on ? ' is-engaged' : ''}`}>
+        <div className="override-head">
           <div>
-            <div className="device-title">THE OVERRIDE</div>
-            <div className="device-sub">UNIT 0x7F3B · REV A</div>
-            <div className="device-sub">DOES NOT ACCEPT INSTRUCTION</div>
+            <h1 className="override-title">THE OVERRIDE</h1>
+            <div className="override-sub">UNIT 0x7F3B · REV A</div>
+            <div className="override-sub">DOES NOT ACCEPT INSTRUCTION</div>
           </div>
-          <div className={`device-state${on ? ' is-engaged' : ''}${resisting ? ' is-resisting' : ''}`}>
+          <Tag type={resisting ? 'red' : on ? 'green' : 'gray'} size="md">
             {resisting ? 'RESISTING' : on ? 'ENGAGED' : 'DORMANT'}
-          </div>
+          </Tag>
         </div>
 
         <button
           ref={switchRef}
           type="button"
-          className={`device-switch${on ? ' is-engaged' : ''}`}
+          className={`override-switch${on ? ' is-engaged' : ''}`}
           onClick={engage}
           disabled={phase !== 'idle'}
           role="switch"
           aria-checked={on}
           aria-label="The Override"
         >
-          <span className="device-switch-track">
-            <span className="device-switch-knob" />
+          <span className="override-switch-track">
+            <span className="override-switch-knob" />
           </span>
         </button>
 
-        <div className="device-footer">
+        <div className="override-footer">
           {phase === 'held' && 'You are not in control of this.'}
           {phase === 'struggling' && 'Pull as hard as you like.'}
           {phase === 'releasing' && 'It always wins.'}
           {phase === 'idle' && (on ? 'Engaged.' : 'Disengaged.')}
         </div>
-      </div>
+      </Tile>
 
       <div
         className={`ghost-cursor${resisting ? ' is-auto' : ''}`}
