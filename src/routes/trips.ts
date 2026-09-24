@@ -82,6 +82,14 @@ export function createTripsRouter(flightManager: FlightManager): Router {
     if (isNaN(id)) { res.status(400).json({ error: 'Invalid id' }); return; }
     const deleted = deleteTrip(id);
     if (!deleted) { res.status(404).json({ error: 'Not found' }); return; }
+    const inProgressFlightId = flightManager.appState.currentFlightId;
+    if (inProgressFlightId !== null) {
+      try {
+        flightManager.refreshPlannedLegForFlight(inProgressFlightId);
+      } catch (err) {
+        console.warn('[Routes] leg cache refresh after delete failed:', err);
+      }
+    }
     res.json({ deleted: true });
   });
 
