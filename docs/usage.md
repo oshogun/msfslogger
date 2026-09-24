@@ -131,7 +131,7 @@ A simulated ACARS inbox/outbox per flight and per planned leg:
 - Automatic OOOI (Out/Off/On/In) messages and periodic position reports are
   filed by the flight state machine itself, no action needed.
 - **Optional**: link a [SayIntentions.AI](https://www.sayintentions.ai/) pilot
-  API key under Prefiles to enable link/import (flight scope) and send
+  API key under Settings to enable link/import (flight scope) and send
   (flight and planned-leg scope) controls on the ACARS page — importing
   SayIntentions' own AI-ATC/CPDLC transcript into this same thread, and
   sending an on-file PDC into the pilot's live SayIntentions session as a
