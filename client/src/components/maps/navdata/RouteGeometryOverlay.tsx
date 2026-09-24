@@ -1,4 +1,4 @@
-import type { PlannedLegWithChildren } from '../../../mock/types';
+import type { PlannedLegWithChildren } from '../../../types';
 import {
   detailTargets,
   FetchDetailPrompt,
@@ -7,7 +7,7 @@ import {
   RouteGeometryLayer,
   useRouteGeometry,
 } from '../RouteGeometryLayer';
-import { unwrapLonChain } from '../CarbonMap';
+import { unwrapLonChain } from '../../../utils/geo';
 
 /**
  * Child of a FlightMap: fetches the expanded route (SID, enroute, STAR,

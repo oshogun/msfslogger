@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { formatAlt } from '../../utils/format';
-import type { FlightPoint } from '../../mock/types';
+import type { FlightPoint } from '../../types';
 import './AltitudeChart.scss';
 
 interface Props {

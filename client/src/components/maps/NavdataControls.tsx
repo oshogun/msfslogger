@@ -3,11 +3,11 @@ import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Button, Checkbox, InlineLoading, Layer, Tile } from '@carbon/react';
 import { NavdataLayers, NavdataPanes, type NavdataVisibility } from './NavdataLayers';
-import { useNavdataStatus } from './navdata/useNavdataStatus';
-import { useNavdataFeatures, type NavdataFeaturesState } from './navdata/useNavdataFeatures';
-import { requestNavdata, type NavdataKind } from './navdata/navdataApi';
+import { useNavdataStatus } from '../../hooks/useNavdataStatus';
+import { useNavdataFeatures, type NavdataFeaturesState } from '../../hooks/useNavdataFeatures';
+import { requestNavdata, type NavdataKind } from '../../utils/navdataApi';
 import './navdata/navdata.scss';
-import type { FeaturesResponse, NavdataRequestResponse, NavdataStatusResponse } from '../../mock/types';
+import type { FeaturesResponse, NavdataRequestResponse, NavdataStatusResponse } from '../../types';
 
 const KINDS: { kind: NavdataKind; label: string }[] = [
   { kind: 'airports', label: 'Airports' },

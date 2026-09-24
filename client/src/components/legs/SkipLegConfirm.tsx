@@ -1,6 +1,6 @@
 import { InlineNotification, Modal } from '@carbon/react';
 import { ModalPortal, useLauncherRef } from '../ConfirmModal';
-import type { PlannedLegWithChildren } from '../../mock/types';
+import type { PlannedLegWithChildren } from '../../types';
 
 /** Props for {@link SkipLegConfirm}. Controlled by the consuming page. */
 export interface SkipLegConfirmProps {

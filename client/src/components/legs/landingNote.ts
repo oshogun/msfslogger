@@ -1,4 +1,4 @@
-import type { PlannedLeg } from '../../mock/types';
+import type { PlannedLeg } from '../../types';
 import { formatDistance } from '../../utils/format';
 
 /**

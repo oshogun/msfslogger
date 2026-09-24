@@ -4,7 +4,7 @@ import { getFlight } from '../../mock/api';
 import type { FlightPoint } from '../../mock/types';
 import { AltitudeChart } from '../charts/AltitudeChart';
 import { ReplayPanel } from './ReplayPanel';
-import type { ReplaySample } from './replay';
+import type { ReplaySample } from '../../utils/replay';
 
 /** Altitude chart and replay panel over the 600-point mock flight. */
 export function ChartsReplayGallerySection() {

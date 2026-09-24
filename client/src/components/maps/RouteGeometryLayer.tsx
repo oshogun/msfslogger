@@ -2,18 +2,18 @@ import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { Marker, Polyline, Tooltip } from 'react-leaflet';
 import L from 'leaflet';
 import { Button, InlineLoading, Layer, Tile } from '@carbon/react';
-import { useNavdataStatus } from './navdata/useNavdataStatus';
-import { fetchRouteGeometry, requestNavdata } from './navdata/navdataApi';
+import { useNavdataStatus } from '../../hooks/useNavdataStatus';
+import { fetchRouteGeometry, requestNavdata } from '../../utils/navdataApi';
 import { navdataPalette as P } from './navdata/navdataPalette';
 import { formatDistance } from '../../utils/format';
-import { unwrapLonChains } from '../replay/geo';
+import { unwrapLonChains } from '../../utils/geo';
 import './navdata/navdata.scss';
 import type {
   GeometryChain,
   NavdataRequestResponse,
   PlannedLegWithChildren,
   RouteGeometryResponse,
-} from '../../mock/types';
+} from '../../types';
 
 // Same colour family as the planned route on FlightMap and TripMap, so an
 // expanded route still reads as "planned" and never as a flown track.

@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { CircleMarker, Polyline, Tooltip, useMap } from 'react-leaflet';
-import type { JourneyAirport, JourneyLeg } from '../../mock/types';
+import type { JourneyAirport, JourneyLeg } from '../../types';
 import { EmptyState } from '../EmptyState';
-import { CarbonMap, useFitBoundsOnChange } from './CarbonMap';
+import { useFitBoundsOnChange } from '../../hooks/useFitBoundsOnChange';
+import { CarbonMap } from './CarbonMap';
 import { palette } from './palette';
 import { airportPositions, journeyLegChains, sortedJourneyLegs, type LatLng } from './trip/chains';
 

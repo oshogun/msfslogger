@@ -1,6 +1,6 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { Button, InlineNotification, Select, SelectItem, TableCell, TableRow } from '@carbon/react';
-import type { Flight, PlannedLegWithChildren } from '../../mock/types';
+import type { Flight, PlannedLegWithChildren } from '../../types';
 import { StatusTag } from '../StatusTag';
 import { formatAlt, formatDate, formatDistance } from '../../utils/format';
 import { plannedLegLandingNote } from './landingNote';

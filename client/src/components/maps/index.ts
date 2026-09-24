@@ -1,11 +1,12 @@
-export { CarbonMap, TILE_DARK_FILTER, unwrapLonChain, useFitBoundsOnChange } from './CarbonMap';
+export { CarbonMap, TILE_DARK_FILTER } from './CarbonMap';
 export type { CarbonMapProps } from './CarbonMap';
+export { unwrapLonChain } from '../../utils/geo';
+export { useFitBoundsOnChange } from '../../hooks/useFitBoundsOnChange';
 export { FlightMap } from './FlightMap';
 export type { FlightMapProps } from './FlightMap';
 export { LiveMap } from './LiveMap';
 export type { LiveMapProps } from './LiveMap';
 export { palette, LEG_COLORS, legColor } from './palette';
-export { MapsGallerySection } from './MapsGallerySection';
 export { TripMap } from './TripMap';
 export type { TripMapProps, LegOverlay } from './TripMap';
 export { JourneyMap } from './JourneyMap';
@@ -21,4 +22,3 @@ export {
   geometryHasChains,
 } from './RouteGeometryLayer';
 export { RouteGeometryOverlay } from './navdata/RouteGeometryOverlay';
-export { NavdataGallerySection } from './navdata/NavdataGallerySection';

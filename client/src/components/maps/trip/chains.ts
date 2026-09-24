@@ -1,38 +1,7 @@
-import type { Flight, JourneyLeg, PlannedLegWithChildren } from '../../../mock/types';
+import type { Flight, JourneyLeg, PlannedLegWithChildren } from '../../../types';
+import { unwrapLonChains } from '../../../utils/geo';
 
 export type LatLng = [number, number];
-
-/**
- * Unwraps longitudes across an ordered group of chains as if they were one
- * continuous route, while still returning one array per input chain.
- *
- * Unwrapping each leg on its own, anchored to its own first point, lets leg
- * N+1 land 360 degrees from where leg N ended whenever an odd number of
- * antimeridian crossings lies between them. Threading a running reference
- * longitude through every chain keeps the whole trip in one reference frame.
- */
-export function unwrapLonChains(chains: LatLng[][]): LatLng[][] {
-  const out: LatLng[][] = [];
-  let prevLon: number | null = null;
-  for (const chain of chains) {
-    if (chain.length === 0) {
-      out.push(chain);
-      continue;
-    }
-    const unwrapped: LatLng[] = [];
-    for (const [lat, lon0] of chain) {
-      let lon = lon0;
-      if (prevLon !== null) {
-        while (lon - prevLon > 180) lon -= 360;
-        while (lon - prevLon < -180) lon += 360;
-      }
-      unwrapped.push([lat, lon]);
-      prevLon = lon;
-    }
-    out.push(unwrapped);
-  }
-  return out;
-}
 
 export function sortedPlannedLegs(plannedLegs: PlannedLegWithChildren[]): PlannedLegWithChildren[] {
   return plannedLegs.slice().sort((a, b) => a.seq - b.seq);

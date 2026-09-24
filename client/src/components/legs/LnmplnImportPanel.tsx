@@ -1,5 +1,5 @@
 import { FileUploaderButton, InlineLoading, InlineNotification } from '@carbon/react';
-import type { PlannedLegImportResponse } from '../../mock/types';
+import type { PlannedLegImportResponse } from '../../types';
 
 /** Props for {@link LnmplnImportPanel}. The page performs the upload and passes the outcome back. */
 export interface LnmplnImportPanelProps {

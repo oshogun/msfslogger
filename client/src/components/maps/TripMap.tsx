@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useRef, type ReactNode } from 'react';
 import { Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import type { Flight, PlannedLegWithChildren } from '../../mock/types';
+import type { Flight, PlannedLegWithChildren } from '../../types';
 import { formatDistance } from '../../utils/format';
 import { EmptyState } from '../EmptyState';
-import { CarbonMap, useFitBoundsOnChange } from './CarbonMap';
+import { useFitBoundsOnChange } from '../../hooks/useFitBoundsOnChange';
+import { CarbonMap } from './CarbonMap';
 import { LEG_COLORS, palette } from './palette';
 import { flightChains, plannedLegChains, sortedPlannedLegs, type LatLng } from './trip/chains';
 

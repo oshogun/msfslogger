@@ -1,6 +1,6 @@
 import { Link as RouterLink } from 'react-router-dom';
 import { Button, InlineLoading, InlineNotification, Link } from '@carbon/react';
-import type { SimbriefImportResult } from '../../mock/types';
+import type { SimbriefImportResult } from '../../types';
 
 /**
  * Props for {@link SimbriefImportPanel}. The user id itself is edited on the

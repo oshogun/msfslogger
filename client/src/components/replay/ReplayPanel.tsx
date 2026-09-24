@@ -12,12 +12,12 @@ import {
   Tag,
 } from '@carbon/react';
 import { Pause, Play, Restart } from '@carbon/icons-react';
-import type { FlightPoint } from '../../mock/types';
+import type { FlightPoint } from '../../types';
 import { formatAlt, formatDuration, formatSpeed } from '../../utils/format';
-import { buildTimeline, sample, DEFAULT_SPEED, SPEED_STEPS } from './replay';
-import type { ReplaySample, Timeline } from './replay';
-import { useReplayClock } from './useReplayClock';
-import type { FrameScheduler, TickReason } from './useReplayClock';
+import { buildTimeline, sample, DEFAULT_SPEED, SPEED_STEPS } from '../../utils/replay';
+import type { ReplaySample, Timeline } from '../../utils/replay';
+import { useReplayClock } from '../../hooks/useReplayClock';
+import type { FrameScheduler, TickReason } from '../../hooks/useReplayClock';
 import './ReplayPanel.scss';
 
 export interface ReplayPanelProps {
@@ -242,6 +242,12 @@ export function ReplayPanel({ points, id, onPosition, onFollowChange, scheduler 
         />
       </div>
 
+      {/*
+        Every cell below carries a `data-field` matching its entry in
+        READOUT_COLUMNS. Two of them, data-field="point" and data-field="elapsed",
+        are also the browser test's selectors for the replay readout, so those
+        two field names must never change.
+      */}
       <div className="replay-readout" ref={readoutRef}>
         {READOUT_COLUMNS.map((col, i) => (
           <StructuredListWrapper key={i} isCondensed className="replay-readout-list" aria-label="Replay readout">

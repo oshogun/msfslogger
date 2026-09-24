@@ -1,9 +1,11 @@
 import { Fragment, type ReactNode } from 'react';
 import { Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import type { FlightPoint, PlannedLegWithChildren } from '../../mock/types';
+import type { FlightPoint, PlannedLegWithChildren } from '../../types';
 import { formatDistance } from '../../utils/format';
-import { CarbonMap, unwrapLonChain, useFitBoundsOnChange } from './CarbonMap';
+import { unwrapLonChain } from '../../utils/geo';
+import { useFitBoundsOnChange } from '../../hooks/useFitBoundsOnChange';
+import { CarbonMap } from './CarbonMap';
 import { palette } from './palette';
 
 const dotIcon = (color: string) =>

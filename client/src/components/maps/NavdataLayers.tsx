@@ -1,8 +1,8 @@
 import { Fragment, useMemo, type ReactNode } from 'react';
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { unwrapLonChain } from '../replay/geo';
-import type { AirportTier, FeatureAirport, FeaturesResponse } from '../../mock/types';
+import { unwrapLonChain } from '../../utils/geo';
+import type { AirportTier, FeatureAirport, FeaturesResponse } from '../../types';
 import { navdataPalette as P } from './navdata/navdataPalette';
 
 export const NAVDATA_PANE = 'navdata';

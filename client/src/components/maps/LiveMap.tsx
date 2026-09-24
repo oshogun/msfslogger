@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { getFlight } from '../../mock/api';
-import type { Status, TrafficObject } from '../../mock/types';
+import { getFlight } from '../../api';
+import type { Status, TrafficObject } from '../../types';
 import { CarbonMap } from './CarbonMap';
 import { palette } from './palette';
 
