@@ -51,6 +51,13 @@ the pages directly, still gated by Reviewer) and its own full-rebuild vs.
 targeted-refresh split. Do not invent an ad-hoc docs process inline; do not
 route it through `planner`/`designer`/the implementer roles.
 
+**Retrospectives on the workflow itself**: "analyze the last session", "find
+the inefficiencies", "improve how you work". Use
+**[`/workflow-retro`](.claude/skills/workflow-retro/SKILL.md)**. It is tier 1
+(no run, no sub-agents). It measures cost from notifications, reviews and git
+rather than memory. It puts each fix in the file of the agent that makes the
+decision.
+
 **CI/workflow work (`.github/workflows/**`)** is different from docs: `devops`
 already owns it, so it routes through the normal three tiers above. Load
 **[`/update-ci`](.claude/skills/update-ci/SKILL.md)** anyway before touching a
@@ -142,7 +149,9 @@ bigger model.
 
 Everything durable goes under `.claude/runs/<run-id>/` — layout and conventions
 in [.claude/runs/README.md](.claude/runs/README.md).
-`.claude/runs/2026-09-04-lnmpln-trip-planner/` is a complete worked example.
+Past runs are no longer kept in the tree. They are archived under the git tag
+`runs-archive`: `git show runs-archive:.claude/runs/2026-09-04-lnmpln-trip-planner/design.md`
+is a complete worked example (list one with `git ls-tree -r --name-only runs-archive -- .claude/runs/<run-id>`).
 
 Read them with [.claude/tools/ctx.sh](.claude/tools/ctx.sh), not `cat`:
 `ctx.sh map <run-id>` for the index, then `task`, `phase`, `design` or `frozen`
@@ -158,7 +167,7 @@ ICAO/CSV parsing (`src/airports.ts`), and `.lnmpln` route parsing (`src/lnmpln.t
 It never touches `flights.db`, the network, or the live server — `./db` and
 `./airports` are mocked (`tests/helpers/index.ts`), and `.lnmpln` fixtures are
 read read-only from `samples/lnmpln/`. `npm run test:watch` for watch mode,
-`npm run test:types` to typecheck `tests/**`. See `.claude/runs/2026-09-09-vitest-unit-tests/`
+`npm run test:types` to typecheck `tests/**`. See `git show runs-archive:.claude/runs/2026-09-09-vitest-unit-tests/design.md`
 for the design (mock shapes, fake-clock pattern, fixture conventions) and worked
 example.
 

@@ -80,6 +80,25 @@ design violation, a regression, a security hole. Everything else is a
 non-blocking follow-up recorded at the end of the review, and does not send the
 task back.
 
+Tag every non-blocking finding with one of:
+- **`fold`**: it stays inside files the run already touches, is under about 30
+  lines, and needs no design decision. The Orchestrator attaches it to the
+  owner's next task, so write it as a self-contained instruction that
+  implementer can act on cold.
+- **`follow-up`**: anything else. It goes to the run report.
+
+See `.claude/agents.md` § Rules.
+
+**A command addressed to the user** is part of the diff. This covers a deploy,
+rollback or restart line in a report, a README, the docs or `intake.md`. Check
+it against reality:
+- Read any script it calls. Confirm the working directory it assumes, and
+  that the script does what the command relies on (installs, builds, stops,
+  starts).
+- Dry-run whatever is safe to dry-run.
+
+An unexecutable command in a user-facing report is a blocking finding.
+
 ## Output
 
 `.claude/runs/<run-id>/reviews/<phase-or-task>.md` — verdict at the top, then

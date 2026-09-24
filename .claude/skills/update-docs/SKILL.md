@@ -175,7 +175,7 @@ consistency review, or the agent will apply the wrong lens. Give it:
 
 - The acceptance criteria the docs must meet (adapt from the spec that
   triggered this if there is one, otherwise the shape in
-  `.claude/runs/2026-09-17-docs-overhaul/intake.md`'s Success Criteria
+  `git show runs-archive:.claude/runs/2026-09-17-docs-overhaul/intake.md`'s Success Criteria
   section is a good default: README concise + links out, index links
   everything, required pages present, commands/claims verified against
   source, no broken links, a new contributor can get running from
@@ -253,6 +253,23 @@ actually changed.
    identifiers (route paths, env var names, table names) across `docs/` —
    if a page mentions the old shape, it needs updating regardless of which
    bucket above it falls in.
+
+   **Then grep for what moved, not just for identifiers.** An identifier grep
+   finds `components/ReplayPanel`. It won't find a sentence that is still true
+   of the code but false for the user. In `2026-09-23-carbon-migration`, the
+   docs said "SayIntentions API key under Prefiles" after the key had moved
+   to `/settings`, and neither the Orchestrator nor the docs Reviewer caught
+   it. The frozen decisions and accepted deviations in the triggering run's
+   `intake.md` list every user-visible move, rename and removal. So:
+   - For each item, grep `docs/` and `README.md` for the **old** wording:
+     the old page name next to the feature ("under Prefiles"), the old label
+     ("User ID", "Replay flight"), the removed thing ("gallery", "?fail=").
+   - Put that list of phrases in the Reviewer envelope too.
+
+   **Re-verify every sentence in a paragraph you edit**, not only the words
+   you changed. A retained sentence ("uses Leaflet's SVG renderer") sits
+   inside an edit that makes it look freshly verified. In the same run, one
+   such sentence was false and was only caught by chance.
 
 3. **Spawn a research agent only for pages that need one.** If the change is
    small (one new route, one new env var), read the source yourself and edit

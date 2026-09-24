@@ -199,7 +199,7 @@ Run artifacts that are meant to survive go under `.claude/runs/<run-id>/` — se
 fixtures are read read-only from `samples/lnmpln/`. `npm run test:watch` for
 watch mode, `npm run test:types` to typecheck `tests/**` (not covered by the
 main `tsconfig.json`/`npm run build`). Full contract in
-`.claude/runs/2026-09-09-vitest-unit-tests/design.md`.
+`git show runs-archive:.claude/runs/2026-09-09-vitest-unit-tests/design.md`.
 
 Beyond unit tests, verification is: `npx tsc` / `npm run build`, `curl` against
 a scratch server, `better-sqlite3` queries, and purpose-built `ts-node` CLI

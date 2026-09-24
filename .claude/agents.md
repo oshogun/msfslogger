@@ -166,6 +166,39 @@ For tier-3 work only — see Cost discipline rule 6.
 ## Rules
 
 - One task, one agent, one owner at a time.
+- **Nothing is frozen until it has been executed.** Before a command or
+  standing rule goes into `intake.md`, `design.md`, `plan.json`,
+  `ENVIRONMENT.md` or a user-facing report, run it or dry-run it. If it runs a
+  script, read that script. Write the proving command next to it. This applies
+  to deploy, rollback and restart commands aimed at the user, to environment
+  rules every agent will follow, and to the scratch paths in envelopes. In
+  `2026-09-23-carbon-migration`, three unexecuted items slipped through:
+  - The plan's deploy note `cd client && npm ci && ./start.sh -r -d` was
+    carried verbatim through the plan and three reviews. It could never work:
+    `start.sh` lives at the repo root and installed nothing.
+  - A new `TMPDIR` rule broke the PDF e2e test, because Chrome's socket path
+    has a 107-character limit. A reviewer lost time diagnosing it.
+  - `start.sh -r` stopped the live server before building, so the user
+    watched it be down for the whole build.
+
+  A reviewer who sees a user-facing command in a report checks it the same
+  way (see `agents/reviewer.md`).
+- **Non-blocking findings are folded in, not given their own round.** The
+  Reviewer tags each non-blocking finding `fold` or `follow-up`:
+  - `fold`: the change stays inside files the run already touches, is under
+    about 30 lines, and needs no design decision.
+  - `follow-up`: anything else.
+
+  The Orchestrator appends `fold` items verbatim to the envelope of the next
+  task already planned for the same implementer role, and that task's review
+  checks them. When no such task remains, all outstanding `fold` items become
+  one fix task. Its review re-runs only the suites that cover the changed
+  files, plus the diff. The final review is the one place where full suites
+  run twice. `follow-up` items go to the run report. In
+  `2026-09-23-carbon-migration`, a dedicated fix task plus a full re-review
+  for six phase-3 test findings cost about 250k tokens and 33 minutes. Four
+  of the six were test weakenings that the implementer's self-audit (see the
+  implementer role files) now catches before hand-back.
 - **Implementation is always sonnet; judgement roles may spend opus.** Credits
   are finite, and implementation is where the workflow spawns the most agents
   (one per task, sometimes several per run) — so that's where the model floor

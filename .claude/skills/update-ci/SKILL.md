@@ -94,7 +94,7 @@ If the change adds a job needing its own scratch resource (a server, a
 seeded database), `client/e2e/scratch-server.sh` from this run is a working
 example of a provisioning-and-teardown script written to be run identically
 by a human locally and by a CI job — look at it and
-`.claude/runs/2026-09-17-frontend-integration-tests/design.md` §4 before
+`git show runs-archive:.claude/runs/2026-09-17-frontend-integration-tests/design.md` §4 before
 inventing a new pattern.
 
 Confirm afterward: the live checkout's `client/dist/index.html` and

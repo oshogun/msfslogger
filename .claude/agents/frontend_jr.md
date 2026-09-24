@@ -81,6 +81,27 @@ Do not report `done` on a criterion you did not execute. A criterion you could
 not check is named in the summary as unverified, with the reason — the Reviewer
 re-runs your evidence and will find the gap anyway.
 
+**Self-audit the diff before you hand back.** The Reviewer runs these same
+checks, and anything it finds here costs a whole extra round, because
+`2026-09-23-carbon-migration` spent about 250k tokens on four findings these
+greps would have caught. Run them in the tree, and fix what they print or
+justify it in `risks`:
+
+```bash
+# design/task/finding ids leaking into repo text (style rule): must print nothing
+git diff -U0 | grep -nE '^\+.*\b(RK|T|N|E)-[0-9]+[a-z]?\b|^\+.*§ ?[0-9]'
+# assertions removed from tests: every removed expect/assert needs a replacement
+git diff -U0 -- '*.test.*' '*.spec.*' | grep -cE '^-.*\b(expect|assert)\b'
+git diff -U0 -- '*.test.*' '*.spec.*' | grep -cE '^\+.*\b(expect|assert)\b'
+# new skips, focused tests or longer timeouts: must print nothing
+git diff -U0 | grep -nE '^\+.*(\.(skip|only)\(|timeout:? *[0-9_]{4,})'
+```
+
+If a test's target changed, update the assertion to the new value. Don't
+delete it. Don't loosen an exact match to a substring or a weaker check
+(`toHaveText('2')` → `toContainText('2')`). If you replaced a check with a
+different one, name both in the report.
+
 **Keep the report under ~150 lines.** The Reviewer re-runs your work rather than
 reading your transcript, so pasting one is waste it pays for. Per criterion: the
 command, and the line of output that settles it — a clean build is one line, not
