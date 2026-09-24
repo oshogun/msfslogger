@@ -11,7 +11,7 @@ test('a logged-in visitor lands on the flight log, not the login form', async ({
 
   const main = page.getByRole('main');
   await expect(main).toBeVisible();
-  await expect(main.getByRole('heading', { name: 'Flight Log' })).toBeVisible();
+  await expect(main.getByRole('heading', { name: 'Home' })).toBeVisible();
 
   await expect(page).not.toHaveURL(/\/login$/);
 });

@@ -1,130 +1,89 @@
 import { describe, it, expect } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { mockFetchRoutes } from '../test/mockFetch';
 import type { ResponseTuple } from '../test/mockFetch';
+import { plannedLegListItemFixture } from '../test/fixtures';
 import { Prefiles } from './Prefiles';
 
 const SESSION_ROUTE: ResponseTuple = [200, { authenticated: true, user: { username: 'e2e' } }];
-const LEGS_ROUTE: ResponseTuple = [200, []];
-const SIMBRIEF_ROUTE: ResponseTuple = [200, { simbrief_user_id: null }];
+const UNSET_SIMBRIEF: ResponseTuple = [200, { simbrief_user_id: null }];
+const SET_SIMBRIEF: ResponseTuple = [200, { simbrief_user_id: 'e2e-simbrief-id' }];
 
-describe('Prefiles - SayIntentions API key field', () => {
-  it('renders "not set" when GET returns no key', async () => {
-    const sayintentionsRoute: ResponseTuple = [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }];
+describe('Prefiles', () => {
+  it('renders the empty state when no planned legs exist', async () => {
     mockFetchRoutes({
       '/api/auth/session': SESSION_ROUTE,
-      '/api/planned-legs': LEGS_ROUTE,
-      '/api/settings/simbrief': SIMBRIEF_ROUTE,
-      '/api/settings/sayintentions': sayintentionsRoute,
+      '/api/planned-legs': [200, []],
+      '/api/settings/simbrief': UNSET_SIMBRIEF,
     });
 
     renderWithProviders(<Prefiles />);
 
-    await waitFor(() => expect(screen.getByText('No key saved')).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'Prefiles' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('No planned legs yet.')).toBeInTheDocument());
   });
 
-  it('renders the masked value when GET returns a set key', async () => {
-    const sayintentionsRoute: ResponseTuple = [200, { sayintentions_api_key_set: true, sayintentions_api_key_masked: '••••••••' }];
+  it('renders the load-error banner when the planned-legs fetch fails', async () => {
     mockFetchRoutes({
       '/api/auth/session': SESSION_ROUTE,
-      '/api/planned-legs': LEGS_ROUTE,
-      '/api/settings/simbrief': SIMBRIEF_ROUTE,
-      '/api/settings/sayintentions': sayintentionsRoute,
+      '/api/planned-legs': [500, { error: 'Database is locked' }],
+      '/api/settings/simbrief': UNSET_SIMBRIEF,
     });
 
     renderWithProviders(<Prefiles />);
 
-    await waitFor(() => expect(screen.getByText('Saved: ••••••••')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Failed to load planned legs')).toBeInTheDocument());
+    expect(screen.getByText('Database is locked')).toBeInTheDocument();
   });
 
-  it('saves and clears input, showing masked value after successful PUT', async () => {
-    const user = userEvent.setup();
-    let putCallCount = 0;
-    const sayintentionsRoute = (init?: RequestInit): ResponseTuple => {
-      if (init?.method === 'PUT') {
-        putCallCount++;
-        if (putCallCount === 1) {
-          // First PUT: save the key
-          return [200, { sayintentions_api_key_set: true, sayintentions_api_key_masked: '••••••••' }];
-        }
-      }
-      // GET or initial state
-      return [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }];
-    };
-
+  it('lists a planned leg under its trip, once the fetch resolves', async () => {
     mockFetchRoutes({
       '/api/auth/session': SESSION_ROUTE,
-      '/api/planned-legs': LEGS_ROUTE,
-      '/api/settings/simbrief': SIMBRIEF_ROUTE,
-      '/api/settings/sayintentions': { GET: sayintentionsRoute, PUT: sayintentionsRoute },
+      '/api/planned-legs': [200, [plannedLegListItemFixture]],
+      '/api/settings/simbrief': UNSET_SIMBRIEF,
     });
 
     renderWithProviders(<Prefiles />);
 
-    // Wait for initial "not set" state
-    await waitFor(() => expect(screen.getByText('No key saved')).toBeInTheDocument());
-
-    // Type a key in the input
-    const input = screen.getByLabelText('SayIntentions API Key') as HTMLInputElement;
-    expect(input.type).toBe('password'); // Verify it's a password input
-    await user.type(input, 'si_1a2b3c4d5e6f7g8h9test');
-
-    // Click Save — scoped to this section since the SimBrief field above has
-    // its own identically-labelled "Save" button.
-    const sayintentionsSection = screen.getByText('SayIntentions').closest('.simbrief-import-section') as HTMLElement;
-    const saveButton = within(sayintentionsSection).getByRole('button', { name: 'Save' });
-    await user.click(saveButton);
-
-    // Wait for the masked value to appear and input to be cleared
-    await waitFor(() => {
-      expect(screen.getByText('Saved: ••••••••')).toBeInTheDocument();
-      expect(input.value).toBe('');
-    });
+    await waitFor(() => expect(screen.getByTestId('legs-table')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: plannedLegListItemFixture.trip_name! })).toBeInTheDocument();
   });
 
-  it('renders error without crashing the page when PUT fails', async () => {
-    const user = userEvent.setup();
-    const errorMessage = 'A SayIntentions API key must be 8 to 200 characters with no spaces — copy it from your SayIntentions account page.';
-    const sayintentionsRoute = (init?: RequestInit): ResponseTuple => {
-      if (init?.method === 'PUT') {
-        return [400, { error: errorMessage, code: 'INVALID_API_KEY' }];
-      }
-      return [200, { sayintentions_api_key_set: false, sayintentions_api_key_masked: null }];
-    };
+  describe('SimBrief import action', () => {
+    it('is disabled and links to Settings when no SimBrief user id is saved', async () => {
+      mockFetchRoutes({
+        '/api/auth/session': SESSION_ROUTE,
+        '/api/planned-legs': [200, []],
+        '/api/settings/simbrief': UNSET_SIMBRIEF,
+      });
 
-    mockFetchRoutes({
-      '/api/auth/session': SESSION_ROUTE,
-      '/api/planned-legs': LEGS_ROUTE,
-      '/api/settings/simbrief': SIMBRIEF_ROUTE,
-      '/api/settings/sayintentions': { GET: sayintentionsRoute, PUT: sayintentionsRoute },
+      renderWithProviders(<Prefiles />);
+
+      const importButton = await screen.findByRole('button', { name: 'Import from SimBrief' });
+      await waitFor(() => expect(importButton).toBeDisabled());
+      expect(screen.getByRole('link', { name: 'Set it in Settings' })).toHaveAttribute('href', '/settings');
     });
 
-    renderWithProviders(<Prefiles />);
+    it('imports a leg and shows the success banner once a SimBrief user id is saved', async () => {
+      const user = userEvent.setup();
+      mockFetchRoutes({
+        '/api/auth/session': SESSION_ROUTE,
+        '/api/planned-legs': [200, []],
+        '/api/settings/simbrief': SET_SIMBRIEF,
+        '/api/planned-legs/simbrief': [200, {
+          result: { status: 'imported', label: 'EETN → ESSA', warnings: [] },
+        }],
+      });
 
-    // Wait for initial state
-    await waitFor(() => expect(screen.getByText('No key saved')).toBeInTheDocument());
+      renderWithProviders(<Prefiles />);
 
-    // Type an invalid key
-    const input = screen.getByLabelText('SayIntentions API Key') as HTMLInputElement;
-    await user.type(input, 'short');
+      const importButton = await screen.findByRole('button', { name: 'Import from SimBrief' });
+      await waitFor(() => expect(importButton).toBeEnabled());
+      await user.click(importButton);
 
-    // Click Save — scoped to this section since the SimBrief field above has
-    // its own identically-labelled "Save" button.
-    const sayintentionsSection = screen.getByText('SayIntentions').closest('.simbrief-import-section') as HTMLElement;
-    const saveButton = within(sayintentionsSection).getByRole('button', { name: 'Save' });
-    await user.click(saveButton);
-
-    // Wait for error to appear
-    await waitFor(() => expect(screen.getByText(errorMessage)).toBeInTheDocument());
-
-    // Verify the page is still functional: the heading is still there
-    expect(screen.getByRole('heading', { name: 'Prefiles' })).toBeInTheDocument();
-
-    // Verify the input still has the user's text (not reverted)
-    expect(input.value).toBe('short');
+      await waitFor(() => expect(screen.getByText('Imported EETN → ESSA as a new planned leg.')).toBeInTheDocument());
+    });
   });
 });

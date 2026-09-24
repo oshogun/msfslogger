@@ -63,29 +63,46 @@ for every environment variable.
 
 ### `client/` — web UI
 
-React 18 + Vite + `react-router-dom` (browser history routing) +
-`react-leaflet`/Leaflet for all maps (tiles from the public OpenStreetMap
-tile server). Built to `client/dist/`, which the server serves at the same
-origin — the client has **no configurable API base URL**; every request is a
-bare relative `/api/...` path and depends on same-origin cookies. In dev,
-Vite's own dev server proxies `/api` to the backend on port 3000.
+React 18 + Vite + `react-router-dom` (browser history routing), styled with
+IBM's [Carbon Design System](https://carbondesignsystem.com/) (`@carbon/react`,
+the dark **Gray 100** theme, compiled from `client/src/styles/index.scss`) and
+`react-leaflet`/Leaflet for all maps (tiles from the public OpenStreetMap tile
+server, darkened by a CSS filter to sit in the theme). Built to `client/dist/`,
+which the server serves at the same origin — the client has **no configurable
+API base URL**; every request is a bare relative `/api/...` path and depends on
+same-origin cookies. In dev, Vite's own dev server proxies `/api` to the backend
+on port 3000.
 
-Auth is a `SessionProvider` React context that calls `GET /api/auth/session`
-once on load; "live" data (position, status, AI traffic) comes from
-`useStatus()` polling `GET /api/status` (1s while flying, 3s otherwise) — not
-a WebSocket or SSE connection.
+`client/src/main.tsx` splits the bundle in two: a path starting `/print/` loads
+`client/src/print/entry.tsx` (the headless PDF-export pages — plain CSS in
+`print/print.css`, a light document, no Carbon), anything else loads
+`appEntry.tsx` (the Carbon app). CI's `npm run check:print-chunk`
+(`client/scripts/check-print-chunk.mjs`) fails the build if a Carbon or app
+module leaks into the print chunk.
 
-Pages: `Home` (dashboard), `AllFlights`, `Prefiles` (planned legs), `FlightDetail`,
-`TripDetail`, `AcarsMessages` (shared by flight- and leg-scoped threads),
-`Login`, plus headless `PrintFlight`/`PrintTrip` routes that exist purely as
-the render target for server-side PDF export, and two standalone easter-egg
-pages (`Device`, `Override`). See [usage.md](usage.md) for what each page is
-for.
+Auth is a `SessionProvider` context (`client/src/shell/SessionContext.tsx`)
+that calls `GET /api/auth/session` once on load; any `401` from the API layer
+(`client/src/api/*`) expires the session and sends the browser to `/login`.
+"Live" data (position, status, AI traffic) comes from `useStatus()` polling
+`GET /api/status` (1s while flying, 3s otherwise) — not a WebSocket or SSE
+connection — and feeds the status tag in the header. The side navigation's
+trip/flight tree (`client/src/shell/useNavTree.ts`) reloads after any mutation
+made through the API layer, on route change, every 30 s, and when the tab
+becomes visible again.
 
-**Flight replay** is entirely client-side. `FlightDetail` renders a
-`ReplayPanel` (its own Leaflet map, separate from `FlightMap`, which the print
-routes share and which replay does not touch) from the full track that
-`GET /api/flights/:id` already returns. Three pieces, each independently
+Pages (`client/src/pages/`): `Home` (dashboard), `AllFlights`, `Prefiles`
+(planned legs), `FlightDetail`, `TripDetail`, `AcarsMessages` (shared by
+flight- and leg-scoped threads), `Settings` (SimBrief pilot ID, SayIntentions
+key), `Login`, and two standalone easter-egg pages (`Device`, `Override`). The
+headless `PrintFlight`/`PrintTrip` routes live in `client/src/print/` and exist
+purely as the render target for server-side PDF export. See [usage.md](usage.md)
+for what each page is for.
+
+**Flight replay** is entirely client-side. `FlightDetail`'s **Replay**
+tab renders a `ReplayPanel` under the flight's own map and drives an aircraft
+marker on that map (`client/src/pages/flightdetail/ReplayMarker.tsx`), from the
+full track that `GET /api/flights/:id` already returns. The print pages have
+their own map components and are untouched by replay. Three pieces, each independently
 testable:
 
 - `client/src/utils/replay.ts` — a pure engine (no React or Leaflet):
@@ -97,10 +114,10 @@ testable:
 - `client/src/hooks/useReplayClock.ts` — one `requestAnimationFrame` loop holding
   virtual time in a ref (per-frame advance clamped to 0.25 s), with an injectable
   scheduler for tests.
-- `client/src/components/ReplayPanel.tsx` — moves the aircraft marker directly
-  with `setLatLng` rather than through React state, and writes the readout and
-  scrubber at no more than 10 Hz, so the map does not re-render per frame. It
-  uses Leaflet's SVG renderer (`preferCanvas={false}`) rather than canvas.
+- `client/src/components/replay/ReplayPanel.tsx` + `pages/flightdetail/ReplayMarker.tsx` — the
+  marker is moved directly with `setLatLng` rather than through React state,
+  and the panel writes the readout and scrubber at no more than 10 Hz
+  (`UI_INTERVAL_MS` = 100), so the map does not re-render per frame.
 
 ### `agent/` — Windows SimConnect agent
 

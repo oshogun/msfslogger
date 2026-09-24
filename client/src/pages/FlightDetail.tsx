@@ -1,64 +1,55 @@
-import { useState, useEffect, useRef } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import { FlightMap } from '../components/FlightMap';
-import { useRouteGeometry } from '../components/RouteGeometryLayer';
-import { AltitudeChart } from '../components/AltitudeChart';
-import { ReplayPanel } from '../components/ReplayPanel';
-import { StatsGrid } from '../components/StatsGrid';
-import { plannedLegBadge, plannedLegLandingNote } from '../components/PlannedLegRows';
-import { apiFetch, downloadPdf, downloadKml } from '../utils/api';
-import { formatDate, formatDuration, formatDistance, formatAlt, formatSpeed, coordStr } from '../utils/format';
-import type { Flight, PlannedLegWithChildren, Trip } from '../types';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import {
+  Button, Checkbox, InlineLoading, InlineNotification, Link,
+  Tab, TabList, TabPanel, TabPanels, Tabs, Tile,
+} from '@carbon/react';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { PageHeader } from '../components/PageHeader';
+import { StatTiles } from '../components/StatTiles';
+import { AltitudeChart } from '../components/charts';
+import { FlightMap, NavdataOverlay, RouteGeometryOverlay } from '../components/maps';
+import { ReplayPanel } from '../components/replay';
+import {
+  attachFlightPlan, deleteFlight, getFlight, getPlannedLeg, linkFlightToLeg, listTrips, patchFlight,
+  removeFlightPlan, setFlightPlannedLegStatus,
+} from '../api';
+import type { Flight, PlannedLegWithChildren } from '../types';
+import { downloadKml, downloadPdf, UnauthorizedError } from '../utils/api';
+import { formatAlt, formatDate, formatDistance, formatDuration, formatSpeed } from '../utils/format';
+import { EditFlightModal } from './flightdetail/EditFlightModal';
+import { FlightPlanSection } from './flightdetail/FlightPlanSection';
+import { PlannedLegSection } from './flightdetail/PlannedLegSection';
+import { newReplayBridge, ReplayMarker, TrackOnTop } from './flightdetail/ReplayMarker';
 
-/**
- * The three procedure lines rendered verbatim, e.g.
- * "SID WESLA5 · 28L · SUSEY" / "STAR IRNMN2 · 24R · BURGL" / "APP KLAX24R · 24R".
- * Where approach_type is CUSTOM the name is a synthesized label rather than a
- * published procedure, so the line says so rather than presenting it
- * as a real fix.
- */
-function procedureLine(label: string, parts: (string | null)[]): string {
-  return `${label} ${parts.filter((p): p is string => !!p).join(' · ')}`;
-}
+type View = 'track' | 'replay';
+const VIEW_LABEL: Record<View, string> = { track: 'Track', replay: 'Replay' };
 
-function procedureLines(leg: PlannedLegWithChildren): string[] {
-  const lines: string[] = [];
-  if (leg.sid_name) {
-    lines.push(procedureLine('SID', [leg.sid_name, leg.sid_runway, leg.sid_transition]));
-  }
-  if (leg.star_name) {
-    lines.push(procedureLine('STAR', [leg.star_name, leg.star_runway, leg.star_transition]));
-  }
-  if (leg.approach_name) {
-    let line = procedureLine('APP', [leg.approach_name, leg.approach_runway, leg.approach_transition]);
-    if (leg.approach_type === 'CUSTOM') line += ' (custom — not a published procedure)';
-    lines.push(line);
-  }
-  return lines;
-}
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const coordStr = (lat: number | null, lon: number | null) =>
+  lat == null || lon == null ? '—' : `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+
+type Confirm = null | 'delete' | 'unlink' | 'removePlan';
 
 export function FlightDetail() {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id: string }>();
+  const id = Number(params.id);
   const navigate = useNavigate();
+  const [search, setSearch] = useSearchParams();
   const [flight, setFlight] = useState<Flight | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<Confirm>(null);
   const [editOpen, setEditOpen] = useState(false);
-  const [replayOpen, setReplayOpen] = useState(false);
-  const [editAircraft, setEditAircraft] = useState('');
-  const [editNotes, setEditNotes] = useState('');
-  const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
-  const [exporting, setExporting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingKml, setExportingKml] = useState(false);
-  const [exportError, setExportError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [includePlan, setIncludePlan] = useState(true);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Planned-leg link ──────────────────────────────────────────────────
   const [plannedLeg, setPlannedLeg] = useState<PlannedLegWithChildren | null>(null);
-  const routeGeometry = useRouteGeometry(plannedLeg ? [plannedLeg.id] : []);
   const [plannedTripName, setPlannedTripName] = useState<string | null>(null);
   const [plannedLegLoading, setPlannedLegLoading] = useState(false);
   const [plannedLegError, setPlannedLegError] = useState('');
@@ -67,25 +58,31 @@ export function FlightDetail() {
   const [markBusy, setMarkBusy] = useState(false);
   const [markError, setMarkError] = useState('');
 
+  const bridge = useRef(newReplayBridge()).current;
+
   useEffect(() => {
-    if (!id) { navigate('/'); return; }
-    apiFetch<Flight>(`/api/flights/${id}`)
+    setFlight(null);
+    setLoadError(null);
+    let cancelled = false;
+    getFlight(id)
       .then(f => {
+        if (cancelled) return;
         setFlight(f);
-        setEditAircraft(f.aircraft || '');
-        setEditNotes(f.notes || '');
         document.title = `Flight #${f.id} — Sabiá`;
       })
-      .catch(err => setLoadError((err as Error).message));
-  }, [id, navigate]);
+      .catch(err => {
+        if (cancelled) return;
+        if (err instanceof UnauthorizedError) return;
+        setLoadError(errMsg(err));
+      });
+    return () => { cancelled = true; };
+  }, [id]);
 
-  // Fetches the linked leg (and its trip's name) whenever the link changes —
-  // including right after Unlink, so the section disappears without a manual
-  // reload. GET /api/planned-legs/:legId already returns PlannedLegWithChildren;
-  // the trip's name is not on that payload, so GET /api/trips supplies it —
-  // no server change is needed or permitted here.
+  // Follows the link: fetched when the flight is loaded and again after Unlink,
+  // so the section disappears without a reload. The trip's name is not on the
+  // leg, so the trip list supplies it.
+  const legId = flight?.planned_leg_id ?? null;
   useEffect(() => {
-    const legId = flight?.planned_leg_id ?? null;
     if (legId == null) {
       setPlannedLeg(null);
       setPlannedTripName(null);
@@ -95,10 +92,7 @@ export function FlightDetail() {
     let cancelled = false;
     setPlannedLegLoading(true);
     setPlannedLegError('');
-    Promise.all([
-      apiFetch<PlannedLegWithChildren>(`/api/planned-legs/${legId}`),
-      apiFetch<Trip[]>('/api/trips'),
-    ])
+    Promise.all([getPlannedLeg(legId), listTrips()])
       .then(([leg, trips]) => {
         if (cancelled) return;
         setPlannedLeg(leg);
@@ -106,160 +100,178 @@ export function FlightDetail() {
       })
       .catch(err => {
         if (cancelled) return;
-        setPlannedLegError('Failed to load planned leg: ' + (err as Error).message);
+        if (err instanceof UnauthorizedError) return;
+        setPlannedLegError('Failed to load planned leg: ' + errMsg(err));
       })
       .finally(() => {
         if (!cancelled) setPlannedLegLoading(false);
       });
     return () => { cancelled = true; };
-  }, [flight?.planned_leg_id]);
+  }, [legId]);
 
-  async function handleUnlinkPlannedLeg() {
-    if (!confirm('Unlink this flight from its planned leg?')) return;
+  const points = flight?.points ?? [];
+  const views = useMemo<View[]>(() => {
+    const v: View[] = ['track'];
+    if (flight?.end_time != null && points.length >= 2) v.push('replay');
+    return v;
+  }, [flight?.end_time, points.length]);
+  const requested = search.get('view');
+  const view: View = views.find(v => v === requested) ?? 'track';
+
+  const onFollowChange = useCallback((follow: boolean) => {
+    bridge.follow = follow;
+    if (follow && bridge.last) bridge.sink?.(bridge.last, true);
+  }, [bridge]);
+  const onPosition = useCallback((s: Parameters<NonNullable<React.ComponentProps<typeof ReplayPanel>['onPosition']>>[0]) => {
+    bridge.last = s;
+    bridge.sink?.(s, bridge.follow);
+  }, [bridge]);
+
+  async function handleUnlink() {
+    setConfirm(null);
     setUnlinkBusy(true);
     setUnlinkError('');
     try {
-      const updated = await apiFetch<Flight>(`/api/flights/${id}/planned-leg`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plannedLegId: null }),
-      });
-      // Triggers the effect above (plannedLegId is now null), which clears
-      // plannedLeg/plannedTripName and hides the section — no reload needed.
-      setFlight(updated);
+      setFlight(await linkFlightToLeg(id, null));
     } catch (err) {
-      setUnlinkError('Unlink failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setUnlinkError('Unlink failed: ' + errMsg(err));
     } finally {
       setUnlinkBusy(false);
     }
   }
 
-  // Closes a hand-linked leg by hand, or reopens it. No confirm() in either
-  // direction: the next click is the exact reverse. The 200 is the updated
-  // leg, so setPlannedLeg() — not setFlight(): no column on `flights` moves
-  // either way — re-renders the badge and the landing note with no refetch
-  // and no reload.
-  async function handleMarkPlannedLeg(target: 'flown' | 'planned') {
+  async function handleMark(target: 'flown' | 'planned') {
     setMarkBusy(true);
     setMarkError('');
     try {
-      const updated = await apiFetch<PlannedLegWithChildren>(`/api/flights/${id}/planned-leg-status`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: target }),
-      });
-      setPlannedLeg(updated);
+      setPlannedLeg(await setFlightPlannedLegStatus(id, target));
     } catch (err) {
-      setMarkError('Mark failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setMarkError('Mark failed: ' + errMsg(err));
     } finally {
       setMarkBusy(false);
     }
   }
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSave(values: { aircraft: string | null; notes: string | null }) {
     setSaving(true);
     setSaveError('');
     try {
-      const updated = await apiFetch<Flight>(`/api/flights/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aircraft: editAircraft.trim() || null, notes: editNotes.trim() || null }),
-      });
-      setFlight(updated);
+      setFlight(await patchFlight(id, values));
       setEditOpen(false);
     } catch (err) {
-      setSaveError('Save failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setSaveError('Save failed: ' + errMsg(err));
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete() {
-    if (!confirm('Delete this flight log?')) return;
+    setConfirm(null);
     try {
-      await apiFetch(`/api/flights/${id}`, { method: 'DELETE' });
-      navigate('/');
+      await deleteFlight(id);
+      navigate('/flights');
     } catch (err) {
-      alert('Delete failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setActionError('Delete failed: ' + errMsg(err));
     }
   }
 
-  async function handleUploadFlightPlan(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  async function handleUpload(file: File) {
     if (file.type !== 'application/pdf') {
       setUploadError('File must be a PDF');
-      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
-
     setUploading(true);
     setUploadError('');
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const updated = await apiFetch<Flight>(`/api/flights/${id}/flight-plan`, {
-        method: 'POST',
-        body: formData,
-      });
-      setFlight(updated);
+      setFlight(await attachFlightPlan(id, file));
     } catch (err) {
-      setUploadError('Upload failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setUploadError('Upload failed: ' + errMsg(err));
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleRemovePlan() {
+    setConfirm(null);
+    try {
+      setFlight(await removeFlightPlan(id));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setActionError('Remove failed: ' + errMsg(err));
     }
   }
 
   async function handleExportPdf() {
-    setExporting(true);
-    setExportError('');
+    if (!flight) return;
+    setExportingPdf(true);
+    setActionError('');
     try {
-      await downloadPdf(`/api/flights/${id}/export.pdf`, `flight-${id}.pdf`, { includePlans: includePlan });
+      await downloadPdf(`/api/flights/${flight.id}/export.pdf`, `flight-${flight.id}.pdf`, { includePlans: includePlan });
     } catch (err) {
-      setExportError('Export failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setActionError('Export failed: ' + errMsg(err));
     } finally {
-      setExporting(false);
+      setExportingPdf(false);
     }
   }
 
   async function handleExportKml() {
+    if (!flight) return;
     setExportingKml(true);
-    setExportError('');
+    setActionError('');
     try {
-      await downloadKml(`/api/flights/${id}/export.kml`, `flight-${id}.kml`);
+      await downloadKml(`/api/flights/${flight.id}/export.kml`, `flight-${flight.id}.kml`);
     } catch (err) {
-      setExportError('Export failed: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setActionError('Export failed: ' + errMsg(err));
     } finally {
       setExportingKml(false);
     }
   }
 
-  async function handleRemoveFlightPlan() {
-    if (!confirm('Remove the attached flight plan?')) return;
-    try {
-      const updated = await apiFetch<Flight>(`/api/flights/${id}/flight-plan`, { method: 'DELETE' });
-      setFlight(updated);
-    } catch (err) {
-      alert('Remove failed: ' + (err as Error).message);
-    }
-  }
+  const backLink = (
+    <div style={{ marginBottom: '1rem' }}>
+      <Link as={RouterLink} to="/flights">← All Flights</Link>
+    </div>
+  );
 
   if (loadError) {
-    return <main className="container"><p style={{ color: '#f87171' }}>Failed to load flight: {loadError}</p></main>;
+    return (
+      <>
+        {backLink}
+        <InlineNotification kind="error" title={`Failed to load flight: ${loadError}`} hideCloseButton />
+      </>
+    );
   }
   if (!flight) {
-    return <main className="container"><p style={{ color: '#4b5563' }}>Loading...</p></main>;
+    return (
+      <>
+        {backLink}
+        <InlineLoading description="Loading..." />
+      </>
+    );
   }
 
-  const stats = [
-    { label: 'Duration',     value: formatDuration(flight.duration_sec) },
-    { label: 'Distance',     value: formatDistance(flight.distance_nm),   unit: 'nm' },
-    { label: 'Max Altitude', value: formatAlt(flight.max_altitude_ft),    unit: 'ft' },
-    { label: 'Max Airspeed', value: formatSpeed(flight.max_airspeed_kts), unit: 'kts' },
-    { label: 'Points',       value: flight.point_count ?? flight.points?.length ?? 0 },
+  const trackMap = (withReplay: boolean) => (
+    <FlightMap points={points} plannedLeg={plannedLeg ?? undefined} height="28rem">
+      <NavdataOverlay />
+      {plannedLeg && <RouteGeometryOverlay leg={plannedLeg} />}
+      <TrackOnTop points={points} />
+      {withReplay && <ReplayMarker bridge={bridge} />}
+    </FlightMap>
+  );
+
+  const tiles = [
+    { label: 'Duration', value: formatDuration(flight.duration_sec) },
+    { label: 'Distance', value: `${formatDistance(flight.distance_nm)} nm` },
+    { label: 'Max Altitude', value: `${formatAlt(flight.max_altitude_ft)} ft` },
+    { label: 'Max Airspeed', value: `${formatSpeed(flight.max_airspeed_kts)} kts` },
+    { label: 'Points', value: flight.point_count ?? points.length },
     {
       label: 'Departure',
       value: flight.departure_icao || coordStr(flight.departure_lat, flight.departure_lon),
@@ -272,228 +284,147 @@ export function FlightDetail() {
     },
   ];
 
+  const panel = (v: View) => {
+    if (v !== view) return null;
+    if (v === 'track') return trackMap(false);
+    return (
+      <>
+        {trackMap(true)}
+        <div style={{ marginTop: '1rem' }}>
+          <ReplayPanel id="replay-panel" points={points} onPosition={onPosition} onFollowChange={onFollowChange} />
+        </div>
+      </>
+    );
+  };
+
   return (
-    <main className="container" id="flight-detail">
-      <Link to="/flights" className="back-link">← All Flights</Link>
+    <>
+      {backLink}
+      <PageHeader
+        title={`Flight #${flight.id} — ${flight.aircraft || 'Unknown Aircraft'}`}
+        subtitle={`${formatDate(flight.start_time)}${flight.end_time ? ` → ${formatDate(flight.end_time)}` : ' (in progress)'}`}
+      />
 
-      <h2 className="flight-title">Flight #{flight.id} — {flight.aircraft || 'Unknown Aircraft'}</h2>
-      <p className="flight-subtitle">
-        {formatDate(flight.start_time)}{flight.end_time ? ` → ${formatDate(flight.end_time)}` : ' (in progress)'}
-      </p>
-
-      <StatsGrid stats={stats} />
+      <div style={{ marginBottom: '1rem' }}><StatTiles tiles={tiles} /></div>
 
       {flight.notes && (
-        <div className="notes-section">
-          <div className="section-title">Notes</div>
-          <p className="notes-text">{flight.notes}</p>
-        </div>
+        <Tile style={{ marginBottom: '1rem' }}>
+          <h2 className="sabia-heading-03" style={{ marginBottom: '0.5rem' }}>Notes</h2>
+          <p style={{ whiteSpace: 'pre-wrap' }}>{flight.notes}</p>
+        </Tile>
       )}
 
       {flight.planned_leg_id != null && (
-        <div className="notes-section">
-          <div className="section-title">Planned Leg</div>
-          {plannedLegLoading && <p className="flight-plan-status">Loading planned leg…</p>}
-          {plannedLegError && <p className="edit-error">{plannedLegError}</p>}
-          {plannedLeg && (
-            <>
-              <p className="notes-text">
-                <span className={`badge ${plannedLegBadge(plannedLeg.status).className}`}>
-                  {plannedLegBadge(plannedLeg.status).label}
-                </span>
-                {plannedLeg.is_snippet === 1 && <span className="badge badge-snippet" style={{ marginLeft: '0.4rem' }}>Snippet</span>}
-                {' '}
-                Leg {plannedLeg.seq} of{' '}
-                {plannedLeg.trip_id !== null && plannedTripName ? (
-                  <Link to={`/trip/${plannedLeg.trip_id}`} className="flight-plan-link">{plannedTripName}</Link>
-                ) : (
-                  'No trip'
-                )}
-                : {plannedLeg.departure_ident} → {plannedLeg.destination_ident}
-              </p>
-              <p className="flight-plan-status">
-                Planned cruise {formatAlt(plannedLeg.cruise_alt_ft)} ft · approx.{' '}
-                {formatDistance(plannedLeg.approx_distance_nm)} nm
-              </p>
-              {/* The flight itself is `flight` — no second fetch to resolve
-                  it. Null on every leg not yet flown and every leg imported
-                  before this phase. */}
-              {plannedLegLandingNote(plannedLeg, flight) && (
-                <p className={`flight-plan-status${plannedLeg.status === 'diverted' ? ' td-planned-meta-diverted' : ''}`}>
-                  {plannedLegLandingNote(plannedLeg, flight)}
-                </p>
-              )}
-              <p className="flight-plan-status">
-                {flight.planned_leg_link_source === 'auto'
-                  ? 'Linked automatically, at takeoff.'
-                  : flight.planned_leg_link_source === 'manual'
-                    ? 'Linked by hand.'
-                    : 'Linked.'}
-              </p>
-              {procedureLines(plannedLeg).map((line, i) => (
-                <p key={i} className="flight-plan-status">{line}</p>
-              ))}
-              <div className="flight-actions" style={{ marginTop: '0.6rem' }}>
-                {(() => {
-                  // A hand-copy of the server gate. The client cannot import
-                  // src/plannedLegClose.ts; if these two ever disagree, the
-                  // server wins and the user sees a 409.
-                  const handCloseEligible =
-                    flight.planned_leg_link_source === 'manual' &&
-                    flight.end_time !== null &&
-                    (plannedLeg.status === 'planned' || plannedLeg.status === 'flown');
-
-                  const handCloseTarget: 'flown' | 'planned' =
-                    plannedLeg.status === 'flown' ? 'planned' : 'flown';
-
-                  // `flight.planned_leg_id != null` and "the leg exists" are the two
-                  // enclosing conditions above (:252, :257), so they are not restated.
-                  if (!handCloseEligible) return null;
-                  return (
-                    <button className="btn btn-ghost" disabled={markBusy} onClick={() => handleMarkPlannedLeg(handCloseTarget)}>
-                      {handCloseTarget === 'flown'
-                        ? (markBusy ? 'Marking…' : 'Mark flown')
-                        : (markBusy ? 'Reopening…' : 'Back to planned')}
-                    </button>
-                  );
-                })()}
-                <button className="btn btn-ghost" disabled={unlinkBusy} onClick={handleUnlinkPlannedLeg}>
-                  {unlinkBusy ? 'Unlinking…' : 'Unlink'}
-                </button>
-                {unlinkError && <span className="edit-error">{unlinkError}</span>}
-                {markError && <span className="edit-error">{markError}</span>}
-              </div>
-            </>
-          )}
-        </div>
+        <PlannedLegSection
+          flight={flight}
+          leg={plannedLeg}
+          tripName={plannedTripName}
+          loading={plannedLegLoading}
+          loadError={plannedLegError}
+          unlinkBusy={unlinkBusy}
+          unlinkError={unlinkError}
+          markBusy={markBusy}
+          markError={markError}
+          onMark={handleMark}
+          onUnlink={() => setConfirm('unlink')}
+        />
       )}
 
-      <div className="flight-plan-section">
-        <div className="section-title">Flight Plan</div>
-        {flight.flight_plan_name ? (
-          <div className="flight-plan-attached">
-            <a
-              href={`/api/flights/${flight.id}/flight-plan`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flight-plan-link"
-            >
-              {flight.flight_plan_name}
-            </a>
-            <button className="btn btn-ghost" onClick={handleRemoveFlightPlan}>Remove</button>
-          </div>
-        ) : (
-          <div className="flight-plan-upload">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/pdf"
-              onChange={handleUploadFlightPlan}
-              disabled={uploading}
-            />
-            {uploading && <span className="flight-plan-status">Uploading...</span>}
-            {uploadError && <span className="edit-error">{uploadError}</span>}
-          </div>
-        )}
-      </div>
+      <FlightPlanSection
+        flight={flight}
+        uploading={uploading}
+        uploadError={uploadError}
+        onFile={handleUpload}
+        onRemove={() => setConfirm('removePlan')}
+      />
 
-      {editOpen && (
-        <div className="edit-section">
-          <div className="section-title">Edit Flight</div>
-          <form className="edit-form" onSubmit={handleSave}>
-            <div className="edit-field">
-              <label>Aircraft</label>
-              <input
-                type="text"
-                value={editAircraft}
-                maxLength={200}
-                placeholder="Aircraft name"
-                onChange={e => setEditAircraft(e.target.value)}
-              />
-            </div>
-            <div className="edit-field">
-              <label>Notes</label>
-              <textarea
-                rows={4}
-                value={editNotes}
-                placeholder="Free-form notes about this flight..."
-                onChange={e => setEditNotes(e.target.value)}
-              />
-            </div>
-            <div className="edit-actions">
-              <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
-              <button type="button" className="btn btn-ghost" onClick={() => {
-                setEditOpen(false);
-                setEditAircraft(flight.aircraft || '');
-                setEditNotes(flight.notes || '');
-                setSaveError('');
-              }}>Cancel</button>
-              {saveError && <span className="edit-error">{saveError}</span>}
-            </div>
-          </form>
-        </div>
+      <Tabs
+        selectedIndex={views.indexOf(view)}
+        onChange={({ selectedIndex }: { selectedIndex: number }) => {
+          const next = new URLSearchParams(search);
+          if (views[selectedIndex] === 'track') next.delete('view');
+          else next.set('view', views[selectedIndex]);
+          setSearch(next, { replace: true });
+        }}
+      >
+        <TabList aria-label="Flight views" contained>
+          {views.map(v => <Tab key={v}>{VIEW_LABEL[v]}</Tab>)}
+        </TabList>
+        <TabPanels>
+          {views.map(v => <TabPanel key={v} style={{ padding: 0, paddingTop: '1rem' }}>{panel(v)}</TabPanel>)}
+        </TabPanels>
+      </Tabs>
+
+      {points.length >= 2 && (
+        <Tile style={{ marginTop: '1rem' }} data-testid="altitude-section">
+          <h2 className="sabia-heading-03" style={{ marginBottom: '0.75rem' }}>Altitude Profile</h2>
+          <AltitudeChart points={points} />
+        </Tile>
       )}
 
-      <div className="map-section">
-        <div className="section-title">GPS Track</div>
-        <div id="map">
-          <FlightMap
-            points={flight.points || []}
-            plannedLeg={plannedLeg ?? undefined}
-            navdata
-            routeGeometry={plannedLeg ? routeGeometry.geometries[plannedLeg.id] ?? null : null}
-            routeGeometryLoading={routeGeometry.loading}
-          />
-        </div>
-      </div>
-
-      {flight.end_time !== null && (flight.points?.length ?? 0) >= 2 && (
-        <div className="replay-section">
-          <div className="section-title">Replay</div>
-          <button
-            className="btn btn-ghost"
-            aria-expanded={replayOpen}
-            aria-controls="replay-panel"
-            onClick={() => setReplayOpen(o => !o)}
-          >
-            {replayOpen ? 'Hide replay' : 'Replay flight'}
-          </button>
-          {replayOpen && <ReplayPanel id="replay-panel" points={flight.points!} />}
-        </div>
-      )}
-
-      {(flight.points?.length ?? 0) >= 2 && (
-        <div className="chart-section">
-          <div className="section-title">Altitude Profile</div>
-          <AltitudeChart points={flight.points!} />
-        </div>
-      )}
-
-      <div className="flight-actions">
-        <Link to="/" className="btn btn-ghost">← Back</Link>
-        <button className="btn btn-ghost" onClick={() => setEditOpen(o => !o)}>Edit</button>
-        <Link to={`/flight/${flight.id}/acars`} className="btn btn-ghost">ACARS Messages</Link>
-        <button className="btn btn-ghost" onClick={handleExportPdf} disabled={exporting}>
-          {exporting ? 'Generating PDF…' : 'Export PDF'}
-        </button>
-        <button className="btn btn-ghost" onClick={handleExportKml} disabled={exportingKml}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+        <Button as={RouterLink} to="/" kind="ghost">← Back</Button>
+        <Button kind="ghost" onClick={() => { setSaveError(''); setEditOpen(true); }}>Edit</Button>
+        <Button as={RouterLink} to={`/flight/${flight.id}/acars`} kind="ghost">ACARS Messages</Button>
+        <Button kind="ghost" disabled={exportingPdf} onClick={handleExportPdf}>
+          {exportingPdf ? 'Generating PDF…' : 'Export PDF'}
+        </Button>
+        <Button kind="ghost" disabled={exportingKml} onClick={handleExportKml}>
           {exportingKml ? 'Exporting KML…' : 'Export KML'}
-        </button>
-        {/* Only meaningful when there is actually a plan to include */}
+        </Button>
         {flight.flight_plan_name && (
-          <label className="export-option">
-            <input
-              type="checkbox"
-              checked={includePlan}
-              disabled={exporting}
-              onChange={e => setIncludePlan(e.target.checked)}
-            />
-            Include flight plan
-          </label>
+          <Checkbox
+            id="include-plan"
+            labelText="Include flight plan"
+            checked={includePlan}
+            disabled={exportingPdf}
+            onChange={(_, { checked }) => setIncludePlan(checked)}
+          />
         )}
-        <button className="btn btn-danger" onClick={handleDelete}>Delete Flight</button>
-        {exportError && <span className="edit-error">{exportError}</span>}
+        <Button kind="danger" onClick={() => setConfirm('delete')}>Delete Flight</Button>
       </div>
-    </main>
+      {actionError && (
+        <InlineNotification
+          kind="error"
+          title="Action failed"
+          subtitle={actionError}
+          onCloseButtonClick={() => setActionError('')}
+        />
+      )}
+
+      <EditFlightModal
+        open={editOpen}
+        flight={flight}
+        saving={saving}
+        error={saveError}
+        onSave={handleSave}
+        onCancel={() => { setEditOpen(false); setSaveError(''); }}
+      />
+      <ConfirmModal
+        open={confirm === 'delete'}
+        title="Delete flight"
+        message="Delete this flight log?"
+        confirmLabel="Delete"
+        danger
+        onConfirm={handleDelete}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmModal
+        open={confirm === 'unlink'}
+        title="Unlink planned leg"
+        message="Unlink this flight from its planned leg?"
+        confirmLabel="Unlink"
+        onConfirm={handleUnlink}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmModal
+        open={confirm === 'removePlan'}
+        title="Remove flight plan"
+        message="Remove the attached flight plan?"
+        confirmLabel="Remove"
+        onConfirm={handleRemovePlan}
+        onCancel={() => setConfirm(null)}
+      />
+    </>
   );
 }

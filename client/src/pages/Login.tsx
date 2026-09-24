@@ -1,79 +1,89 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import type { Location } from 'react-router-dom';
-import { useSession } from '../hooks/useSession';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Button, Form, InlineLoading, InlineNotification, PasswordInput, Stack, TextInput, Tile } from '@carbon/react';
+import { useSession } from '../shell/SessionContext';
+import './login/login.scss';
 
-interface LocationState {
-  from?: Location;
+interface FromLocation {
+  pathname: string;
+  search?: string;
+  hash?: string;
 }
 
-/**
- * Username + password form. On success navigates to the `from` location the
- * redirect carried, defaulting to '/'. On 401 renders the server's message
- * verbatim ('Invalid username or password'); on 429 renders the server's
- * message including retryAfterSec. Never distinguishes unknown-user from
- * wrong-password, because the server does not either.
- */
+/** Lives outside the shell. Redirects to the `from` location RequireAuth carried, else '/'. */
 export function Login() {
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e: FormEvent) {
+  const fromLoc = (location.state as { from?: FromLocation } | null)?.from;
+  const target = fromLoc ? `${fromLoc.pathname}${fromLoc.search ?? ''}${fromLoc.hash ?? ''}` : '/';
+
+  if (session.status === 'authenticated') return <Navigate to={target} replace />;
+
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    setError(null);
+    if (submitting) return;
     setSubmitting(true);
+    setError(null);
     try {
       await session.login(username, password);
-      const from = (location.state as LocationState | null)?.from;
-      navigate(from ? `${from.pathname}${from.search}${from.hash}` : '/', { replace: true });
+      navigate(target, { replace: true });
     } catch (err) {
-      // The server's message is rendered verbatim, whatever it is — an
-      // "Invalid username or password" 401 or a "Too many login attempts..."
-      // 429 look the same here, deliberately.
       setError((err as Error).message);
-    } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="login-page">
-      <form className="login-form" onSubmit={handleSubmit}>
-        <h1><img src="/sabia-logo.svg" alt="Sabiá" className="login-logo" /></h1>
-        {error && <p className="login-error" role="alert">{error}</p>}
-        <label>
-          Username
-          <input
-            type="text"
-            name="username"
-            autoComplete="username"
-            value={username}
-            onChange={e => setUsername(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            name="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Logging in…' : 'Log in'}
-        </button>
-      </form>
-    </div>
+    <main className="login-page">
+      <Tile className="login-card">
+        <Form onSubmit={onSubmit} aria-label="Sign in">
+          <Stack gap={6}>
+            <h1 className="login-title">
+              <img src="/sabia-logo.svg" alt="Sabiá" className="login-logo" />
+            </h1>
+            {error && (
+              <InlineNotification
+                kind="error"
+                lowContrast
+                hideCloseButton
+                role="alert"
+                title={error}
+              />
+            )}
+            <TextInput
+              id="login-username"
+              name="username"
+              labelText="Username"
+              value={username}
+              autoComplete="username"
+              autoFocus
+              required
+              disabled={submitting}
+              onChange={e => setUsername(e.target.value)}
+            />
+            <PasswordInput
+              id="login-password"
+              name="password"
+              labelText="Password"
+              value={password}
+              autoComplete="current-password"
+              required
+              disabled={submitting}
+              onChange={e => setPassword(e.target.value)}
+            />
+            <Button type="submit" disabled={submitting}>
+              {submitting ? <InlineLoading description="Signing in…" /> : 'Sign in'}
+            </Button>
+          </Stack>
+        </Form>
+      </Tile>
+    </main>
   );
 }

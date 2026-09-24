@@ -1,0 +1,254 @@
+/*
+ * Light, print-optimised stylesheet for the PDF export routes (/print/...).
+ *
+ * The print entry point (print/entry.tsx) never loads the dashboard's own
+ * stylesheet, so this file carries everything these pages need on its own:
+ * the box-model reset the dashboard stylesheet used to supply for free,
+ * plus the structure (padding, sizing, grid layout, table geometry) and the
+ * light theme for the handful of components these pages reuse (stat cards,
+ * the section heading style, the notes box, the altitude chart, the legs
+ * table), not just theme overrides on top of some other stylesheet. Most of
+ * it is scoped under .print-root to win on specificity regardless of CSS
+ * bundle order; the reset below is deliberately not, see its own comment.
+ * Map polylines, leg colours and markers deliberately keep their on-screen
+ * colours — they read well on white and preserve the app's visual identity.
+ */
+
+/*
+ * The dashboard stylesheet (index.css) zeroes body margin and makes every
+ * box border-box; print/entry.tsx never loads it, so without this the page
+ * carries the browser's 8px default body margin and content-box sizing,
+ * which pushes .print-root (a fixed 703px) past the 794px viewport and
+ * makes Chromium shrink the whole page to fit — every element then sits at
+ * the wrong position and size. Left unscoped (not under .print-root)
+ * because it has to zero the body margin itself, and it is safe to leave
+ * unscoped: print.css is only ever loaded by print/entry.tsx, never by the
+ * dashboard.
+ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+.print-root {
+  --print-bg: #ffffff;
+  --print-surface: #f8fafc;
+  --print-border: #d8dee9;
+  --print-text: #0f172a;
+  --print-muted: #64748b;
+  --print-accent: #2563eb;
+
+  background: var(--print-bg);
+  color: var(--print-text);
+
+  /*
+   * Fixed width, NOT a percentage. 210mm paper - 24mm margins = 186mm ≈ 703px
+   * at 96dpi, and the export viewport is set to the full 794px A4 width.
+   * Because this block never reflows between the two, Leaflet is not triggered
+   * into re-fetching tiles when page.pdf() re-lays out at paper width — which
+   * would otherwise land tiles after the ready flag and blank out the maps.
+   * Keep this in sync with the viewport in src/pdfExport.ts.
+   */
+  width: 703px;
+  margin: 0 auto;
+  padding: 0;
+
+  /* Deterministic fonts: a headless/container environment may not have the
+     app's system-UI stack installed. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'DejaVu Sans', 'Liberation Sans', sans-serif;
+}
+
+/* The dark app background would otherwise frame every page */
+html:has(.print-root),
+body:has(.print-root) {
+  background: #ffffff;
+}
+
+/* Colours must survive Chromium's print pipeline, and animations would make
+   the captured output non-deterministic. */
+.print-root,
+.print-root *,
+.print-root *::before,
+.print-root *::after {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  animation: none !important;
+  transition: none !important;
+}
+
+/* ── Page structure ── */
+.print-page {
+  break-after: page;
+  page-break-after: always;
+}
+.print-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+
+.print-header {
+  border-bottom: 2px solid var(--print-border);
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.1rem;
+}
+.print-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--print-text);
+  margin-bottom: 0.2rem;
+}
+.print-subtitle {
+  font-size: 0.85rem;
+  color: var(--print-muted);
+}
+.print-footer {
+  margin-top: 1.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--print-border);
+  font-size: 0.7rem;
+  color: var(--print-muted);
+}
+
+/* ── Shared components print.css is the only stylesheet for ── */
+.print-root .section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--print-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.6rem;
+}
+
+.print-root .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+.print-root .stat-card {
+  background: var(--print-surface);
+  border: 1px solid var(--print-border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+.print-root .stat-label {
+  font-size: 0.72rem;
+  color: var(--print-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.3rem;
+}
+.print-root .stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--print-text);
+}
+.print-root .stat-unit { font-size: 0.75rem; color: var(--print-muted); margin-left: 0.2rem; }
+.print-root .stat-sub  { font-size: 0.72rem; color: var(--print-muted); margin-top: 0.2rem; }
+
+.print-root .notes-text {
+  background: var(--print-surface);
+  border: 1px solid var(--print-border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  font-size: 0.9rem;
+  color: var(--print-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.print-root .altitude-chart {
+  width: 100%;
+  height: 140px;
+  display: block;
+  background: var(--print-surface);
+  border: 1px solid var(--print-border);
+  border-radius: 10px;
+  overflow: visible;
+}
+
+.print-root .leg-color-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+
+.print-root #map,
+.print-root .print-map {
+  border: 1px solid var(--print-border);
+  /* Slightly shorter than on screen so a map + chart + stats fit one A4 page */
+  height: 360px;
+}
+
+/*
+ * The trip overview carries more below it (legs table + notes) than a leg page
+ * does, so its map is shorter to keep the whole overview on a single sheet.
+ * Tuned against a 5-leg trip; a trip with many more legs will simply spill the
+ * table onto a second sheet, which is harmless — the per-leg page breaks hold.
+ */
+.print-root .print-map-overview { height: 220px; }
+
+/* Tighter vertical rhythm than the screen layout — paper is a fixed budget */
+.print-root .map-section,
+.print-root .chart-section,
+.print-root .notes-section,
+.print-root .stats-grid { margin-bottom: 1rem; }
+.print-root .legs-section { margin-bottom: 0.5rem; }
+
+/* Leaflet paints its own container background; force it light so partially
+   covered areas don't show the dark theme through. */
+.print-root .leaflet-container { background: #f1f5f9; }
+
+/* ── Legs table (trip overview) ── */
+.print-root table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.print-root thead th {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  color: var(--print-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--print-border);
+}
+.print-root tbody tr { border-bottom: 1px solid var(--print-border); }
+.print-root tbody tr:hover { background: transparent; }
+.print-root tbody td { padding: 0.7rem 0.8rem; vertical-align: middle; }
+.print-root .td-aircraft {
+  font-weight: 500;
+  color: var(--print-text);
+  max-width: 200px;
+  overflow: hidden;
+}
+.print-root .td-stat { color: var(--print-text); font-variant-numeric: tabular-nums; }
+.print-root .td-date { color: var(--print-muted); white-space: nowrap; }
+.print-root .td-route {
+  font-size: 0.75rem;
+  color: var(--print-accent);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An imported, unflown planned leg — the print equivalent of the app's dashed
+   "ghost row" on the trip page, rendered in muted italic text since this page
+   has no dark badge chips to fall back on. */
+.print-root .td-planned-print { color: var(--print-muted); font-style: italic; }
+
+/* Keep a table from splitting awkwardly across pages */
+.print-root tr { break-inside: avoid; page-break-inside: avoid; }
+.print-root .map-section,
+.print-root .chart-section { break-inside: avoid; page-break-inside: avoid; }

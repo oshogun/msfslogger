@@ -1,58 +1,49 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { GhostLegRow, plannedLegBadge } from '../components/PlannedLegRows';
-import { apiFetch } from '../utils/api';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
+import {
+  Dropdown, InlineNotification, Link, SkeletonText, Table, TableBody, TableCell, TableContainer, TableHead,
+  TableHeader, TableRow, TableToolbar, TableToolbarContent, TableToolbarSearch, Tile,
+} from '@carbon/react';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { EmptyState } from '../components/EmptyState';
+import { PageHeader } from '../components/PageHeader';
+import { GHOST_LEG_COLUMNS, GhostLegRow, LnmplnImportPanel, SimbriefImportPanel, SkipLegConfirm } from '../components/legs';
+import * as api from '../api';
+import { UnauthorizedError } from '../utils/api';
 import type {
-  Flight,
-  PlannedLegImportResponse,
-  PlannedLegListItem,
-  PlannedLegStatus,
-  SayIntentionsSettings,
-  SimbriefImportResponse,
-  SimbriefImportResult,
-  SimbriefSettings,
+  Flight, PlannedLegImportResponse, PlannedLegListItem, PlannedLegStatus, SimbriefImportResult,
 } from '../types';
 
-const STATUS_FILTER_OPTIONS: PlannedLegStatus[] = ['planned', 'skipped', 'flown', 'diverted'];
+interface Option { id: string; label: string }
 
-/**
- * The non-trip entry point: every planned leg (loose and trip-linked) in one
- * list, plus the two import forms a trip page already offers — here without
- * a trip id, so an operator can prefile a flight plan before deciding, or
- * without ever needing, a trip for it.
- */
+const STATUS_OPTIONS: Option[] = [
+  { id: 'all', label: 'All statuses' },
+  { id: 'planned', label: 'Planned' },
+  { id: 'skipped', label: 'Skipped' },
+  { id: 'flown', label: 'Flown' },
+  { id: 'diverted', label: 'Diverted' },
+];
+
+/** Every planned leg, loose or attached to a trip, with the two import panels. */
 export function Prefiles() {
   const [legs, setLegs] = useState<PlannedLegListItem[] | null>(null);
   const [loadError, setLoadError] = useState('');
 
-  const importInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
-  const [importResults, setImportResults] = useState<PlannedLegImportResponse['results'] | null>(null);
-  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [importResponse, setImportResponse] = useState<PlannedLegImportResponse | null>(null);
 
-  // Same SimBrief-settings idiom as TripDetail.tsx: a user-level setting,
-  // loaded alongside the list but failing independently of it.
-  const [simbriefUserId, setSimbriefUserId] = useState('');
-  const [simbriefSaved, setSimbriefSaved] = useState<string | null | undefined>(undefined);
-  const [simbriefSaving, setSimbriefSaving] = useState(false);
-  const [simbriefSettingsError, setSimbriefSettingsError] = useState('');
+  const [simbriefId, setSimbriefId] = useState<string | null | undefined>(undefined);
   const [simbriefImporting, setSimbriefImporting] = useState(false);
   const [simbriefError, setSimbriefError] = useState('');
   const [simbriefResult, setSimbriefResult] = useState<SimbriefImportResult | null>(null);
 
-  // Same settings-field idiom as SimBrief above, but the server returns only
-  // a masked form of the key, never the raw value (write-only password input).
-  const [sayintentionsApiKey, setSayintentionsApiKey] = useState('');
-  const [sayintentionsSaved, setSayintentionsSaved] = useState<SayIntentionsSettings | undefined>(undefined);
-  const [sayintentionsSaving, setSayintentionsSaving] = useState(false);
-  const [sayintentionsSettingsError, setSayintentionsSettingsError] = useState('');
+  const [skipTarget, setSkipTarget] = useState<PlannedLegListItem | null>(null);
+  const [skipBusy, setSkipBusy] = useState(false);
+  const [skipError, setSkipError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<PlannedLegListItem | null>(null);
+  const [deleteError, setDeleteError] = useState('');
 
-  const [skipBusyLegId, setSkipBusyLegId] = useState<number | null>(null);
-  const [skipErrorByLeg, setSkipErrorByLeg] = useState<Record<number, string>>({});
-
-  // Link a flight, initiated from a row's own picker — same shape as
-  // TripDetail.tsx's leg-initiated link flow.
   const [linkingLegId, setLinkingLegId] = useState<number | null>(null);
   const [linkFlightChoice, setLinkFlightChoice] = useState<number | ''>('');
   const [linkableFlights, setLinkableFlights] = useState<Flight[] | null>(null);
@@ -60,498 +51,259 @@ export function Prefiles() {
   const [linkBusyLegId, setLinkBusyLegId] = useState<number | null>(null);
   const [linkErrorByLeg, setLinkErrorByLeg] = useState<Record<number, string>>({});
 
-  // List filters: derived-only, never mutate `legs` and never touched by any
-  // of the handlers above, which all keep operating on a leg by its real id.
-  const [statusFilter, setStatusFilter] = useState<'all' | PlannedLegStatus>('all');
-  const [tripFilter, setTripFilter] = useState<'all' | 'none' | number>('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [tripFilter, setTripFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   const loadLegs = useCallback(async () => {
     try {
-      const all = await apiFetch<PlannedLegListItem[]>('/api/planned-legs');
-      setLegs(all);
+      setLegs(await api.listPlannedLegs());
       setLoadError('');
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLoadError((err as Error).message);
     }
   }, []);
 
   useEffect(() => {
-    loadLegs();
-    apiFetch<SimbriefSettings>('/api/settings/simbrief')
-      .then(s => {
-        setSimbriefSaved(s.simbrief_user_id);
-        setSimbriefUserId(s.simbrief_user_id ?? '');
-      })
-      .catch(err => setSimbriefSettingsError((err as Error).message));
-    apiFetch<SayIntentionsSettings>('/api/settings/sayintentions')
-      .then(s => setSayintentionsSaved(s))
-      .catch(err => setSayintentionsSettingsError((err as Error).message));
+    void loadLegs();
+    api.getSimbriefSettings()
+      .then(s => setSimbriefId(s.simbrief_user_id))
+      .catch(() => setSimbriefId(null));
   }, [loadLegs]);
 
-  /** Same request/response handling as TripDetail.tsx's handleImportPlannedLegs, against the loose route. */
-  async function handleImportPlannedLegs(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
+  async function handleFiles(files: File[]) {
     setImporting(true);
     setImportError('');
-    setImportResults(null);
-    setImportNotice(null);
+    setImportResponse(null);
     try {
-      const formData = new FormData();
-      for (const file of Array.from(files)) formData.append('lnmpln', file);
-
-      const res = await fetch('/api/planned-legs', { method: 'POST', body: formData });
-      const body = await res.json().catch(() => null) as (PlannedLegImportResponse & { error?: string }) | null;
-
-      if (!body) {
-        setImportError(`Import failed: ${res.statusText || 'invalid server response'}`);
-        return;
-      }
-      if (!Array.isArray(body.results)) {
-        // No results[] -> a plain { error } response (no files, or a multer
-        // limit), not a per-file outcome.
-        setImportError(`Import failed: ${body.error || res.statusText}`);
-        return;
-      }
-
-      setImportResults(body.results);
-      if (body.batch && body.batch.ordering === 'upload') {
-        setImportNotice(
-          `Import order was taken from upload order (${body.batch.reason}), not the route.`
-        );
-      }
-
+      setImportResponse(await api.importPlannedLegs(files));
       await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setImportError('Import failed: ' + (err as Error).message);
     } finally {
       setImporting(false);
-      if (importInputRef.current) importInputRef.current.value = '';
     }
   }
 
-  async function handleSaveSimbriefId() {
-    setSimbriefSaving(true);
-    setSimbriefSettingsError('');
-    try {
-      const result = await apiFetch<SimbriefSettings>('/api/settings/simbrief', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ simbrief_user_id: simbriefUserId.trim() || null }),
-      });
-      setSimbriefSaved(result.simbrief_user_id);
-      setSimbriefUserId(result.simbrief_user_id ?? '');
-    } catch (err) {
-      setSimbriefUserId(simbriefSaved ?? '');
-      setSimbriefSettingsError((err as Error).message);
-    } finally {
-      setSimbriefSaving(false);
-    }
-  }
-
-  async function handleSaveSayintentionsApiKey() {
-    setSayintentionsSaving(true);
-    setSayintentionsSettingsError('');
-    try {
-      const result = await apiFetch<SayIntentionsSettings>('/api/settings/sayintentions', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sayintentions_api_key: sayintentionsApiKey.trim() || null }),
-      });
-      setSayintentionsSaved(result);
-      setSayintentionsApiKey('');
-    } catch (err) {
-      setSayintentionsSettingsError((err as Error).message);
-    } finally {
-      setSayintentionsSaving(false);
-    }
-  }
-
-  async function handleClearSayintentionsApiKey() {
-    setSayintentionsSaving(true);
-    setSayintentionsSettingsError('');
-    try {
-      const result = await apiFetch<SayIntentionsSettings>('/api/settings/sayintentions', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sayintentions_api_key: null }),
-      });
-      setSayintentionsSaved(result);
-    } catch (err) {
-      setSayintentionsSettingsError((err as Error).message);
-    } finally {
-      setSayintentionsSaving(false);
-    }
-  }
-
-  /** Same request/response handling as TripDetail.tsx's handleImportSimbrief, against the loose route. */
   async function handleImportSimbrief() {
     setSimbriefImporting(true);
     setSimbriefError('');
     setSimbriefResult(null);
     try {
-      const body = await apiFetch<SimbriefImportResponse>('/api/planned-legs/simbrief', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ allow_duplicates: false }),
-      });
-      setSimbriefResult(body.result);
-      if (body.result.status === 'imported') {
-        await loadLegs();
-      }
+      const response = await api.importSimbriefLeg();
+      setSimbriefResult(response.result);
+      if (response.result.status === 'imported') await loadLegs();
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setSimbriefError((err as Error).message);
     } finally {
       setSimbriefImporting(false);
     }
   }
 
-  async function handleDeletePlannedLeg(legId: number) {
-    if (!confirm('Delete this planned leg?')) return;
+  async function confirmDelete() {
+    if (!deleteTarget) return;
     try {
-      await apiFetch(`/api/planned-legs/${legId}`, { method: 'DELETE' });
+      await api.deletePlannedLeg(deleteTarget.id);
+      setDeleteTarget(null);
+      setDeleteError('');
       await loadLegs();
     } catch (err) {
-      alert('Failed to delete planned leg: ' + (err as Error).message);
+      if (err instanceof UnauthorizedError) return;
+      setDeleteError('Failed to delete planned leg: ' + (err as Error).message);
     }
   }
 
-  async function handleToggleSkip(legId: number, nextStatus: 'planned' | 'skipped') {
-    if (!confirm(nextStatus === 'skipped' ? 'Skip this planned leg?' : 'Unskip this planned leg?')) return;
-    setSkipErrorByLeg(prev => { const { [legId]: _drop, ...rest } = prev; return rest; });
-    setSkipBusyLegId(legId);
+  async function confirmSkip() {
+    if (!skipTarget) return;
+    const next = skipTarget.status === 'skipped' ? 'planned' : 'skipped';
+    setSkipBusy(true);
+    setSkipError('');
     try {
-      await apiFetch(`/api/planned-legs/${legId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus }),
-      });
+      await api.setPlannedLegStatus(skipTarget.id, next);
+      setSkipTarget(null);
       await loadLegs();
     } catch (err) {
-      // A 409 here means a flight got linked to this leg between page load
-      // and click; surface the server's message rather than failing silently.
-      setSkipErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
+      if (err instanceof UnauthorizedError) return;
+      // A 409 means a flight is linked to the leg; the server's message is
+      // shown inside the confirm dialog instead of failing silently.
+      setSkipError((err as Error).message);
     } finally {
-      setSkipBusyLegId(null);
+      setSkipBusy(false);
     }
   }
 
   async function loadLinkableFlights() {
     setLinkFlightsError('');
     try {
-      const allFlights = await apiFetch<Flight[]>('/api/flights');
-      setLinkableFlights(allFlights.filter(f => f.planned_leg_id === null));
+      setLinkableFlights((await api.listFlights()).filter(f => f.planned_leg_id === null));
     } catch (err) {
+      if (err instanceof UnauthorizedError) return;
       setLinkFlightsError((err as Error).message);
     }
   }
 
-  async function handleLinkFromLeg(legId: number) {
+  async function handleLink(leg: PlannedLegListItem) {
     if (!linkFlightChoice) return;
-    setLinkErrorByLeg(prev => { const { [legId]: _drop, ...rest } = prev; return rest; });
-    setLinkBusyLegId(legId);
+    setLinkErrorByLeg(prev => { const { [leg.id]: _drop, ...rest } = prev; return rest; });
+    setLinkBusyLegId(leg.id);
     try {
-      await apiFetch<Flight>(`/api/flights/${linkFlightChoice}/planned-leg`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plannedLegId: legId }),
-      });
+      await api.linkFlightToLeg(linkFlightChoice, leg.id);
       setLinkableFlights(null);
       setLinkingLegId(null);
       setLinkFlightChoice('');
       await loadLegs();
     } catch (err) {
-      // A 409 double-link names the offending flight — surfaced verbatim,
-      // inline, rather than a generic failure toast.
-      setLinkErrorByLeg(prev => ({ ...prev, [legId]: (err as Error).message }));
+      if (err instanceof UnauthorizedError) return;
+      setLinkErrorByLeg(prev => ({ ...prev, [leg.id]: (err as Error).message }));
     } finally {
       setLinkBusyLegId(null);
     }
   }
 
-  const simbriefSettingsLoading = simbriefSaved === undefined && !simbriefSettingsError;
-  const simbriefIdDirty = simbriefUserId !== (simbriefSaved ?? '');
-  const simbriefImportHint = simbriefSettingsLoading
-    ? null
-    : simbriefIdDirty
-      ? 'Save your SimBrief User ID first.'
-      : (simbriefSaved == null ? 'Enter your SimBrief Pilot ID to enable import.' : null);
-  const simbriefImportDisabled =
-    simbriefSettingsLoading || simbriefSaving || simbriefImporting || simbriefIdDirty || simbriefSaved == null;
-
-  // Every distinct trip actually present among the currently loaded legs, not
-  // a separate fetch of all trips — a trip with no legs left in this list
-  // (e.g. every leg in it has flown and dropped off) has no reason to show up
-  // as a filter option.
-  const tripOptions = useMemo(() => {
-    if (!legs) return [];
+  const tripOptions = useMemo<Option[]>(() => {
     const byId = new Map<number, string>();
-    for (const leg of legs) {
+    for (const leg of legs ?? []) {
       if (leg.trip_id !== null) byId.set(leg.trip_id, leg.trip_name ?? `Trip #${leg.trip_id}`);
     }
-    return Array.from(byId.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+    const trips = Array.from(byId.entries()).sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ id: String(id), label: name }));
+    return [{ id: 'all', label: 'All trips' }, { id: 'none', label: 'No trip' }, ...trips];
   }, [legs]);
 
   const filteredLegs = useMemo(() => {
     if (!legs) return null;
     const query = searchQuery.trim().toLowerCase();
     return legs.filter(leg => {
-      if (statusFilter !== 'all' && leg.status !== statusFilter) return false;
+      if (statusFilter !== 'all' && leg.status !== (statusFilter as PlannedLegStatus)) return false;
       if (tripFilter === 'none' && leg.trip_id !== null) return false;
-      if (typeof tripFilter === 'number' && leg.trip_id !== tripFilter) return false;
+      if (tripFilter !== 'all' && tripFilter !== 'none' && String(leg.trip_id) !== tripFilter) return false;
       if (query) {
-        const haystack = [leg.departure_ident, leg.destination_ident, leg.aircraft_type ?? '']
-          .join(' ')
-          .toLowerCase();
+        const haystack = [leg.departure_ident, leg.destination_ident, leg.aircraft_type ?? ''].join(' ').toLowerCase();
         if (!haystack.includes(query)) return false;
       }
       return true;
     });
   }, [legs, statusFilter, tripFilter, searchQuery]);
 
+  const skipDialogLeg = skipTarget;
+
   return (
-    <main className="container" id="prefiles">
-      <h2 className="flight-title">Prefiles</h2>
-      <p className="flight-subtitle">Every planned leg, loose or attached to a trip.</p>
+    <>
+      <PageHeader title="Prefiles" subtitle="Every planned leg, loose or attached to a trip." />
 
-      <div className="planned-legs-import-section">
-        <div className="section-title">Import Planned Route (.lnmpln)</div>
-        <div className="flight-plan-upload">
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".lnmpln"
-            multiple
-            onChange={handleImportPlannedLegs}
-            disabled={importing}
+      <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(20rem, 1fr))', marginBottom: '2rem' }}>
+        <Tile>
+          <LnmplnImportPanel
+            onFiles={handleFiles}
+            importing={importing}
+            error={importError}
+            results={importResponse?.results ?? null}
+            batch={importResponse?.batch}
           />
-          {importing && <span className="flight-plan-status">Importing…</span>}
-          {importError && <span className="edit-error">{importError}</span>}
-        </div>
-        {importNotice && <p className="import-notice">{importNotice}</p>}
-        {importResults && importResults.some(r => r.status !== 'imported' || (r.warnings && r.warnings.length > 0)) && (
-          <ul className="import-results">
-            {importResults.filter(r => r.status !== 'imported').map(r => (
-              <li key={`${r.filename}-error`} className="import-result-error">{r.filename}: {r.error}</li>
-            ))}
-            {importResults.filter((r): r is typeof r & { warnings: NonNullable<typeof r.warnings> } =>
-              r.status === 'imported' && !!r.warnings && r.warnings.length > 0
-            ).map(r => (
-              <li key={`${r.filename}-warnings`} className="import-result-warning">
-                {r.filename}: imported — {r.warnings.map(w => w.message).join('; ')}
-              </li>
-            ))}
-          </ul>
-        )}
+        </Tile>
+        <Tile>
+          <SimbriefImportPanel
+            userId={simbriefId}
+            importing={simbriefImporting}
+            onImport={handleImportSimbrief}
+            error={simbriefError}
+            result={simbriefResult}
+          />
+        </Tile>
       </div>
 
-      <div className="simbrief-import-section">
-        <div className="section-title">Import from SimBrief</div>
-        <div className="flight-plan-upload">
-          <label htmlFor="prefiles-simbrief-user-id" className="simbrief-id-label">SimBrief User ID</label>
-          <input
-            id="prefiles-simbrief-user-id"
-            type="text"
-            className="simbrief-id-input"
-            value={simbriefUserId}
-            placeholder={simbriefSettingsLoading ? 'Loading…' : ''}
-            disabled={simbriefSettingsLoading || simbriefSaving}
-            onChange={e => setSimbriefUserId(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={simbriefSettingsLoading || simbriefSaving || !simbriefIdDirty}
-            onClick={handleSaveSimbriefId}
-          >{simbriefSaving ? 'Saving…' : 'Save'}</button>
-        </div>
-        {simbriefSettingsError && <span className="edit-error">{simbriefSettingsError}</span>}
-        <div className="flight-plan-upload simbrief-import-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={simbriefImportDisabled}
-            onClick={handleImportSimbrief}
-          >{simbriefImporting ? 'Importing…' : 'Import from SimBrief'}</button>
-          {simbriefImporting && <span className="flight-plan-status">Importing from SimBrief…</span>}
-          {!simbriefImporting && simbriefImportHint && <span className="flight-plan-status">{simbriefImportHint}</span>}
-        </div>
-        {simbriefError && <span className="edit-error">{simbriefError}</span>}
-        {simbriefResult?.status === 'imported' && (
-          <>
-            <p className="import-notice">Imported {simbriefResult.label} as a new planned leg.</p>
-            {simbriefResult.warnings.length > 0 && (
-              <ul className="import-results">
-                {simbriefResult.warnings.map((w, i) => (
-                  <li key={`${w.code}-${i}`} className="import-result-warning">{w.message}</li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-        {simbriefResult?.status === 'duplicate' && (
-          <p className="import-notice">{simbriefResult.error}</p>
-        )}
-      </div>
-
-      <div className="simbrief-import-section">
-        <div className="section-title">SayIntentions</div>
-        <div className="flight-plan-upload">
-          <label htmlFor="prefiles-sayintentions-api-key" className="simbrief-id-label">SayIntentions API Key</label>
-          <input
-            id="prefiles-sayintentions-api-key"
-            type="password"
-            className="simbrief-id-input"
-            value={sayintentionsApiKey}
-            placeholder={sayintentionsSaved === undefined ? 'Loading…' : ''}
-            disabled={sayintentionsSaved === undefined || sayintentionsSaving}
-            onChange={e => setSayintentionsApiKey(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={sayintentionsSaved === undefined || sayintentionsSaving || !sayintentionsApiKey}
-            onClick={handleSaveSayintentionsApiKey}
-          >{sayintentionsSaving ? 'Saving…' : 'Save'}</button>
-          {sayintentionsSaved?.sayintentions_api_key_set && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={sayintentionsSaving}
-              onClick={handleClearSayintentionsApiKey}
-            >Clear</button>
+            {loadError && (
+        <InlineNotification kind="error" lowContrast hideCloseButton title="Failed to load planned legs"
+          subtitle={loadError} style={{ maxInlineSize: 'none' }} />
+      )}
+      {legs === null && !loadError && <SkeletonText paragraph lineCount={6} />}
+      {legs !== null && legs.length === 0 && (
+        <EmptyState title="No planned legs yet."
+          description="Import a .lnmpln file or a SimBrief plan above to prefile one." />
+      )}
+      {legs !== null && legs.length > 0 && (
+        <TableContainer title="Planned legs" description="Filter by status, trip, departure, destination or aircraft.">
+          <TableToolbar aria-label="Planned leg filters" style={{ blockSize: 'auto', overflow: 'visible' }}>
+            <TableToolbarContent style={{ gap: '1rem', alignItems: 'flex-end', justifyContent: 'flex-start', flexWrap: 'wrap', paddingInline: '1rem', paddingBlock: '0.5rem', blockSize: 'auto' }}>
+              <div style={{ inlineSize: '12rem' }}>
+                <Dropdown id="prefiles-status-filter" titleText="Status" label="All statuses" size="sm"
+                  items={STATUS_OPTIONS} itemToString={(i: Option | null) => i?.label ?? ''}
+                  selectedItem={STATUS_OPTIONS.find(o => o.id === statusFilter) ?? STATUS_OPTIONS[0]}
+                  onChange={({ selectedItem }: { selectedItem: Option | null }) => setStatusFilter(selectedItem?.id ?? 'all')} />
+              </div>
+              <div style={{ inlineSize: '14rem' }}>
+                <Dropdown id="prefiles-trip-filter" titleText="Trip" label="All trips" size="sm"
+                  items={tripOptions} itemToString={(i: Option | null) => i?.label ?? ''}
+                  selectedItem={tripOptions.find(o => o.id === tripFilter) ?? tripOptions[0]}
+                  onChange={({ selectedItem }: { selectedItem: Option | null }) => setTripFilter(selectedItem?.id ?? 'all')} />
+              </div>
+              <TableToolbarSearch id="prefiles-search" persistent placeholder="Departure, destination, aircraft…"
+                value={searchQuery} onChange={(e: React.ChangeEvent<HTMLInputElement> | '') =>
+                  setSearchQuery(typeof e === 'string' ? e : e.target.value)} />
+            </TableToolbarContent>
+          </TableToolbar>
+          {filteredLegs !== null && filteredLegs.length === 0 ? (
+            <EmptyState title="No planned legs match these filters." />
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <Table size="lg" aria-label="Planned legs" data-testid="legs-table">
+                <TableHead>
+                  <TableRow>
+                    {GHOST_LEG_COLUMNS.map(c => <TableHeader key={c.key}>{c.header}</TableHeader>)}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(filteredLegs ?? []).map(leg => {
+                    const pickerOpen = linkingLegId === leg.id;
+                    return (
+                      <Fragment key={leg.id}>
+                        <TableRow>
+                          <TableCell colSpan={GHOST_LEG_COLUMNS.length} style={{ fontWeight: 600 }}>
+                            {leg.trip_id !== null && leg.trip_name ? (
+                              <Link as={RouterLink} to={`/trip/${leg.trip_id}`}>{leg.trip_name}</Link>
+                            ) : 'No trip'}
+                          </TableCell>
+                        </TableRow>
+                        <GhostLegRow
+                          leg={leg}
+                          colSpan={GHOST_LEG_COLUMNS.length}
+                          onDelete={() => { setDeleteError(''); setDeleteTarget(leg); }}
+                          linkPickerOpen={pickerOpen}
+                          onToggleLinkPicker={() => {
+                            const opening = !pickerOpen;
+                            setLinkingLegId(opening ? leg.id : null);
+                            setLinkFlightChoice('');
+                            if (opening) { setLinkableFlights(null); void loadLinkableFlights(); }
+                          }}
+                          linkBusy={linkBusyLegId === leg.id}
+                          linkError={linkErrorByLeg[leg.id]}
+                          linkableFlights={linkableFlights}
+                          linkFlightsError={linkFlightsError}
+                          linkFlightChoice={linkFlightChoice}
+                          onLinkFlightChoiceChange={setLinkFlightChoice}
+                          onConfirmLink={() => handleLink(leg)}
+                          onToggleSkip={() => { setSkipError(''); setSkipTarget(leg); }}
+                        />
+                      </Fragment>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
-        </div>
-        {sayintentionsSettingsError && <span className="edit-error">{sayintentionsSettingsError}</span>}
-        <p style={{ fontSize: '0.9em', color: '#7a8490', marginTop: '0.5rem' }}>
-          {sayintentionsSaved === undefined ? 'Loading…' : sayintentionsSaved.sayintentions_api_key_set ? `Saved: ${sayintentionsSaved.sayintentions_api_key_masked}` : 'No key saved'}
-        </p>
-        <p style={{ fontSize: '0.85em', color: '#7a8490', marginTop: '0.5rem' }}>
-          Optional. Enables importing SayIntentions comms into a flight's ACARS thread and sending a PDC into your live session.
-        </p>
-      </div>
+        </TableContainer>
+      )}
 
-      <div className="legs-section">
-        <div className="section-title">Planned legs</div>
-        {loadError && <p className="edit-error">Failed to load planned legs: {loadError}</p>}
-        {legs !== null && legs.length > 0 && (
-          <div className="flight-plan-upload" style={{ flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-            <label htmlFor="prefiles-status-filter" className="simbrief-id-label">Status</label>
-            <select
-              id="prefiles-status-filter"
-              className="simbrief-id-input"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as 'all' | PlannedLegStatus)}
-            >
-              <option value="all">All</option>
-              {STATUS_FILTER_OPTIONS.map(status => (
-                <option key={status} value={status}>{plannedLegBadge(status).label}</option>
-              ))}
-            </select>
-
-            <label htmlFor="prefiles-trip-filter" className="simbrief-id-label">Trip</label>
-            <select
-              id="prefiles-trip-filter"
-              className="simbrief-id-input"
-              value={tripFilter === 'all' || tripFilter === 'none' ? tripFilter : String(tripFilter)}
-              onChange={e => {
-                const v = e.target.value;
-                setTripFilter(v === 'all' || v === 'none' ? v : Number(v));
-              }}
-            >
-              <option value="all">All trips</option>
-              <option value="none">No trip</option>
-              {tripOptions.map(([id, name]) => (
-                <option key={id} value={id}>{name}</option>
-              ))}
-            </select>
-
-            <label htmlFor="prefiles-search-filter" className="simbrief-id-label">Search</label>
-            <input
-              id="prefiles-search-filter"
-              type="text"
-              className="simbrief-id-input"
-              placeholder="Departure, destination, aircraft…"
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
-        )}
-        {legs === null ? (
-          !loadError && <p style={{ color: '#4b5563' }}>Loading...</p>
-        ) : legs.length === 0 ? (
-          <div className="empty-state">
-            <p>No planned legs yet.</p>
-            <p>Import a .lnmpln file or a SimBrief plan above to prefile one.</p>
-          </div>
-        ) : filteredLegs !== null && filteredLegs.length === 0 ? (
-          <div className="empty-state">
-            <p>No planned legs match these filters.</p>
-          </div>
-        ) : (
-          <div className="legs-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Leg</th>
-                  <th>Aircraft</th>
-                  <th>Date</th>
-                  <th>Duration</th>
-                  <th>Distance</th>
-                  <th>Route</th>
-                  <th></th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {(filteredLegs ?? []).map(leg => {
-                  const pickerOpen = linkingLegId === leg.id;
-                  return (
-                    <Fragment key={leg.id}>
-                      <tr className="tr-ghost">
-                        <td colSpan={8} style={{ fontWeight: 600 }}>
-                          {leg.trip_id !== null && leg.trip_name ? (
-                            <Link to={`/trip/${leg.trip_id}`} className="flight-plan-link">{leg.trip_name}</Link>
-                          ) : (
-                            'No trip'
-                          )}
-                        </td>
-                      </tr>
-                      <GhostLegRow
-                        leg={leg}
-                        onDelete={handleDeletePlannedLeg}
-                        onMove={() => {}}
-                        canMoveUp={false}
-                        canMoveDown={false}
-                        busy={false}
-                        linkPickerOpen={pickerOpen}
-                        onToggleLinkPicker={() => {
-                          const opening = !pickerOpen;
-                          setLinkingLegId(opening ? leg.id : null);
-                          setLinkFlightChoice('');
-                          if (opening && linkableFlights === null) loadLinkableFlights();
-                        }}
-                        linkBusy={linkBusyLegId === leg.id}
-                        linkError={linkErrorByLeg[leg.id]}
-                        linkableFlights={linkableFlights}
-                        linkFlightsError={linkFlightsError}
-                        linkFlightChoice={linkFlightChoice}
-                        onLinkFlightChoiceChange={setLinkFlightChoice}
-                        onConfirmLink={() => handleLinkFromLeg(leg.id)}
-                        skipBusy={skipBusyLegId === leg.id}
-                        skipError={skipErrorByLeg[leg.id]}
-                        onToggleSkip={() => handleToggleSkip(leg.id, leg.status === 'skipped' ? 'planned' : 'skipped')}
-                      />
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </main>
+      <SkipLegConfirm leg={skipDialogLeg} busy={skipBusy} error={skipError}
+        onConfirm={confirmSkip} onCancel={() => { setSkipTarget(null); setSkipError(''); }} />
+      <ConfirmModal open={deleteTarget !== null} danger title="Delete planned leg"
+        message={deleteError || (deleteTarget
+          ? `Delete ${deleteTarget.departure_ident} → ${deleteTarget.destination_ident}? This cannot be undone.`
+          : '')}
+        confirmLabel="Delete" onConfirm={confirmDelete} onCancel={() => { setDeleteTarget(null); setDeleteError(''); }} />
+    </>
   );
 }

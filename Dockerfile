@@ -2,6 +2,7 @@
 FROM node:24-alpine AS client-builder
 WORKDIR /app/client
 COPY client/package*.json ./
+ENV IBM_TELEMETRY_DISABLED=true
 RUN npm ci
 COPY client/ ./
 RUN npm run build
