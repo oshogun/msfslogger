@@ -18,9 +18,15 @@ per [`docs/index.md`](index.md), rather than omitting the file.
 
    ```bash
    git pull
+   (cd client && npm ci)   # only when client/package.json changed
    npm run build
    npm start   # or restart however you're running it — see operations.md
    ```
+
+   The move to the Carbon client (the whole web UI replaced at once) is such a
+   change: it swaps the client's dependencies, so `client/node_modules` must be
+   reinstalled before the build. The server, database and API are unchanged —
+   no migration, no data step.
 
    For a Docker deployment: `docker compose build && docker compose up -d`.
 

@@ -7,7 +7,8 @@ and presents them in a React web application.
 The project has three parts:
 
 - an Express and TypeScript server in `src/`;
-- a React and Vite web client in `client/`;
+- a React and Vite web client in `client/`, built on IBM's Carbon Design
+  System;
 - a Node.js SimConnect agent in `agent/`, for connecting a simulator on a
   separate Windows PC.
 
@@ -76,7 +77,9 @@ npm run build
 npm start
 ```
 
-Re-run `npm run build` after pulling application changes.
+Re-run `npm run build` after pulling application changes. When a pull
+changes `client/package.json` (as the move to Carbon did), run `npm ci` in
+`client/` first.
 
 ## Connect the simulator
 

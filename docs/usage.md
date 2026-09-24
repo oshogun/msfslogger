@@ -6,8 +6,9 @@
    [operations.md](operations.md)).
 2. On the Windows PC running MSFS, start the [agent](../agent/README.md).
 3. Launch MSFS and load into a flight (or even just the main menu). The
-   agent's console shows `Connected to SimConnect`, and the web UI's status
-   dot / `GET /api/status` reports `connected: true`.
+   agent's console shows `Connected to SimConnect`, the web UI's header
+   status tag changes from *Sim not connected* to *Connected · Idle*, and
+   `GET /api/status` reports `connected: true`.
 4. Nothing else is required — the server detects parking, taxi, takeoff, and
    landing automatically from telemetry (see
    [architecture.md § Flight state machine](architecture.md#flight-state-machine)).
@@ -35,17 +36,28 @@ page.
 
 ## Reviewing flights and trips
 
+Every signed-in page shares one layout: a header with the Sabiá logo, a live
+status tag (*Sim not connected*, *Connected · Idle*, *Recording · <aircraft>*,
+*Paused · <aircraft>*, or *Server unreachable*; *Checking...* until the
+first status response arrives), your username and a log-out
+button, and a side navigation with Home, All flights, Prefiles, Settings and a
+tree of trips and their flights. On a narrow window the side navigation
+collapses behind the menu button; it is not remembered between visits.
+Destructive actions (delete, remove, skip) ask for confirmation in a dialog.
+
 - **Home** — dashboard: live in-flight panel (map, speed/altitude/heading),
   current ground position if parked, aggregate stats, recent flights.
 - **All Flights** — full log, grouped by trip, with combine/export/new-trip
   actions.
 - **Prefiles** — every planned leg (trip-linked or loose), filterable by
   status/trip/search, with import actions.
-- **Flight detail** — map, altitude chart, stats, notes, attached flight-plan
-  PDF, planned-leg link, PDF/KML export, edit/delete, and a
-  [replay](#replaying-a-flight) of the recorded track.
+- **Flight detail** — map (with a **Track** and a **Replay** tab, see
+  [replay](#replaying-a-flight)), altitude profile under the map, stats,
+  notes, attached flight-plan PDF, planned-leg link, PDF/KML export, and
+  edit (in a dialog) / delete.
 - **Trip detail** — combined map ("Atlas" view), paginated leg table,
   imports, active-trip toggle, flight↔leg linking, PDF/KML export.
+- **Settings** — the SimBrief pilot ID and the optional SayIntentions API key.
 
 ## Navdata on the maps
 
@@ -64,15 +76,16 @@ map on the home page still recentres on the aircraft at each position update.
 
 ## Replaying a flight
 
-Any completed flight with at least two recorded points has a **Replay flight** button on
-its detail page (below the GPS track map; **Hide replay** closes it). It opens a
-separate map that plays the recorded track back with an aircraft marker, a
-scrubber and a live instrument readout. Replay is read-only and works from the
+Any completed flight with at least two recorded points has a **Replay** tab on
+its detail page, next to **Track** (the URL gains `?view=replay`, so a replay
+link can be shared or reloaded). The tab shows the flight's map with an aircraft
+marker and, below it, the replay controls, a scrubber and a live instrument
+readout. Replay is read-only and works from the
 track already loaded for the page — it adds no API endpoint and writes nothing.
-A flight still in progress has no Replay button; its live position is on Home.
+A flight still in progress has no Replay tab; its live position is on Home.
 
 - **Controls** — Play/Pause (Restart once the end is reached), a speed select
-  (1×, 2×, 4×, 8×, 16×, 32×, 64×; default 16×), a scrubber, and a **Follow**
+  (1×, 2×, 4×, 8×, 16×, 32×, 64×; default 16×), a scrubber, and a **Follow aircraft**
   checkbox (on by default) that pans the map to keep the aircraft in view.
 - **Readout** — time (UTC), elapsed, altitude, IAS, ground speed, heading,
   vertical speed, state (*Airborne*, *On ground* or *Recording gap*) and the

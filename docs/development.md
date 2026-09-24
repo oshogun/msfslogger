@@ -9,11 +9,16 @@ src/                  Express + TypeScript server
   auth/               Session, ingest-token, MCP-token, password, login-throttle logic
   mcp/                Optional MCP server: router, tool registry, the 18 read/write tools
   inspect-*.ts        ts-node CLI inspectors for eyeballing behavior against real data
-client/               React + Vite web app
-  src/pages/          One component per route, most with a *.test.tsx beside it
-  src/components/     Shared UI, including all Leaflet map components
-  src/hooks/          useSession (auth), useStatus (live polling), useReplayClock (replay animation loop)
-  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, downsample.ts, replay.ts (replay engine)
+client/               React + Vite web app on IBM Carbon (@carbon/react, Gray 100 theme)
+  src/shell/          AppShell (header + side nav), SessionContext (auth), RequireAuth, live status, nav tree
+  src/pages/          One component per route, most with a *.test.tsx beside it; page-private parts in pages/<page>/
+  src/components/     Shared UI: maps/ (all Leaflet maps), replay/, charts/, legs/, modals, stat tiles
+  src/api/            Typed calls per resource; mutations notify the nav tree to refresh
+  src/print/          Headless PDF-export pages — separate entry, plain print.css, no Carbon
+  src/hooks/          useStatus (live polling), useReplayClock (replay animation loop), navdata hooks
+  src/utils/          api.ts (fetch wrapper), format.ts, geo.ts, replay.ts (replay engine)
+  src/styles/         index.scss — the Carbon theme and the component styles the app uses
+  scripts/            check-print-chunk.mjs (keeps Carbon out of the print bundle)
   e2e/                Playwright end-to-end specs, run against a scratch instance
 agent/                Standalone Node.js SimConnect agent (runs on Windows, separate from the server's own package.json)
 tests/                Vitest suite — mirrors src/ for unit tests, tests/db/ for the db/ modules
@@ -79,14 +84,17 @@ against a real fixture than to assert on in a unit test.
 
 ### Frontend component tests
 
-`client/src/pages/*.test.tsx` (Vitest + React Testing Library, same `npm
+`client/src/pages/*.test.tsx` and the component tests beside them
+(Vitest + React Testing Library, same `npm
 test` runner as the backend suite, run from `client/`) cover page-level
 behavior with the real fetch calls replaced by `mockFetchRoutes`
 (`client/src/test/mockFetch.ts`) and rendered via `renderWithProviders`
 (`client/src/test/renderWithProviders.tsx`) — no real server, no network.
-Covers 7 of the 11 page components; the two easter-egg pages (`Device`,
+Covers 8 of the 12 page components; the two easter-egg pages (`Device`,
 `Override`) and the two headless print-export targets (`PrintFlight`,
-`PrintTrip`) have no dedicated test file.
+`PrintTrip`) have no dedicated test file. The print pages are checked instead
+by comparing exported PDFs against a baseline, and by `npm run
+check:print-chunk` (below).
 
 ```bash
 cd client
@@ -115,8 +123,13 @@ does start a live server, deliberately isolated from the developer's own:
 - Covers the journeys named in `specs/frontend_testing.md`:
   authentication, core data-visualization/interaction, and error/
   loading-state handling (`client/e2e/specs/auth.spec.ts`,
-  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`), plus the
-  flight replay panel (`flight-replay.spec.ts`).
+  `data-viz.spec.ts`, `error-states.spec.ts`, `smoke.spec.ts`), the
+  flight replay panel (`flight-replay.spec.ts`), and the Carbon shell —
+  navigation tree, confirm dialogs, session expiry, PDF export
+  (`carbon-shell.spec.ts`).
+- The server's PDF export starts Chrome, which puts a Unix socket in
+  `TMPDIR`; keep `TMPDIR` short (the full socket path must stay under 108
+  characters) or the PDF test fails with "Socket path too long".
 
 Navdata tests (`tests/navdata*.test.ts`, client `Navdata*`/`RouteGeometry*`
 tests) use **synthetic idents and coordinates only** — never real navdata, which
@@ -134,9 +147,11 @@ the live server.
 `.github/workflows/ci.yml` runs on every push and every pull request (no
 branch filter), on Node 24 (from `.nvmrc`), as two jobs:
 
-- **`build-and-test`**: `npm ci` (root and `client/`), `npm run build`,
-  `npm run test:types` (root and client), `npm test` (root and client's
-  component suite).
+- **`build-and-test`**: `npm ci` (root and `client/`), `npm run build`, the
+  print-chunk guard (`cd client && npx vite build --manifest && npm run
+  check:print-chunk` — fails if a Carbon or app module ends up in the
+  `/print/` bundle), `npm run test:types` (root and client), `npm test` (root
+  and client's component suite).
 - **`e2e`** (depends on `build-and-test` passing first): installs the
   Playwright Chromium browser, runs `cd client && npm run test:e2e` (with
   `MSFSLOGGER_E2E_SCRATCH` pointed at the runner's temp directory), and
@@ -144,7 +159,8 @@ branch filter), on Node 24 (from `.nvmrc`), as two jobs:
   failure both (skipped only if the job is cancelled), plus traces/
   screenshots/JUnit XML on failure only.
 
-There's no separate lint step and no coverage gate configured.
+Both jobs set `IBM_TELEMETRY_DISABLED=true` (as does the `Dockerfile`) so
+Carbon's install-time telemetry never runs. There's no separate lint step and no coverage gate configured.
 
 ## Branching and review
 
