@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="client/public/sabia-logo.svg">
+    <img src="assets/sabia.svg" alt="Sabiá logo" width="220">
+  </picture>
+</p>
+
 # Sabiá
 
 Self-hosted flight logging for Microsoft Flight Simulator 2020/2024 and FSX.
