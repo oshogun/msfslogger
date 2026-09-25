@@ -26,7 +26,7 @@ import type {
  * /api/flights/:id/acars-messages and /api/acars/canned-messages — mounted at
  * '/api' by src/server.ts, behind requireAuth and requireSameOrigin, and before
  * the SPA catch-all. Every route here also accepts an x-ingest-token header
- * with no session cookie — the same shared secret the Windows agent uses —
+ * with no session cookie — the same shared secret the MCDU client uses —
  * as an alternative to a browser session.
  *
  * No flightManager parameter, unlike the flights and trips routers: a message

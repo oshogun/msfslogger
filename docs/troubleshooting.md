@@ -33,24 +33,29 @@ directory when the source path doesn't already exist as a file. Always
 `touch flights.db` (and `mkdir -p flight_plans navdata`) before the first `docker
 compose up`.
 
-## Agent / connectivity
+## Sim client / connectivity
 
-**Web UI shows `connected: false`, agent log shows a reconnect loop.**
-Check, in order: `SERVER_URL` on the agent is reachable and correct;
-`INGEST_TOKEN` matches exactly on both sides (the server rejects a mismatch
-with `401` on every ingest request, it doesn't fail differently for "wrong"
-vs "missing"); if the server runs HTTPS with a self-signed certificate, the
-agent needs `NODE_EXTRA_CA_CERTS` pointing at that certificate file, or
-Node's `fetch` rejects the connection outright
-(`DEPTH_ZERO_SELF_SIGNED_CERT`). See [`agent/README.md`](../agent/README.md#https).
+**Web UI shows `connected: false` while the MCDU client is running.**
+Check these in order:
 
-**Agent and server were both reconfigured and it still doesn't work.**
-Check *both* sides were actually restarted after the change — a running
-process doesn't pick up new environment variables. See
-[operations.md § Deploy ordering](operations.md#deploy-ordering-server--agent).
+1. The MCDU's `serverUrl` (`CFG NETWORK`) is reachable and correct.
+2. Its `ingestToken` matches the server's `INGEST_TOKEN` exactly. The server
+   rejects a mismatch with `401` on every ingest request, and a wrong token
+   fails the same way as a missing one.
+3. If the server runs HTTPS with a self-signed certificate, the MCDU's
+   `certPath` must point at that certificate file, or the connection is
+   rejected. With a publicly trusted certificate, leave `certPath` `null`.
 
-**`401 Invalid or missing ingest token` from something other than the
-agent.**
+The MCDU's own [troubleshooting guide](https://github.com/oshogun/sabia_mcdu/blob/main/docs/troubleshooting.md) covers its side.
+
+**The MCDU client and server were both reconfigured and it still doesn't work.**
+Check that *both* sides picked up the change. The server must be restarted,
+because a running process doesn't pick up new environment variables. The
+MCDU's uplink must be restarted too. See
+[operations.md § Deploy ordering](operations.md#deploy-ordering-server--mcdu-client).
+
+**`401 Invalid or missing ingest token` on a route other than
+`/api/ingest/*`.**
 The ingest token only authorizes an explicit allow-list of routes without a
 session — see [api.md § Auth model](api.md#auth-model-in-one-table). A token
 that's valid but hitting a non-allow-listed route still gets a generic `401`
@@ -76,14 +81,14 @@ is open bounces the client to `/login` automatically.
 ## Data
 
 **A flight looks split into two entries with a gap.**
-The agent likely lost its connection to the server mid-flight (network
-blip, server restart) or MSFS itself paused/hung in a way the agent
+The MCDU client likely lost its connection to the server mid-flight (network
+blip, server restart), or MSFS itself paused or hung in a way the client
 recorded as a disconnect. Use "Combine flights" from the All Flights page,
 then run `npm run backfill-icao` if the merged flight is missing
 departure/arrival airport codes (combining doesn't re-resolve them).
 
 **A flight's logged duration looks too short.**
-Expected if the flight was paused, in the pause menu, or the agent
+Expected if the flight was paused, in the pause menu, or the MCDU client
 reconnected after a drop — none of that time is counted (see
 [architecture.md § Flight state machine](architecture.md#flight-state-machine)).
 If the flight predates this behavior, `npm run backfill-durations` (dry-run

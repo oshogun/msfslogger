@@ -17,7 +17,7 @@ read directly by the module they affect, noted below.
 | `TLS_KEY_FILE` | No, paired with `TLS_CERT_FILE` | — | Path to a PEM private key. |
 | `TLS_KEY_PASSPHRASE` | No | — | Passphrase for an encrypted private key. |
 | `ALLOW_PLAINTEXT_HTTP` | No (only consulted when TLS isn't configured) | off | Opt-in to serve plaintext HTTP on a non-loopback `BIND_HOST`. Without TLS *and* without this on a non-loopback host, the server refuses to start. Loopback hosts always get plaintext regardless of this value. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
-| `INGEST_TOKEN` | **Yes**, unless `ALLOW_UNAUTHENTICATED_INGEST` is set | — | Shared secret required on `x-ingest-token` for `/api/ingest/*`, the four `/api/navdata/*` sync routes, and the ingest-scoped API routes (see [api.md](api.md)). Recommended ≥16 characters (shorter values only warn, don't block startup). Must match exactly on the Windows agent's `INGEST_TOKEN`. |
+| `INGEST_TOKEN` | **Yes**, unless `ALLOW_UNAUTHENTICATED_INGEST` is set | — | Shared secret required on `x-ingest-token` for `/api/ingest/*`, the four `/api/navdata/*` sync routes, and the ingest-scoped API routes (see [api.md](api.md)). Recommended ≥16 characters (shorter values only warn, don't block startup). Must match the MCDU client's `ingestToken` exactly. |
 | `ALLOW_UNAUTHENTICATED_INGEST` | No | off | Disables the ingest-token check entirely. Development/trusted-LAN only — see [security.md](security.md). If both this and `INGEST_TOKEN` are set, the token wins (with a startup warning). |
 | `SESSION_SECRET` | No | random, persisted in the DB | Signs the session cookie. If unset, a random 32-byte secret is generated once and stored in the `app_secret` table, so sessions survive a restart without one. If set, must be ≥16 characters. |
 | `MCP_TOKEN` | No — the `/mcp` endpoint is simply not mounted when unset | — | Bearer token for the [MCP server](api.md#mcp-server--srcmcp) (`Authorization: Bearer <token>`). Independent of `INGEST_TOKEN` — no shared digest, module, or allow-list — so rotating or unsetting one never affects the other. Recommended ≥16 characters and different from `INGEST_TOKEN` (shorter or matching values only warn, don't block startup). |
@@ -35,27 +35,29 @@ export INGEST_TOKEN="$(openssl rand -hex 24)"
 | `FLIGHTS_DB_PATH` | `./flights.db` (relative to CWD) | SQLite database file path. |
 | `NAVDATA_DB_PATH` | `./navdata.db` (relative to CWD) | Path of the navdata replica ([navdata.md](navdata.md)). A separate SQLite file from `flights.db`; safe to delete (the MCDU sidecar re-sends it). Its directory must be writable, because a snapshot is staged beside it and swapped in by rename — in Docker, mount the *directory*, not the file. |
 | `EXPORT_BASE_URL` | `http(s)://127.0.0.1:${PORT}` (scheme follows TLS config) | Base URL the headless PDF renderer (Puppeteer) navigates to internally. Override only for advanced/dev setups (e.g. pointing exports at a Vite dev server). |
-| `TRAFFIC_ENABLED` | on | Server-side opt-out for AI-traffic ingestion. `0`/`false`/`off`/`no` disables; anything else (including unset) leaves it on. **Independent of the agent's own `TRAFFIC_ENABLED`** — both sides must be configured, setting one doesn't imply the other. |
+| `TRAFFIC_ENABLED` | on | Server-side opt-out for AI-traffic ingestion. `0`/`false`/`off`/`no` disables; anything else (including unset) leaves it on. **Independent of the MCDU client's own `trafficEnabled`** — both sides must be configured, setting one doesn't imply the other. |
 | `POSITION_REPORT_INTERVAL_MIN` | `10` | Minutes between automatic ACARS position reports while flying a linked leg. `0` disables. Values between 0 and 0.5 are clamped to 0.5 (30s); unparseable or negative values fall back to the default. |
 | `SIMBRIEF_API_BASE_URL` | SimBrief's public API | Test/dev seam — not normally set. |
 | `WEATHER_API_BASE_URL` | `https://aviationweather.gov/api/data` | Test/dev seam — not normally set. |
 | `SAYINTENTIONS_API_BASE_URL` | `https://apipri.sayintentions.ai/sapi` | Test/dev seam — not normally set. |
 
-## Windows agent (`agent/`)
+## Simulator side (MCDU client)
 
-Set on the Windows machine running MSFS, not on the server. Full detail in
-[`agent/README.md`](../agent/README.md); summarized here for completeness.
+The simulator-side settings live in the
+[Sabiá MCDU client](https://github.com/oshogun/sabia_mcdu) and are edited on its CDU pages, not on the server.
+Its [configuration guide](https://github.com/oshogun/sabia_mcdu/blob/main/docs/configuration.md) is the source of truth. The settings that
+must agree with this server are:
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SERVER_URL` | Yes | — | Base URL of the Sabiá server, e.g. `https://192.168.0.30:3000`. |
-| `INGEST_TOKEN` | Yes | — | Must match the server's `INGEST_TOKEN` exactly. |
-| `NODE_EXTRA_CA_CERTS` | Only for HTTPS with a self-signed cert | — | Path to the server's certificate file, so Node's `fetch` trusts it. |
-| `TRAFFIC_ENABLED` | No | on | Agent-side opt-out for gathering AI traffic. Same accepted values as the server's variable, read independently. |
-| `TRAFFIC_RADIUS_M` | No | `40000` | AI-traffic sweep radius in meters, clamped to `[1000, 200000]`. |
+| MCDU setting (CDU page) | Must match / relates to |
+|---|---|
+| `serverUrl` (`CFG NETWORK`) | This server's base URL, e.g. `https://192.168.0.30:3000`. |
+| `ingestToken` (`CFG NETWORK`) | This server's `INGEST_TOKEN`, exactly. |
+| `certPath` (`CFG NETWORK`) | Only for a self-signed server certificate; leave `null` with a publicly trusted one. |
+| `trafficEnabled` (`CFG TRAFFIC`) | Read independently of the server's `TRAFFIC_ENABLED`. |
 
-The agent also takes a `--sim`/`-s` CLI flag (`2020` default, `2024`, `fsx`)
-selecting the SimConnect protocol revision — not an environment variable.
+The retired `agent/` read these as `SERVER_URL`, `INGEST_TOKEN`,
+`NODE_EXTRA_CA_CERTS`, `TRAFFIC_ENABLED`, `TRAFFIC_RADIUS_M` and `--sim`. The
+MCDU configuration guide maps each one to its CDU field.
 
 ## Docker Compose
 

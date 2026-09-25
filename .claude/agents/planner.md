@@ -74,7 +74,7 @@ planning, establish for yourself:
   `backend_jr`/`frontend_jr` for a single-seam task — one module, no new
   contract; `backend_sr`/`frontend_sr` for a schema change, a migration, a new
   page/route, or logic spanning several modules in that domain. A task's
-  `allowed_paths` must sit entirely in one domain — `src/**`/`tests/**`/`agent/**`
+  `allowed_paths` must sit entirely in one domain — `src/**`/`tests/**`
   for backend, `client/**` for frontend — since backend and frontend never
   share an agent.
 - **Every phase ends in a reviewer task**, and the first task of phase N depends

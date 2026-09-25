@@ -1,7 +1,8 @@
 # Sabiá documentation
 
 Self-hosted flight logging for MSFS 2020/2024 and FSX: an Express/TypeScript
-server, a React web client, and a Windows-side SimConnect agent. Start with
+server and a React web client, fed by the Sabiá MCDU client on the
+simulator's Windows PC. Start with
 the [README](../README.md) to get something running; come here for how it
 actually works and how to operate it.
 
@@ -37,16 +38,14 @@ Operating an existing deployment: [operations.md](operations.md) →
 
 ## Scope
 
-This documentation covers `src/` (server), `client/` (web UI), and `agent/`
-(Windows SimConnect agent) — the three components of this repository. The
-Tauri/MCDU desktop client is a separate project
-([`oshogun/sabia_mcdu`](https://github.com/oshogun/sabia_mcdu));
-it's mentioned here only where it touches this repo's API
-([api.md](api.md), [architecture.md](architecture.md)), not documented in
-full. `agent/README.md` remains the source of truth for the agent's own
-operational detail (it's read directly on the Windows machine it runs on);
-this documentation set summarizes it and links out rather than duplicating
-it, to avoid the two drifting apart.
+This documentation covers `src/` (server) and `client/` (web UI), the two
+components of this repository. The Tauri/MCDU desktop client, which reads
+the simulator over SimConnect and posts to this server, is a separate project
+([`oshogun/sabia_mcdu`](https://github.com/oshogun/sabia_mcdu)) with its own
+docs. It's mentioned here only where it touches this repo's API
+([api.md](api.md), [architecture.md](architecture.md)). The Node.js
+SimConnect agent that used to live in `agent/` was retired on 2026-09-25;
+the MCDU client replaces it.
 
 All required sections from this documentation's own spec are present:
 architecture, setup, configuration, usage, API, data model, operations,

@@ -98,13 +98,17 @@ Prompts for a new password (hidden input, or piped stdin) and overwrites the
 single operator account. Takes effect immediately — no restart needed, since
 the script opens its own short-lived database connection.
 
-## Deploy ordering (server + agent)
+## Deploy ordering (server + MCDU client)
 
 When rotating `INGEST_TOKEN` or turning TLS on/off, change the server first:
-set/update `INGEST_TOKEN` and TLS cert/key, restart the server, *then* update
-the agent's `SERVER_URL`/`INGEST_TOKEN`/`NODE_EXTRA_CA_CERTS` and restart it.
-An agent that "stopped working" right after a server config change is a
-redeploy-ordering question before it's a debugging one.
+
+1. Set or update `INGEST_TOKEN` and the TLS cert/key.
+2. Restart the server.
+3. *Then* update the MCDU client's `serverUrl`, `ingestToken` and `certPath`
+   on `CFG NETWORK`, and restart its uplink.
+
+If the MCDU client "stopped working" right after a server config change,
+check the redeploy order before debugging anything else.
 
 ## Data locations
 

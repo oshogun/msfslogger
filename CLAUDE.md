@@ -1,10 +1,10 @@
 # msfslogger
 
 MSFS 2024 flight logger. Express + TypeScript + better-sqlite3 server (`src/`),
-React + Vite client (`client/`), a Windows-side SimConnect agent (`agent/`). A
-Tauri/MCDU desktop client used to live here at `windows-client/`; it has moved
-to its own repo, https://github.com/oshogun/sabia_mcdu — do not look for
-it in this tree.
+React + Vite client (`client/`). Simulators connect through the Tauri/MCDU
+desktop client, https://github.com/oshogun/sabia_mcdu — it used to live here at
+`windows-client/`, and a Node SimConnect agent used to live at `agent/`
+(retired 2026-09-25); neither is in this tree, do not look for them.
 `README.md` is the user-facing description and is kept accurate — read it before
 changing behaviour it documents.
 
@@ -42,7 +42,7 @@ workflow are tier 1.
 **Documentation work in `docs/` or `README.md` beyond a one-line typo** —
 creating or substantively updating system documentation — is none of the
 three tiers above: no implementer role owns `docs/**`/`README.md` (`backend_*`
-own `src/**`/`tests/**`/`agent/**`, `frontend_*` own `client/**`), so it
+own `src/**`/`tests/**`, `frontend_*` own `client/**`), so it
 can't route through the standard Implement step, and it introduces no
 schema/API contract, so Designer doesn't apply either. Use the
 **[`/update-docs`](.claude/skills/update-docs/SKILL.md)** skill for this —

@@ -43,7 +43,7 @@ function takeoff(fm: FlightManager, over: Partial<SimFrame> = {}): void {
   for (let i = 0; i < AIRBORNE_DEBOUNCE_FRAMES; i++) fm.onFrame(makeFrame(over));
 }
 
-/** `n` frames at 1 Hz, the rate agent/agent.js sends at. */
+/** `n` frames at 1 Hz, the rate the sim client sends at. */
 function feed(fm: FlightManager, n: number, over: Partial<SimFrame> = {}): void {
   for (let i = 0; i < n; i++) {
     advance(1000);

@@ -105,8 +105,8 @@ describe('fatal branches', () => {
     expect(caught).toBeInstanceOf(ConfigError);
     expect((caught as ConfigError).message).toBe(
       '[Config] Refusing to start: INGEST_TOKEN is not set.\n' +
-        '[Config] The agent ingest endpoints (/api/ingest/frame, /event, /traffic) would accept flight data from anyone who can reach this server.\n' +
-        '[Config] Set INGEST_TOKEN to a shared secret and set the same value on the agent (agent/README.md), or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).'
+        '[Config] The ingest endpoints (/api/ingest/frame, /event, /traffic) would accept flight data from anyone who can reach this server.\n' +
+        '[Config] Set INGEST_TOKEN to a shared secret and set the same value as the ingest token on the MCDU client (CFG NETWORK), or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).'
     );
   });
 
@@ -311,8 +311,8 @@ describe('MCP_TOKEN — optional, off by default, warns rather than blocks start
     expect(() => loadConfig({ MCP_TOKEN: 'short', BIND_HOST: '127.0.0.1' } as NodeJS.ProcessEnv)).toThrow(
       new ConfigError(
         '[Config] Refusing to start: INGEST_TOKEN is not set.\n' +
-          '[Config] The agent ingest endpoints (/api/ingest/frame, /event, /traffic) would accept flight data from anyone who can reach this server.\n' +
-          '[Config] Set INGEST_TOKEN to a shared secret and set the same value on the agent (agent/README.md), or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).'
+          '[Config] The ingest endpoints (/api/ingest/frame, /event, /traffic) would accept flight data from anyone who can reach this server.\n' +
+          '[Config] Set INGEST_TOKEN to a shared secret and set the same value as the ingest token on the MCDU client (CFG NETWORK), or set ALLOW_UNAUTHENTICATED_INGEST=1 to run ingest unauthenticated (insecure - LAN only).'
       )
     );
   });

@@ -73,9 +73,9 @@ export INGEST_TOKEN="$(openssl rand -hex 24)"
 npm start
 ```
 
-The Windows agent and any other HTTPS client (browsers included, once) will
-need to trust this self-signed certificate — see
-[`agent/README.md`](../agent/README.md#https).
+The MCDU client and any other HTTPS client (browsers included, once) will
+need to trust this self-signed certificate. In the MCDU, point `certPath` on
+`CFG NETWORK` at it; see its [configuration guide](https://github.com/oshogun/sabia_mcdu/blob/main/docs/configuration.md).
 
 ### Development (loopback, no TLS)
 
@@ -117,22 +117,18 @@ See [operations.md](operations.md#docker) for the production-hardening notes
 
 ## Connect the simulator
 
-If the server and simulator run on the same Windows machine, the server can
-in principle be pointed at SimConnect directly — but the supported,
-documented path either way is the agent in `agent/`, run on whichever
-machine has MSFS:
+The supported path is the [Sabiá MCDU client](https://github.com/oshogun/sabia_mcdu), run on the Windows
+machine that has the simulator (MSFS 2020/2024 or FSX):
 
-```powershell
-cd agent
-npm install
-$env:SERVER_URL = "https://<server-address>:3000"
-$env:INGEST_TOKEN = "<the server's INGEST_TOKEN>"
-npm start -- --sim 2024
-```
+1. Install it per its README.
+2. On `CFG NETWORK`, enter the server URL (`https://<server-address>:3000`),
+   the server's `INGEST_TOKEN`, and a `certPath` if the server uses a
+   self-signed certificate.
+3. Choose the simulator on `CFG SIM`.
+4. Press `START>` on `STATUS`.
 
-`--sim` accepts `2020` (default), `2024`, or `fsx`. Full agent setup,
-including HTTPS trust and AI-traffic settings, is in
-[`agent/README.md`](../agent/README.md).
+Full setup, including AI-traffic settings and auto-start, is in its
+[configuration guide](https://github.com/oshogun/sabia_mcdu/blob/main/docs/configuration.md).
 
 ## Validate the setup
 

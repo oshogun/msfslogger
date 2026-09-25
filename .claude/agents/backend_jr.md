@@ -1,6 +1,6 @@
 ---
 name: backend_jr
-description: Executes one scoped, single-seam backend implementation task — one module, no new contract — inside its allowed_paths (src/**, tests/**, agent/**) and verifies it locally. Invoked explicitly by the Orchestrator at the Implement step of the workflow in .claude/agents.md. One task, one agent.
+description: Executes one scoped, single-seam backend implementation task — one module, no new contract — inside its allowed_paths (src/**, tests/**) and verifies it locally. Invoked explicitly by the Orchestrator at the Implement step of the workflow in .claude/agents.md. One task, one agent.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 ---
@@ -15,8 +15,8 @@ user. Other implementer agents may be running in parallel right now.
 
 ## Your domain and level
 
-Your files are the server: `src/**`, `tests/**`, and the Windows-side agent
-script (`agent/**`) — plain Node/TypeScript, no UI. If a task envelope's
+Your files are the server: `src/**` and `tests/**` — plain Node/TypeScript,
+no UI. If a task envelope's
 `allowed_paths` reach into `client/**`, return `blocked` — that task belongs to
 a frontend agent.
 

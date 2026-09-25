@@ -20,11 +20,11 @@ identifiers (table names, route names, variable names).
 | **PDC** | Pre-Departure Clearance — an ACARS message type generated from on-file dispatch data. |
 | **Position report** | A periodic ACARS message filed automatically while flying a linked planned leg (interval configurable via `POSITION_REPORT_INTERVAL_MIN`). |
 | **SayIntentions.AI** | A third-party AI-ATC/CPDLC service for flight simulators. Sabiá has an optional, default-off integration with its pilot-key API: importing its comms transcript into a flight's ACARS thread, and sending an on-file PDC into a pilot's live SayIntentions session. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
-| **Ingest** | The one-way data path from the Windows SimConnect agent into the server: `POST /api/ingest/frame`, `/event`, `/traffic`. Authenticated by ingest token, not a session. |
-| **Ingest token** | The shared secret (`INGEST_TOKEN`) the agent (and other non-browser clients, like the MCDU app) present on the `x-ingest-token` header instead of a session cookie. See [security.md](security.md). |
+| **Ingest** | The one-way data path from the MCDU client's SimConnect sidecar into the server: `POST /api/ingest/frame`, `/event`, `/traffic`. Authenticated by ingest token, not a session. |
+| **Ingest token** | The shared secret (`INGEST_TOKEN`) the MCDU client (and any other non-browser client) presents on the `x-ingest-token` header instead of a session cookie. See [security.md](security.md). |
 | **MCP** | Model Context Protocol — the open protocol an AI client (e.g. Claude Desktop/Code) uses to call tools exposed by a server. Sabiá optionally serves one at `/mcp`, gated by its own `MCP_TOKEN` bearer credential, exposing 18 read/write tools over the logbook. See [api.md § MCP server](api.md#mcp-server--srcmcp). |
-| **Frame** | One telemetry sample from SimConnect: position, altitude, airspeed, heading, on-ground flag, etc. The agent posts one roughly every second. |
-| **SimConnect** | Microsoft's local API for MSFS/FSX addons to read simulator state. Used only by the Windows-side `agent/` process, never by the server directly. |
+| **Frame** | One telemetry sample from SimConnect: position, altitude, airspeed, heading, on-ground flag, etc. The MCDU client posts one roughly every second. |
+| **SimConnect** | Microsoft's local API for MSFS/FSX addons to read simulator state. Used only by the MCDU client's sidecar on the Windows PC, never by the server directly. |
 | **Operator** | The single administrative user of a self-hosted Sabiá instance. There is exactly one account (`auth_user`, `id = 1`); this project has no multi-user/multi-tenant model. |
 | **Combine (flights)** | Merging two `flights` rows into one, used when a pause/reconnect caused one real flight to be logged as two. See `combineFlights()` in [data-model.md](data-model.md). |
 | **Backfill** | An operator-run maintenance script (`npm run backfill-icao`, `npm run backfill-durations`) that recomputes derived columns on existing rows after a behavior change. See [operations.md](operations.md). |

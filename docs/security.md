@@ -31,7 +31,7 @@ which):
   successful login sets `req.session.user`, defeating session fixation.
   Sessions are stored in the database (not in-memory), so they survive a
   restart, and are swept for expiry every 6 hours.
-- **Ingest token** (`x-ingest-token` header) for the Windows agent and other
+- **Ingest token** (`x-ingest-token` header) for the MCDU client and other
   non-browser clients: compared with `crypto.timingSafeEqual` against a
   SHA-256 digest (not a plain string compare), so response timing doesn't
   leak how much of the token was correct. A token only authorizes the
@@ -83,7 +83,7 @@ token directly.
 
 | Secret | Source | Notes |
 |---|---|---|
-| `INGEST_TOKEN` | operator-set env var | Shared verbatim between server and agent (and any other ingest-scoped client). Rotate by changing it on the server first, then every client — see [operations.md](operations.md#deploy-ordering-server--agent). |
+| `INGEST_TOKEN` | operator-set env var | Shared verbatim between the server and the MCDU client (and any other ingest-scoped client). Rotate by changing it on the server first, then every client — see [operations.md](operations.md#deploy-ordering-server--mcdu-client). |
 | `MCP_TOKEN` | operator-set env var, optional | Bearer credential for an MCP client (see [api.md § MCP server](api.md#mcp-server--srcmcp)). Unset = the `/mcp` endpoint isn't mounted at all. Revoke by unsetting or changing it and restarting — no other component needs updating in lockstep, unlike `INGEST_TOKEN`. |
 | Session signing secret | `SESSION_SECRET` env var, or a random 32-byte value generated once and stored in the `app_secret` table | Set `SESSION_SECRET` explicitly if you want it independent of the database (e.g. to invalidate all sessions by rotating it without touching the DB). |
 | Operator password | never stored in plaintext | scrypt hash only, in `auth_user`. Set via `npm run set-password`'s hidden prompt or piped stdin — never as a CLI argument, to avoid it appearing in `ps` output or shell history. |

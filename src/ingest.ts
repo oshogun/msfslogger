@@ -114,9 +114,9 @@ export function buildTrafficObjects(body: unknown): TrafficBatchResult {
 }
 
 /**
- * Receives flight data pushed over HTTP by the Windows-side agent (see /agent),
- * which talks to SimConnect locally on the MSFS machine. This is the only
- * supported way to get data in from a remote sim.
+ * Receives flight data pushed over HTTP by the MCDU client's sidecar
+ * (oshogun/sabia_mcdu), which talks to SimConnect locally on the MSFS
+ * machine. This is the only supported way to get data in from a remote sim.
  */
 export function createIngestRouter(
   flightManager: FlightManager,

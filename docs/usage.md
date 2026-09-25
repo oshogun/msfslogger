@@ -4,9 +4,10 @@
 
 1. Start Sabiá (`npm start`, or your process manager of choice — see
    [operations.md](operations.md)).
-2. On the Windows PC running MSFS, start the [agent](../agent/README.md).
+2. On the Windows PC running MSFS, start the
+   [MCDU client](https://github.com/oshogun/sabia_mcdu) and press `START>` on its `STATUS` page.
 3. Launch MSFS and load into a flight (or even just the main menu). The
-   agent's console shows `Connected to SimConnect`, the web UI's header
+   MCDU's `STATUS` page shows the sim connected, the web UI's header
    status tag changes from *Sim not connected* to *Connected · Idle*, and
    `GET /api/status` reports `connected: true`.
 4. Nothing else is required — the server detects parking, taxi, takeoff, and
@@ -91,7 +92,7 @@ A flight still in progress has no Replay tab; its live position is on Home.
   vertical speed, state (*Airborne*, *On ground* or *Recording gap*) and the
   current point number.
 - **Recording gaps** — where the log has a gap of more than 30 seconds (the sim
-  was paused, or the agent disconnected), replay does not wait it out: the
+  was paused, or the sim client disconnected), replay does not wait it out: the
   marker holds still for 2 seconds of replay time and the state shows *Recording
   gap* with the real duration.
 - **Keyboard** — with focus on the replay panel: Space plays/pauses, ←/→ seek
@@ -102,7 +103,7 @@ Replay is not part of the PDF or KML export.
 
 ## Combining flights
 
-If a dropped agent connection or a sim crash splits one real flight into two
+If a dropped sim-client connection or a sim crash splits one real flight into two
 log entries, combine them from the All Flights page (or `POST
 /api/flights/combine`). This merges points and durations; it does not
 re-resolve ICAO codes on the result — run `npm run backfill-icao` afterward
@@ -172,8 +173,8 @@ your process manager's own log capture — see [operations.md](operations.md)).
 | Server exits immediately, `[Config] ...` on stderr | Missing/invalid env var | Read the printed message — it names the exact variable; see [configuration.md](configuration.md) |
 | Server exits, `[Auth] Refusing to start: no operator account exists.` | Never ran `set-password` | `npm run set-password` |
 | `better-sqlite3` fails to load / server won't start at all | Wrong Node version | `nvm use` (must be Node 24) |
-| Agent log shows reconnect loop, web UI shows `connected: false` | Wrong `SERVER_URL`/`INGEST_TOKEN`, or agent doesn't trust the server's TLS cert | Check both sides' `INGEST_TOKEN` match exactly; set `NODE_EXTRA_CA_CERTS` on the agent — see [`agent/README.md`](../agent/README.md#https) |
-| `401 Invalid or missing ingest token` from a non-agent client | Token missing/mismatched, or that route isn't ingest-scoped | See the allow-list in [api.md](api.md#auth-model-in-one-table) |
+| MCDU `STATUS` shows the backend down, web UI shows `connected: false` | Wrong server URL or ingest token in the MCDU, or it doesn't trust the server's TLS cert | Check the MCDU's `ingestToken` matches the server's `INGEST_TOKEN` exactly; for a self-signed cert set `certPath` on `CFG NETWORK` — see [troubleshooting.md](troubleshooting.md#sim-client--connectivity) |
+| `401 Invalid or missing ingest token` on a route other than `/api/ingest/*` | Token missing/mismatched, or that route isn't ingest-scoped | See the allow-list in [api.md](api.md#auth-model-in-one-table) |
 | `429` on login | Login throttle (10 failures / 15 min / IP) | Wait out the window (resets on server restart — the throttle is in-memory) |
 | Docker Compose created a `flights.db/` directory | Bind-mount target didn't exist before `up` | `touch flights.db` before first `docker compose up` |
 

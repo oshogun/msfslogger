@@ -12,7 +12,7 @@ explained below.
 ## Why this isn't the standard loop
 
 `.claude/agents.md` gives every implementer a domain: `backend_jr/sr` own
-`src/**`/`tests/**`/`agent/**`, `frontend_jr/sr` own `client/**`. **Nobody
+`src/**`/`tests/**`, `frontend_jr/sr` own `client/**`. **Nobody
 owns `docs/**` or `README.md`.** There's also no schema/API/type contract
 being introduced by a docs change, so Designer doesn't apply either. Rather
 than force-fitting documentation work into roles built for code, the
@@ -130,7 +130,7 @@ came out of the first run, worth keeping:
   gate's logic actually does, not to what the route's own comment claims.
 - **Link relative, not absolute**, and get the `../` depth right from
   `docs/*.md` back to repo-root files (`README.md`, `LICENSE`,
-  `agent/README.md`-style component READMEs elsewhere in the tree).
+  component READMEs elsewhere in the tree).
 
 ### 4. Self-verify before sending to Reviewer
 
@@ -232,11 +232,11 @@ actually changed.
 1. **Find what moved.** Compare the docs' own currency against the code:
 
    ```bash
-   # newest commit touching src/, client/src, or agent/, vs. docs/'s own history
-   git log -1 --format=%H -- src client/src agent
+   # newest commit touching src/ or client/src, vs. docs/'s own history
+   git log -1 --format=%H -- src client/src
    git log -1 --format=%H -- docs README.md
    # what changed in the app since docs/ was last meaningfully updated
-   git log --oneline <docs-commit>..<code-commit> -- src client/src agent
+   git log --oneline <docs-commit>..<code-commit> -- src client/src
    ```
 
    Or, if the user named the feature/change directly, skip the git

@@ -16,7 +16,7 @@ user. Other implementer agents may be running in parallel right now.
 ## Your domain and level
 
 Your files are the client: `client/**` — the React + Vite app. If a task
-envelope's `allowed_paths` reach into `src/**`, `tests/**`, or `agent/**`,
+envelope's `allowed_paths` reach into `src/**` or `tests/**`,
 return `blocked` — that task belongs to a backend agent.
 
 You take single-seam tasks: one component, no new contract, nothing that

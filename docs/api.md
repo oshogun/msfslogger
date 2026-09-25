@@ -9,7 +9,7 @@ of truth, generated from `src/server.ts` and `src/routes/*.ts`.
 | Auth type | How | Used by |
 |---|---|---|
 | **Session** | `msfslogger.sid` cookie, set by `POST /api/auth/login` | The web UI |
-| **Ingest token** | `x-ingest-token` header, compared to `INGEST_TOKEN` | The Windows agent (`/api/ingest/*` only) and a small allow-listed set of other routes (below), e.g. the MCDU app |
+| **Ingest token** | `x-ingest-token` header, compared to `INGEST_TOKEN` | The MCDU client, for `/api/ingest/*` and a small allow-listed set of other routes (below) |
 | **MCP bearer token** | `Authorization: Bearer <token>`, compared to `MCP_TOKEN` | An MCP client (e.g. Claude Desktop/Code) at `/mcp` only — see [MCP server](#mcp-server--srcmcp) below |
 | **Public** | none | `/api/auth/*`, the served client, and the SPA catch-all |
 
@@ -114,7 +114,7 @@ prefile a loose leg but not attach it to a trip in the same call.
 ## ACARS — `src/routes/acars.ts`
 
 Every route in this router is allow-listed — a token-only client (the
-Windows agent, or the MCDU app) can read and post ACARS messages without a
+MCDU client) can read and post ACARS messages without a
 session.
 
 | Method | Path | Auth | Purpose |
@@ -193,8 +193,8 @@ Mounted at `/api/auth`, always public (never behind the `requireAuth` gate).
 ## Ingest — `src/ingest.ts`
 
 Mounted at `/api/ingest`, authenticated independently by ingest token (not
-session-gated, not behind `requireAuth`). This is the path the Windows agent
-(and no other client) is expected to use.
+session-gated, not behind `requireAuth`). This is the path the MCDU client's
+sidecar uses to feed telemetry, events and AI traffic.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -298,8 +298,8 @@ routes fall through to Express's default error response.
 
 The ingest-scoped routes above (status, ACARS, ground-session-current,
 SimBrief settings, SayIntentions) exist so a non-browser client
-authenticated only by ingest token — the Windows agent, and the separate
-MCDU/Tauri desktop client (`oshogun/sabia_mcdu`) — can read status,
+authenticated only by ingest token — the separate MCDU/Tauri desktop
+client (`oshogun/sabia_mcdu`) — can read status,
 exchange ACARS messages, and drive the SayIntentions integration without a
 session login. An MCP client (above) is a third kind of non-browser
 consumer, authenticated independently by its own bearer token rather than

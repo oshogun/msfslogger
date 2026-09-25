@@ -20,7 +20,6 @@ client/               React + Vite web app on IBM Carbon (@carbon/react, Gray 10
   src/styles/         index.scss — the Carbon theme and the component styles the app uses
   scripts/            check-print-chunk.mjs (keeps Carbon out of the print bundle)
   e2e/                Playwright end-to-end specs, run against a scratch instance
-agent/                Standalone Node.js SimConnect agent (runs on Windows, separate from the server's own package.json)
 tests/                Vitest suite — mirrors src/ for unit tests, tests/db/ for the db/ modules
 samples/              Read-only fixtures (e.g. .lnmpln files) used by tests
 docs/                 This documentation set
@@ -30,7 +29,9 @@ docs/                 This documentation set
 A Tauri/MCDU desktop client used to live in this repository at
 `windows-client/`; it has moved to its own repository,
 [`oshogun/sabia_mcdu`](https://github.com/oshogun/sabia_mcdu), and
-isn't part of this tree.
+isn't part of this tree. It is also the supported way to connect a simulator:
+the standalone Node.js SimConnect agent that used to live at `agent/` was
+retired on 2026-09-25, and its source is still in git history.
 
 ## Setting up
 

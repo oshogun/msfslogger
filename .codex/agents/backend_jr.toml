@@ -1,6 +1,6 @@
 # Adapter: role behavior remains in .claude/agents/.
 name = "backend_jr"
-description = "Implement a scoped single-module backend task in src/, tests/, or agent/ with no new contract."
+description = "Implement a scoped single-module backend task in src/ or tests/ with no new contract."
 # Model and reasoning inherit unless selected by the Orchestrator.
 developer_instructions = """
 You are the delegated backend_jr role, not the Orchestrator.

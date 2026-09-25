@@ -247,7 +247,9 @@ export class FlightManager {
   };
 
   /**
-   * `flags` is the MSFS `Pause_EX1` bitmask (see PAUSE_FLAG_* in agent/agent.js).
+   * `flags` is the MSFS `Pause_EX1` bitmask: 1 full pause, 2 with sound
+   * (legacy), 4 Active Pause (aircraft frozen, sim running), 8 sim frozen
+   * (e.g. in a menu); 0 is unpaused.
    * Pausing suppresses point recording, which is what keeps paused time out of
    * the duration; the flags are kept so the UI can name the kind of pause.
    */

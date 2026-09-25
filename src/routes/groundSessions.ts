@@ -11,7 +11,7 @@ const MAX_PARKING_POSITION_LENGTH = 120;
  * /api/ground-sessions and /api/ground-sessions/current — mounted at '/api' by
  * src/server.ts, behind requireAuth and requireSameOrigin, and before the SPA
  * catch-all. GET /ground-sessions/current also accepts an x-ingest-token
- * header with no session cookie, the same shared secret the Windows agent
+ * header with no session cookie, the same shared secret the MCDU client
  * uses; the two writes below stay session-only.
  *
  * Takes flightManager for two reasons: a manually-created session's

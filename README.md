@@ -4,13 +4,14 @@ Self-hosted flight logging for Microsoft Flight Simulator 2020/2024 and FSX.
 Sabiá records flight tracks and statistics in a local SQLite database
 and presents them in a React web application.
 
-The project has three parts:
+This repository has two parts:
 
 - an Express and TypeScript server in `src/`;
 - a React and Vite web client in `client/`, built on IBM's Carbon Design
-  System;
-- a Node.js SimConnect agent in `agent/`, for connecting a simulator on a
-  separate Windows PC.
+  System.
+
+Simulators connect through the Sabiá MCDU client, a separate Windows app
+developed at [oshogun/sabia_mcdu](https://github.com/oshogun/sabia_mcdu).
 
 **Full documentation lives in [`docs/`](docs/index.md).** This README is
 just enough to get a working install.
@@ -39,8 +40,7 @@ npm run build
 npm run set-password
 ```
 
-Set a shared ingest token (also required on the Windows agent, and by any
-other datalink client reaching the status/ACARS endpoints):
+Set a shared ingest token (the MCDU client needs the same value):
 
 ```bash
 export INGEST_TOKEN="$(openssl rand -hex 24)"
@@ -83,19 +83,13 @@ changes `client/package.json` (as the move to Carbon did), run `npm ci` in
 
 ## Connect the simulator
 
-Run the agent on the Windows PC with MSFS:
-
-```powershell
-cd agent
-npm install
-$env:SERVER_URL = "https://<server-address>:3000"
-$env:INGEST_TOKEN = "<the server's token>"
-npm start -- --sim 2024
-```
-
-Use `2020` (default), `2024`, or `fsx` for `--sim`. See
-[`agent/README.md`](agent/README.md) for HTTPS trust, traffic settings, and
-startup automation.
+Install and run the
+[Sabiá MCDU client](https://github.com/oshogun/sabia_mcdu) on the Windows PC
+with MSFS 2020/2024 or FSX. On its `CFG NETWORK` page, enter the server URL
+(`https://<server-address>:3000`) and the server's `INGEST_TOKEN`. Choose the
+simulator on `CFG SIM`, then press `START>` on `STATUS`. Full setup is in
+that repository's
+[configuration guide](https://github.com/oshogun/sabia_mcdu/blob/main/docs/configuration.md).
 
 ## Docker
 
@@ -140,10 +134,10 @@ main file. Full backup/restore guidance:
 - [Development](docs/development.md)
 - [Security](docs/security.md)
 
-The Node.js agent in `agent/` is the supported way to connect a simulator on
-a separate Windows PC. A separate, optional Tauri/MCDU-style desktop client
-is developed independently at
-[oshogun/sabia_mcdu](https://github.com/oshogun/sabia_mcdu).
+The [Sabiá MCDU client](https://github.com/oshogun/sabia_mcdu) is the
+supported way to connect a simulator. The Node.js SimConnect agent that used
+to live in `agent/` was retired on 2026-09-25. Its settings map one-to-one to
+MCDU settings, as that repository's configuration guide describes.
 
 ## License
 

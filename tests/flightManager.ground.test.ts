@@ -77,7 +77,7 @@ function parkFrame(over: Partial<SimFrame> = {}): SimFrame {
   return makeFrame({ ...PARKED, ...over });
 }
 
-/** `n` parked frames at 1 Hz, the rate agent/agent.js sends at. */
+/** `n` parked frames at 1 Hz, the rate the sim client sends at. */
 function park(fm: FlightManager, n: number, over: Partial<SimFrame> = {}): void {
   for (let i = 0; i < n; i++) {
     advance(1000);

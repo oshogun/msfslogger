@@ -3,31 +3,32 @@
 ## Component map
 
 ```
-┌─────────────────────┐        SimConnect (local)      ┌──────────────┐
-│ MSFS 2020/2024/FSX   │◄───────────────────────────────│  agent/      │
-│ (Windows)             │                                 │  Node.js CLI │
-└─────────────────────┘                                 └──────┬───────┘
-                                                                 │ HTTPS
-                                                                 │ POST /api/ingest/{frame,event,traffic}
-                                                                 │ x-ingest-token
-                                                                 ▼
+┌─────────────────────┐   SimConnect (local)   ┌─────────────────────────┐
+│ MSFS 2020/2024/FSX  │◄───────────────────────│ MCDU/Tauri desktop app  │
+│ (Windows)           │                        │ separate repo:          │
+└─────────────────────┘                        │ oshogun/sabia_mcdu      │
+                                               └────────────┬────────────┘
+                     HTTPS, x-ingest-token:                 │
+                     POST /api/ingest/{frame,event,traffic} │
+                     + ingest-scoped API (status, ACARS, …) │
+                                                            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  src/  — Express + TypeScript server                                  │
-│                                                                        │
-│  ingest router ─► FlightManager (state machine) ─► db/ (better-sqlite3)│
-│                                                                        │
-│  feature routers (flights, trips, planned-legs, exports, acars, …)    │
-│  serve client/dist/ (static) + JSON API, session or ingest-token auth │
-│                                                                        │
-│  outbound: SimBrief, aviationweather.gov, SayIntentions.AI, PDF       │
-└───────────────┬────────────────────────────────────────────┬─────────┘
-                │ same-origin HTTPS                            │ ingest-scoped
-                ▼                                              │ API (token)
-┌──────────────────────┐                          ┌────────────────────────┐
-│ client/ — React SPA    │                          │ MCDU/Tauri desktop     │
-│ (built into            │                          │ client — separate repo │
-│  client/dist, served   │                          │ oshogun/sabia_mcdu     │
-│  by the Express app)   │                          └────────────────────────┘
+│  src/  — Express + TypeScript server                                 │
+│                                                                      │
+│  ingest router ─► FlightManager ─► db/ (better-sqlite3)              │
+│                                                                      │
+│  feature routers (flights, trips, planned-legs, exports, acars, …)   │
+│  serve client/dist/ (static) + JSON API, session or ingest-token auth│
+│                                                                      │
+│  outbound: SimBrief, aviationweather.gov, SayIntentions.AI, PDF      │
+└───────────────┬──────────────────────────────────────────────────────┘
+                │ same-origin HTTPS
+                ▼
+┌──────────────────────┐
+│ client/ — React SPA  │
+│ (built into          │
+│  client/dist, served │
+│  by the Express app) │
 └──────────────────────┘
 ```
 
@@ -38,7 +39,7 @@
 Express + TypeScript, single process, single SQLite database
 (`better-sqlite3`, WAL mode). Responsibilities:
 
-- Accept telemetry from the Windows agent (`/api/ingest/*`) and drive the
+- Accept telemetry from the MCDU client (`/api/ingest/*`) and drive the
   in-process flight state machine (`FlightManager`).
 - Persist flights, trips, planned legs, ACARS messages, and ground sessions.
 - Serve the built React client as static files and answer its JSON API.
@@ -119,22 +120,23 @@ testable:
   and the panel writes the readout and scrubber at no more than 10 Hz
   (`UI_INTERVAL_MS` = 100), so the map does not re-render per frame.
 
-### `agent/` — Windows SimConnect agent
+### Simulator connection — the MCDU client (separate repo)
 
-A small standalone Node.js script that runs on the Windows PC with MSFS. It
-connects to SimConnect locally (no firewall/TCP configuration needed — the
-same way any local addon does) and pushes flight data to the server over
-HTTP(S). This is the only supported way to connect a server running on a
-different machine than the simulator; dialing SimConnect's TCP port directly
-from the server is not supported. Full detail, including pause handling and
-the AI-traffic sweep, in [`agent/README.md`](../agent/README.md) — summarized
-in [usage.md](usage.md) and [configuration.md](configuration.md).
+The [Sabiá MCDU client](https://github.com/oshogun/sabia_mcdu) is a Tauri
+desktop app that runs on the Windows PC with the simulator. Its Node sidecar
+connects to SimConnect locally, the same way any local addon does, so no
+firewall or TCP configuration is needed. It pushes telemetry, sim events and
+AI-traffic batches to `/api/ingest/*` over HTTP(S), and uses the
+ingest-scoped API for its CDU pages (status, ACARS, SimBrief). This is the
+only supported way to feed the server. Dialing SimConnect's TCP port directly
+from the server is not supported. The Node.js agent that used to live in
+`agent/` did the ingest half of this job and was retired on 2026-09-25.
 
 ### External integration points
 
 | Service | Direction | Used for |
 |---|---|---|
-| SimConnect (local, Windows only) | agent reads | Live simulator telemetry |
+| SimConnect (local, Windows only) | MCDU client reads | Live simulator telemetry |
 | SimBrief public API | server calls out | Importing a dispatch OFP as planned legs |
 | aviationweather.gov | server calls out | METAR/TAF for ACARS weather requests |
 | SayIntentions.AI SAPI | server calls out (optional) | Pull ATC/CPDLC comms into a flight's ACARS thread; push an on-file PDC as a real CPDLC message — off by default, needs an operator-supplied API key. See [api.md § SayIntentions](api.md#sayintentions--srcroutessayintentionsts). |
@@ -211,7 +213,7 @@ telemetry frames arriving over ingest, not by any client request.
   groundspeed &lt;5kt), or immediately on crash/sim-disconnect. Writes final
   flight stats, records the leg outcome (below), files ON/IN ACARS messages.
 
-**Pause handling**: the agent forwards SimConnect's `Pause_EX1` bitmask,
+**Pause handling**: the MCDU client forwards SimConnect's `Pause_EX1` bitmask,
 distinguishing a full pause, an "active pause," and a menu pause — all three
 stop the flight clock and suspend track recording, unlike the legacy
 `Paused`/`Unpaused` events (kept only as a fallback) which miss active pause
@@ -220,7 +222,7 @@ entirely.
 **Duration**: not wall-clock time. It's the sum of gaps *between recorded
 points*, only counted when the gap is ≤60s and the flight wasn't interrupted
 (paused/slewed) since the previous point — so a pause, pause menu, frozen
-sim, or dropped agent connection is excluded from the logged duration rather
+sim, or dropped client connection is excluded from the logged duration rather
 than inflating it.
 
 ## Leg matching and closing

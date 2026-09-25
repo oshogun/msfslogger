@@ -31,7 +31,7 @@ Planner Designer  Implementer            DevOps    Reviewer
 | **Orchestrator** | Owns the goal, splits it into tasks, picks the agent, enforces the loop, reports back to the user. | Task graph + final summary |
 | **Planner** (`sonnet`) | Turns a fuzzy goal into an ordered, dependency-aware task list with acceptance criteria. | `plan.json` (tasks, deps, DoD) |
 | **Designer** (`opus`) | Defines architecture, module boundaries, data models, API/UX contracts. No implementation. | Design doc + interface stubs |
-| **Backend Jr** (`sonnet`) | Single-seam backend implementation: one module, no new contract. Files: `src/**`, `tests/**`, `agent/**`. | Diff + evidence |
+| **Backend Jr** (`sonnet`) | Single-seam backend implementation: one module, no new contract. Files: `src/**`, `tests/**`. | Diff + evidence |
 | **Backend Sr** (`sonnet`) | Cross-cutting or contract-adjacent backend implementation: schema changes, migrations, logic spanning several modules. Same files as Backend Jr. | Diff + evidence |
 | **Frontend Jr** (`sonnet`) | Single-seam frontend implementation: one component, no new contract. Files: `client/**`. | Diff + evidence |
 | **Frontend Sr** (`sonnet`) | Cross-cutting or contract-adjacent frontend implementation: new pages/routes, cross-component state, API-consuming changes. Same files as Frontend Jr. | Diff + evidence |

@@ -7,7 +7,7 @@ const config: import('vitest/config').ViteUserConfig = {
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
-    exclude: ['node_modules/**', 'dist/**', 'client/**', 'agent/**'],
+    exclude: ['node_modules/**', 'dist/**', 'client/**'],
     setupFiles: ['./tests/setup.ts'],
     globals: false,
     restoreMocks: true,
